@@ -1,0 +1,21 @@
+services:
+  banyu-langit:
+    build: .
+    container_name: banyu-langit
+    ports:
+      - "3003:3000"
+    volumes:
+      - diary-uploads:/app/uploads
+      - diary-data:/app/data
+      - ./public:/app/public
+      - ./server:/app/server
+    restart: unless-stopped
+    command: npx nodemon --watch server server/index.js
+
+volumes:
+  diary-uploads:
+    external: true
+    name: tradingdiary_diary-uploads
+  diary-data:
+    external: true
+    name: tradingdiary_diary-data

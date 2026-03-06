@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const XLSX = require('xlsx');
 const { db, latestIdxDate } = require('../db');
 const { parseTradeDate } = require('../utils/normalize');
