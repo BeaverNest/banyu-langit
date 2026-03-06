@@ -14,6 +14,8 @@ var SCR_FIELDS = [
   {group:'MA',items:[{k:'close_vs_ma5',l:'Close vs MA5',type:'compare'},{k:'close_vs_ma10',l:'Close vs MA10',type:'compare'},{k:'close_vs_ma20',l:'Close vs MA20',type:'compare'},{k:'close_vs_ma50',l:'Close vs MA50',type:'compare'},{k:'close_vs_ma100',l:'Close vs MA100',type:'compare'},{k:'close_vs_ma200',l:'Close vs MA200',type:'compare'}]},
   {group:'MACD',items:[{k:'macd_hist',l:'MACD Histogram',type:'num'},{k:'macd_cross',l:'MACD Cross',type:'select',opts:[['golden','Golden Cross'],['death','Death Cross']]},{k:'macd_signal',l:'MACD vs Signal',type:'compare'}]},
   {group:'Stochastic',items:[{k:'stoch_k',l:'Stochastic %K',type:'num'},{k:'stoch_d',l:'Stochastic %D',type:'num'},{k:'stoch_zone',l:'Stoch Zone',type:'select',opts:[['oversold','Oversold (<20)'],['overbought','Overbought (>80)']]}]},
+  {group:'Fundamental',items:[{k:'per',l:'PER',type:'num'},{k:'pbv',l:'PBV',type:'num'},{k:'roe',l:'ROE %',type:'num'},{k:'roa',l:'ROA %',type:'num'},{k:'der',l:'DER',type:'num'},{k:'npm',l:'NPM %',type:'num'},{k:'mkt_cap',l:'Market Cap',type:'num'},{k:'total_rev',l:'Revenue',type:'num'},{k:'ytd',l:'YTD %',type:'num'}]},
+  {group:'Classification',items:[{k:'sector',l:'Sector',type:'select',opts:[['Energy','Energy'],['Financials','Financials'],['Basic Materials','Basic Materials'],['Industrials','Industrials'],['Consumer Cyclicals','Consumer Cyclicals'],['Consumer Non-Cyclicals','Consumer Non-Cyclicals'],['Healthcare','Healthcare'],['Technology','Technology'],['Infrastructures','Infrastructures'],['Transportation & Logistic','Transportation & Logistic'],['Properties & Real Estate','Properties & Real Estate']]},{k:'idx_index',l:'Index Member',type:'select',opts:[['LQ45','LQ45'],['IDX30','IDX30'],['IDX80','IDX80'],['ISSI','ISSI'],['JII','JII'],['JII70','JII70'],['KOMPAS100','KOMPAS100'],['IDX-MES BUMN 17','MES BUMN 17'],['IDXV30','IDXV30']]}]},
 ];
 
 var SCR_COLS = [
@@ -22,6 +24,7 @@ var SCR_COLS = [
   {k:'ma5',l:'MA5'},{k:'ma10',l:'MA10'},{k:'ma20',l:'MA20'},{k:'ma50',l:'MA50'},{k:'ma100',l:'MA100'},{k:'ma200',l:'MA200'},
   {k:'macd_hist',l:'MACD'},{k:'macd_cross',l:'MACD X'},{k:'stoch_k',l:'Stoch K'},{k:'stoch_d',l:'Stoch D'},
   {k:'vol_spike',l:'Vol Spike'},{k:'high',l:'High'},{k:'low',l:'Low'},{k:'bid',l:'Bid'},{k:'offer',l:'Offer'},{k:'market_cap',l:'Mkt Cap'},
+  {k:'sector',l:'Sector'},{k:'per',l:'PER'},{k:'pbv',l:'PBV'},{k:'roe',l:'ROE%'},{k:'roa',l:'ROA%'},{k:'der',l:'DER'},{k:'npm',l:'NPM%'},{k:'ytd',l:'YTD%'},{k:'total_rev',l:'Revenue'},
 ];
 
 async function loadScreener() {
@@ -108,6 +111,15 @@ function scrSortValue(r, k) {
     case 'stoch_d': return t.stoch && t.stoch.d ? t.stoch.d : 0;
     case 'high': return r.high || 0;
     case 'low': return r.low || 0;
+    case 'per': return (r.fund||{}).per||0;
+    case 'pbv': return (r.fund||{}).pbv||0;
+    case 'roe': return (r.fund||{}).roe||0;
+    case 'roa': return (r.fund||{}).roa||0;
+    case 'der': return (r.fund||{}).der||0;
+    case 'npm': return (r.fund||{}).npm||0;
+    case 'ytd': return (r.fund||{}).ytd||0;
+    case 'total_rev': return (r.fund||{}).total_rev||0;
+    case 'sector': return ((r.fund||{}).sector||'').charCodeAt(0)||0;
     default: return 0;
   }
 }
@@ -134,6 +146,15 @@ function scrGetVal(r, t, k) {
     case 'offer': return {txt:(r.offer||0).toLocaleString()};
     case 'market_cap': return {txt:fmtRp((r.close||0)*(r.listed_shares||0))};
     case 'vol_spike': return {txt:t.vol_ratio?t.vol_ratio+'x':'-',cls:t.vol_ratio>3?'hi':''};
+    case 'sector': var fd=r.fund||{}; return {txt:fd.sector||'-'};
+    case 'per': var fd=r.fund||{}; return {txt:fd.per?fd.per.toFixed(1):'-',cls:fd.per>0&&fd.per<15?'up':fd.per>30?'dn':''};
+    case 'pbv': var fd=r.fund||{}; return {txt:fd.pbv?fd.pbv.toFixed(2):'-',cls:fd.pbv>0&&fd.pbv<1.5?'up':fd.pbv>5?'dn':''};
+    case 'roe': var fd=r.fund||{}; return {txt:fd.roe?fd.roe.toFixed(1)+'%':'-',cls:fd.roe>15?'up':fd.roe<5?'dn':''};
+    case 'roa': var fd=r.fund||{}; return {txt:fd.roa?fd.roa.toFixed(1)+'%':'-',cls:fd.roa>10?'up':fd.roa<3?'dn':''};
+    case 'der': var fd=r.fund||{}; return {txt:fd.der!=null?fd.der.toFixed(2):'-',cls:fd.der<1?'up':fd.der>2?'dn':''};
+    case 'npm': var fd=r.fund||{}; return {txt:fd.npm?fd.npm.toFixed(1)+'%':'-',cls:fd.npm>15?'up':fd.npm<5?'dn':''};
+    case 'ytd': var fd=r.fund||{}; return {txt:fd.ytd?(fd.ytd>0?'+':'')+fd.ytd.toFixed(1)+'%':'-',cls:fd.ytd>0?'up':fd.ytd<0?'dn':''};
+    case 'total_rev': var fd=r.fund||{}; return {txt:fd.total_rev?fmtRp(fd.total_rev):'-'};
     case 'ma5':case 'ma10':case 'ma20':case 'ma50':case 'ma100':case 'ma200':
       var mv=t[k]; if(!mv) return {txt:'-'}; return {txt:Math.round(mv).toLocaleString(),cls:r.close>mv?'up':'dn'};
     case 'macd_hist': if(!t.macd) return {txt:'-'}; var mh=t.macd.histogram; return {txt:(mh>0?'+':'')+mh,cls:mh>0?'up':mh<0?'dn':''};

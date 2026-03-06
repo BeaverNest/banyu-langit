@@ -109,6 +109,35 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS idx_fundamental (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_month TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    sector TEXT DEFAULT '',
+    subsector TEXT DEFAULT '',
+    industry TEXT DEFAULT '',
+    subindustry TEXT DEFAULT '',
+    idx_index TEXT DEFAULT '',
+    per REAL DEFAULT 0,
+    pbv REAL DEFAULT 0,
+    roe REAL DEFAULT 0,
+    roa REAL DEFAULT 0,
+    der REAL DEFAULT 0,
+    npm REAL DEFAULT 0,
+    mkt_cap REAL DEFAULT 0,
+    total_rev REAL DEFAULT 0,
+    chg_4w REAL DEFAULT 0,
+    chg_13w REAL DEFAULT 0,
+    chg_26w REAL DEFAULT 0,
+    chg_52w REAL DEFAULT 0,
+    mtd REAL DEFAULT 0,
+    ytd REAL DEFAULT 0,
+    UNIQUE(snapshot_month, code)
+  );
+  CREATE INDEX IF NOT EXISTS idx_fund_code ON idx_fundamental(code);
+  CREATE INDEX IF NOT EXISTS idx_fund_snap ON idx_fundamental(snapshot_month);
 `);
 
 // ═══ Default header mappings ═══
@@ -138,4 +167,9 @@ function latestIdxDate() {
   return r?.d || '';
 }
 
-module.exports = { db, dataDir, latestSnap, latestIdxDate };
+function latestFundDate() {
+  const r = db.prepare('SELECT MAX(snapshot_month) as d FROM idx_fundamental').get();
+  return r?.d || '';
+}
+
+module.exports = { db, dataDir, latestSnap, latestIdxDate, latestFundDate };

@@ -210,5 +210,51 @@ module.exports = function(upload) {
     res.json({ success: true });
   });
 
+  // ═══ Fundamental Data (BEI Screener XLSX) ═══
+  router.post('/fundamental/upload', upload.single('file'), (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+      const wb = XLSX.readFile(req.file.path);
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      if (!rows.length) return res.status(400).json({ error: 'Empty' });
+      const snapMonth = req.body.snapshot_month || new Date().toISOString().substring(0, 7);
+      const ins = db.prepare(`INSERT INTO idx_fundamental(snapshot_month,code,name,sector,subsector,industry,subindustry,idx_index,per,pbv,roe,roa,der,npm,mkt_cap,total_rev,chg_4w,chg_13w,chg_26w,chg_52w,mtd,ytd)VALUES(@sm,@code,@name,@sector,@subsector,@industry,@subindustry,@idx_index,@per,@pbv,@roe,@roa,@der,@npm,@mkt_cap,@total_rev,@chg_4w,@chg_13w,@chg_26w,@chg_52w,@mtd,@ytd)ON CONFLICT(snapshot_month,code) DO UPDATE SET name=excluded.name,sector=excluded.sector,subsector=excluded.subsector,industry=excluded.industry,subindustry=excluded.subindustry,idx_index=excluded.idx_index,per=excluded.per,pbv=excluded.pbv,roe=excluded.roe,roa=excluded.roa,der=excluded.der,npm=excluded.npm,mkt_cap=excluded.mkt_cap,total_rev=excluded.total_rev,chg_4w=excluded.chg_4w,chg_13w=excluded.chg_13w,chg_26w=excluded.chg_26w,chg_52w=excluded.chg_52w,mtd=excluded.mtd,ytd=excluded.ytd`);
+      let count = 0;
+      db.transaction(() => {
+        for (const r of rows) {
+          const code = String(r['Kode Saham'] || '').trim().toUpperCase();
+          if (!code) continue;
+          ins.run({ sm: snapMonth, code, name: String(r['Nama Perusahaan'] || '').trim(), sector: String(r['Sektor'] || ''), subsector: String(r['Subsektor'] || ''), industry: String(r['Industri'] || ''), subindustry: String(r['Subindustri'] || ''), idx_index: String(r['Index'] || ''), per: parseFloat(r['PER']) || 0, pbv: parseFloat(r['PBV']) || 0, roe: parseFloat(r['ROE %']) || 0, roa: parseFloat(r['ROA %']) || 0, der: parseFloat(r['DER']) || 0, npm: parseFloat(r['NPM %']) || 0, mkt_cap: parseFloat(r['Mkt Cap']) || 0, total_rev: parseFloat(r['Total Rev']) || 0, chg_4w: parseFloat(r['4-wk %Pr. Chg.']) || 0, chg_13w: parseFloat(r['13-wk %Pr. Chg.']) || 0, chg_26w: parseFloat(r['26-wk %Pr. Chg.']) || 0, chg_52w: parseFloat(r['52-wk %Pr. Chg.']) || 0, mtd: parseFloat(r['MTD']) || 0, ytd: parseFloat(r['YTD']) || 0 });
+          count++;
+        }
+      })();
+      fs.unlinkSync(req.file.path);
+      res.json({ success: true, count, snapshot_month: snapMonth });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/fundamental', (req, res) => {
+    try {
+      const code = (req.query.code || '').toUpperCase().trim();
+      const { latestFundDate } = require('../db');
+      const sm = latestFundDate(); if (!sm) return res.json({ error: 'No data' });
+      if (code) {
+        const row = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(sm, code);
+        return res.json(row || { error: 'Not found' });
+      }
+      return res.json({ snapshot_month: sm, total: db.prepare('SELECT COUNT(*)as c FROM idx_fundamental WHERE snapshot_month=?').get(sm).c });
+    } catch (e) { res.json({ error: e.message }); }
+  });
+
+  router.get('/fundamental/stats', (req, res) => {
+    try {
+      const { latestFundDate } = require('../db');
+      const sm = latestFundDate();
+      const total = sm ? db.prepare('SELECT COUNT(*)as c FROM idx_fundamental WHERE snapshot_month=?').get(sm).c : 0;
+      const sectors = sm ? db.prepare('SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!="" ORDER BY sector').all(sm).map(r => r.sector) : [];
+      res.json({ snapshot_month: sm, total, sectors });
+    } catch { res.json({ total: 0 }); }
+  });
+
   return router;
 };

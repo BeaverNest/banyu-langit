@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Banyu Langit Banyu Langit</title>
+<title>Banyu Langit Trading Diary</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23141720'/><text x='16' y='22' text-anchor='middle' font-size='18'>🌊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/base.css">
@@ -13,7 +13,6 @@
 <link rel="stylesheet" href="/css/market.css">
 <link rel="stylesheet" href="/css/components.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-</head>
 </head>
 <body>
 <div class="topbar">
@@ -35,6 +34,7 @@
         <label class="sdrop-btn">📋 Upload Insider Data (XLSX)<input type="file" id="insfi2" accept=".xlsx,.xls" style="display:none"></label>
         <label class="sdrop-btn">🏷 Upload Investor Tags<input type="file" id="tagfi2" accept=".xlsx" style="display:none"></label>
         <label class="sdrop-btn">📊 Upload IDX Daily (Ringkasan Saham)<input type="file" id="idxfi" accept=".xlsx,.xls" style="display:none" multiple></label>
+        <label class="sdrop-btn">📈 Upload Fundamental (BEI Screener)<input type="file" id="fundfi" accept=".xlsx,.xls" style="display:none"></label>
         <div class="sdrop-info" id="sdrop-info"></div>
         <div class="sdrop-section" style="margin-top:12px">Tag Stats</div>
         <div class="sdrop-stats" id="sdrop-stats">Loading...</div>
@@ -145,6 +145,7 @@
 <script src="/js/gsearch.js"></script>
 <script src="/js/idx.js"></script>
 <script src="/js/screener.js"></script>
+<script src="/js/fund-upload.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
 <script src="/js/insider.js"></script>

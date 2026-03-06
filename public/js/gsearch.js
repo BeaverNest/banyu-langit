@@ -86,6 +86,15 @@ function renderTickerPage(d) {
   h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[3]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
   h += '<button onclick="gsClose();stab(\'wl\',document.querySelectorAll(\'.tabs .tab\')[1]);setTimeout(function(){swt(\'alt\',document.querySelectorAll(\'.wt-b\')[1]);$(\'as\').value=\'' + esc(code) + '.JK\';},200)">🔔 Alert</button>';
   h += '</div></div>';
+  // Sector & index badges
+  var fund = d.fundamental || {};
+  if (fund.sector || fund.idx_index) {
+    h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">';
+    if (fund.sector) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--blB);color:var(--bl)">' + esc(fund.sector) + '</span>';
+    if (fund.industry) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--bgH);color:var(--t2)">' + esc(fund.industry) + '</span>';
+    if (fund.idx_index) { fund.idx_index.split(',').slice(0, 6).forEach(function(idx) { idx = idx.trim(); if (idx) h += '<span style="font-size:8px;padding:1px 4px;border-radius:3px;background:var(--amB);color:var(--am)">' + esc(idx) + '</span>'; }); }
+    h += '</div>';
+  }
   // Price
   h += '<div class="tp-price">';
   h += '<span class="price ' + pCls + '">' + close.toLocaleString() + '</span>';
@@ -111,8 +120,8 @@ function renderTickerPage(d) {
 
   // Tabs
   h += '<div class="tp-tabs">';
-  ['overview', 'foreign', 'insider'].forEach(function(t) {
-    var lbl = t === 'overview' ? '📊 Overview' : t === 'foreign' ? '🌍 Foreign Flow' : '👥 Insider';
+  ['overview', 'foreign', 'insider', 'fundamental'].forEach(function(t) {
+    var lbl = t === 'overview' ? '📊 Overview' : t === 'foreign' ? '🌍 Foreign' : t === 'insider' ? '👥 Insider' : '📈 Fundamental';
     h += '<button class="tp-tab' + (tpTab === t ? ' on' : '') + '" onclick="tpTab=\'' + t + '\';renderTickerPage(window._tpData)">' + lbl + '</button>';
   });
   h += '</div>';
@@ -205,6 +214,44 @@ function renderTickerPage(d) {
       });
       h += '</tbody></table>';
     } else h += '<div style="color:var(--t3);padding:20px;text-align:center">No insider data for ' + esc(code) + '</div>';
+
+  } else if (tpTab === 'fundamental') {
+    var fund = d.fundamental || {};
+    if (fund.code) {
+      h += '<div class="tp-section">Valuation & Profitability</div>';
+      h += '<div class="tp-grid">';
+      h += '<div class="tp-stat"><div class="sv">' + (fund.per ? fund.per.toFixed(1) : '-') + '</div><div class="sl">PER</div></div>';
+      h += '<div class="tp-stat"><div class="sv">' + (fund.pbv ? fund.pbv.toFixed(2) : '-') + '</div><div class="sl">PBV</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.roe > 15 ? 'up' : fund.roe < 5 ? 'dn' : '') + '">' + (fund.roe ? fund.roe.toFixed(1) + '%' : '-') + '</div><div class="sl">ROE</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.roa > 10 ? 'up' : fund.roa < 3 ? 'dn' : '') + '">' + (fund.roa ? fund.roa.toFixed(1) + '%' : '-') + '</div><div class="sl">ROA</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.der < 1 ? 'up' : fund.der > 2 ? 'dn' : '') + '">' + (fund.der != null ? fund.der.toFixed(2) : '-') + '</div><div class="sl">DER</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.npm > 15 ? 'up' : fund.npm < 5 ? 'dn' : '') + '">' + (fund.npm ? fund.npm.toFixed(1) + '%' : '-') + '</div><div class="sl">NPM</div></div>';
+      h += '<div class="tp-stat"><div class="sv">' + fmtRp(fund.mkt_cap || 0) + '</div><div class="sl">Mkt Cap</div></div>';
+      h += '<div class="tp-stat"><div class="sv">' + fmtRp(fund.total_rev || 0) + '</div><div class="sl">Revenue</div></div>';
+      h += '</div>';
+      h += '<div class="tp-section">Price Performance</div>';
+      h += '<div class="tp-grid">';
+      [['mtd', 'MTD'], ['ytd', 'YTD'], ['chg_4w', '4W'], ['chg_13w', '13W'], ['chg_26w', '26W'], ['chg_52w', '52W']].forEach(function(p) {
+        var v = fund[p[0]] || 0; var cls = v > 0 ? 'up' : v < 0 ? 'dn' : '';
+        h += '<div class="tp-stat"><div class="sv ' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</div><div class="sl">' + p[1] + '</div></div>';
+      });
+      h += '</div>';
+      if (fund.sector || fund.idx_index) {
+        h += '<div class="tp-section">Classification</div>';
+        h += '<div style="font-size:11px;line-height:1.8">';
+        if (fund.sector) h += '<div><span style="color:var(--t3);min-width:80px;display:inline-block">Sector</span> <b>' + esc(fund.sector) + '</b></div>';
+        if (fund.subsector) h += '<div><span style="color:var(--t3);min-width:80px;display:inline-block">Subsector</span> ' + esc(fund.subsector) + '</div>';
+        if (fund.industry) h += '<div><span style="color:var(--t3);min-width:80px;display:inline-block">Industry</span> ' + esc(fund.industry) + '</div>';
+        if (fund.subindustry) h += '<div><span style="color:var(--t3);min-width:80px;display:inline-block">Sub-industry</span> ' + esc(fund.subindustry) + '</div>';
+        h += '</div>';
+        if (fund.idx_index) {
+          h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">';
+          fund.idx_index.split(',').forEach(function(idx) { idx = idx.trim(); if (idx) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--amB);color:var(--am)">' + esc(idx) + '</span>'; });
+          h += '</div>';
+        }
+      }
+      h += '<div style="margin-top:10px;font-size:10px;color:var(--t3)">Data: BEI Screener ' + esc(fund.snapshot_month) + '</div>';
+    } else h += '<div style="color:var(--t3);padding:20px;text-align:center">No fundamental data. Upload BEI Screener XLSX via Settings.</div>';
   }
 
   h += '</div>';

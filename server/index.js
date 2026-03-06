@@ -88,6 +88,14 @@ app.get('/api/ticker/:code', async (req, res) => {
       }
     }
 
+    // Fundamental data
+    const { latestFundDate } = require('./db');
+    const fm = latestFundDate();
+    if (fm) {
+      const fund = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(fm, code);
+      if (fund) result.fundamental = fund;
+    }
+
     res.json(result);
   } catch (e) { res.json({ code: req.params.code, error: e.message }); }
 });
