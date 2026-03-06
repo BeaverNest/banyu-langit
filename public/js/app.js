@@ -329,7 +329,7 @@ async function loadSectorView(){
 }
 
 function sectorStockTable(stocks){
-  var h='<div style="overflow-y:auto;max-height:calc(100vh - 300px)"><table class="bei-tbl"><thead><tr>';
+  var h='<div style="overflow-x:auto"><table class="bei-tbl"><thead><tr>';
   h+='<th class="al">Code</th><th class="al">Industry</th><th class="ar">Close</th><th class="ar">Chg%</th>';
   h+='<th class="ar">Mkt Cap</th><th class="ar">PER</th><th class="ar">ROE</th><th class="ar">YTD</th><th class="ar">F.Net</th>';
   h+='</tr></thead><tbody>';
@@ -337,14 +337,14 @@ function sectorStockTable(stocks){
     var cpCls=(r.chg_pct||0)>0?'up':(r.chg_pct||0)<0?'dn':'';
     var ytdCls=(r.ytd||0)>0?'up':(r.ytd||0)<0?'dn':'';
     var fnCls=(r.fnet_val||0)>0?'up':(r.fnet_val||0)<0?'dn':'';
-    h+='<tr><td class="code al" onclick="showFlowDetail(\''+esc(r.code)+'\')">'+esc(r.code)+'</td>';
+    h+='<tr><td class="code al" onclick="gsOpen(\''+esc(r.code)+'\')">'+esc(r.code)+'</td>';
     h+='<td class="name al" style="font-size:10px">'+esc(r.industry||'')+'</td>';
     h+='<td class="ar">'+(r.close||0).toLocaleString()+'</td>';
     h+='<td class="ar '+cpCls+'">'+(r.chg_pct>0?'+':'')+(r.chg_pct||0).toFixed(2)+'%</td>';
     h+='<td class="ar">'+fmtRp(r.mkt_cap||0)+'</td>';
     h+='<td class="ar">'+(r.per||'-')+'</td>';
     h+='<td class="ar">'+(r.roe?r.roe+'%':'-')+'</td>';
-    h+='<td class="ar '+ytdCls+'">'+(r.ytd?(r.ytd>0?'+':'')+r.ytd+'%':'-')+'</td>';
+    h+='<td class="ar '+ytdCls+'">'+(r.ytd?(r.ytd>0?'+':'')+r.ytd.toFixed(1)+'%':'-')+'</td>';
     h+='<td class="ar '+fnCls+'" style="font-weight:600">'+fmtRp(r.fnet_val||0)+'</td></tr>';
   });
   h+='</tbody></table></div>';
