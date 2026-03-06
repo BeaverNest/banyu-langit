@@ -6,7 +6,7 @@ const { parseTradeDate } = require('../utils/normalize');
 
 const router = express.Router();
 
-// Upload (bulk)
+// Upload (bulk) — now with auto-detect corporate actions
 module.exports = function(upload) {
   router.post('/upload', upload.array('file', 500), async (req, res) => {
     try {
@@ -36,7 +36,11 @@ module.exports = function(upload) {
       })();
       const dates = db.prepare('SELECT COUNT(DISTINCT trade_date)as c FROM idx_daily').get().c;
       const tickers = db.prepare('SELECT COUNT(DISTINCT code)as c FROM idx_daily').get().c;
-      res.json({ success: true, imported: totalCount, files: fileDates, dates, tickers });
+
+      // ═══ Auto-detect corporate actions from listed_shares changes ═══
+      const detected = detectCorporateActions();
+
+      res.json({ success: true, imported: totalCount, files: fileDates, dates, tickers, detected_ca: detected });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -75,57 +79,34 @@ module.exports = function(upload) {
     } catch (e) { res.json({ error: e.message }); }
   });
 
-  // Daily Digest — auto-generated market summary
+  // Daily Digest
   router.get('/digest', (req, res) => {
     try {
       const td = latestIdxDate(); if (!td) return res.json({ error: 'No data' });
       const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 5').all().map(r => r.trade_date);
       const prevDate = allDates.length > 1 ? allDates[1] : null;
-
-      // Today's summary
       const today = db.prepare(`SELECT COUNT(*)as total, SUM(CASE WHEN close>prev_close THEN 1 ELSE 0 END)as advancers, SUM(CASE WHEN close<prev_close THEN 1 ELSE 0 END)as decliners, SUM(value)as total_value, SUM(foreign_buy*close)as fbuy, SUM(foreign_sell*close)as fsell, SUM((foreign_buy-foreign_sell)*close)as fnet, SUM(CASE WHEN (foreign_buy-foreign_sell)>0 THEN 1 ELSE 0 END)as fbuy_stocks, SUM(CASE WHEN (foreign_buy-foreign_sell)<0 THEN 1 ELSE 0 END)as fsell_stocks FROM idx_daily WHERE trade_date=? AND close>0`).get(td);
-
-      // Yesterday's net for comparison
       let prevNet = 0, fnetDelta = 0;
       if (prevDate) {
         const prev = db.prepare(`SELECT SUM((foreign_buy-foreign_sell)*close)as fnet FROM idx_daily WHERE trade_date=? AND close>0`).get(prevDate);
         prevNet = prev?.fnet || 0;
         fnetDelta = (today.fnet || 0) - prevNet;
       }
-
-      // Top 3 foreign buy (by value)
       const topBuy = db.prepare(`SELECT code, name, ((foreign_buy-foreign_sell)*close) as fnet_val, CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as chg FROM idx_daily WHERE trade_date=? AND close>0 AND (foreign_buy-foreign_sell)>0 ORDER BY (foreign_buy-foreign_sell)*close DESC LIMIT 3`).all(td);
-
-      // Top 3 foreign sell
       const topSell = db.prepare(`SELECT code, name, ((foreign_buy-foreign_sell)*close) as fnet_val, CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as chg FROM idx_daily WHERE trade_date=? AND close>0 AND (foreign_buy-foreign_sell)<0 ORDER BY (foreign_buy-foreign_sell)*close ASC LIMIT 3`).all(td);
-
-      // Top volume spike (vs avg of previous dates)
       let spikes = [];
       const prevDates = allDates.filter(d => d < td).slice(0, 4);
       if (prevDates.length >= 2) {
         const ph = prevDates.map(() => '?').join(',');
         spikes = db.prepare(`SELECT t.code, t.name, t.volume, t.frequency, a.avg_vol, ROUND(CAST(t.volume AS REAL)/a.avg_vol,1) as ratio, CASE WHEN t.prev_close>0 THEN ROUND(CAST((t.close-t.prev_close)AS REAL)/t.prev_close*100,2) ELSE 0 END as chg FROM idx_daily t JOIN (SELECT code, AVG(volume)as avg_vol FROM idx_daily WHERE trade_date IN (${ph}) AND volume>0 GROUP BY code) a ON t.code=a.code WHERE t.trade_date=? AND t.close>0 AND t.volume>0 AND a.avg_vol>0 AND CAST(t.volume AS REAL)/a.avg_vol>3 ORDER BY CAST(t.volume AS REAL)/a.avg_vol DESC LIMIT 3`).all(...prevDates, td);
       }
-
-      // Foreign streak — stocks with consecutive buy/sell
       let streaks = [];
       if (allDates.length >= 3) {
         const last3 = allDates.slice(0, 3);
         const ph = last3.map(() => '?').join(',');
         streaks = db.prepare(`SELECT code, name, COUNT(*)as days, SUM(CASE WHEN (foreign_buy-foreign_sell)>0 THEN 1 ELSE 0 END)as buy_days, SUM((foreign_buy-foreign_sell)*close)as total_fnet FROM idx_daily WHERE trade_date IN (${ph}) AND close>0 GROUP BY code HAVING days=${last3.length} AND (buy_days=${last3.length} OR buy_days=0) ORDER BY ABS(total_fnet) DESC LIMIT 5`).all(...last3);
       }
-
-      res.json({
-        trade_date: td,
-        prev_date: prevDate,
-        market: today,
-        fnet_delta: fnetDelta,
-        prev_fnet: prevNet,
-        top_buy: topBuy,
-        top_sell: topSell,
-        spikes,
-        streaks
-      });
+      res.json({ trade_date: td, prev_date: prevDate, market: today, fnet_delta: fnetDelta, prev_fnet: prevNet, top_buy: topBuy, top_sell: topSell, spikes, streaks });
     } catch (e) { res.json({ error: e.message }); }
   });
 
@@ -198,7 +179,6 @@ module.exports = function(upload) {
       return res.json({ trade_date: td, type: 'freq_spike', avg_days: avgDates.length, data: rows });
     }
 
-    // Fallback
     const rows = db.prepare(`SELECT *, (foreign_buy-foreign_sell)as foreign_net, CASE WHEN frequency>0 THEN ROUND(CAST(volume AS REAL)/frequency,0) ELSE 0 END as avg_lot FROM idx_daily WHERE trade_date=? AND close>0 AND frequency>0 ORDER BY CASE WHEN frequency>0 THEN CAST(volume AS REAL)/frequency ELSE 0 END DESC LIMIT ?`).all(td, limit);
     res.json({ trade_date: td, type: 'block', data: rows });
   });
@@ -255,6 +235,252 @@ module.exports = function(upload) {
       const sectors = sm ? db.prepare('SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!="" ORDER BY sector').all(sm).map(r => r.sector) : [];
       res.json({ snapshot_month: sm, total, sectors });
     } catch { res.json({ total: 0 }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // ═══ CORPORATE ACTIONS — auto-detect, confirm, adjust OHLC ═══
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── Auto-detect: scan all consecutive date pairs for listed_shares jumps ──
+  // Threshold: ratio >= 1.5 or <= 0.67 (catches splits, reverse splits, rights)
+  // Inserts as status='pending' so user can review before applying
+  function detectCorporateActions() {
+    const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+    if (dates.length < 2) return [];
+
+    const insCA = db.prepare(`INSERT OR IGNORE INTO corporate_actions(code, ex_date, action_type, ratio, old_shares, new_shares, old_close, new_close, status, notes)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`);
+    const detected = [];
+
+    db.transaction(() => {
+      for (let i = 1; i < dates.length; i++) {
+        const prevD = dates[i - 1], currD = dates[i];
+        // Find tickers where listed_shares changed significantly between consecutive dates
+        const changes = db.prepare(`
+          SELECT c.code, c.name, c.listed_shares as new_shares, c.close as new_close,
+                 p.listed_shares as old_shares, p.close as old_close
+          FROM idx_daily c
+          JOIN idx_daily p ON c.code = p.code AND p.trade_date = ?
+          WHERE c.trade_date = ?
+            AND p.listed_shares > 0 AND c.listed_shares > 0
+            AND c.listed_shares != p.listed_shares
+            AND (CAST(c.listed_shares AS REAL) / p.listed_shares >= 1.5
+              OR CAST(c.listed_shares AS REAL) / p.listed_shares <= 0.67)
+        `).all(prevD, currD);
+
+        for (const ch of changes) {
+          const ratio = ch.new_shares / ch.old_shares;
+          // Guess action type from ratio
+          let actionType = 'unknown';
+          let notes = '';
+          if (ratio >= 1.5) {
+            // Shares increased → split or rights issue or bonus
+            const roundRatio = Math.round(ratio);
+            if (Math.abs(ratio - roundRatio) < 0.05) {
+              actionType = 'split';
+              notes = `1:${roundRatio} (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+            } else {
+              actionType = 'rights_or_bonus';
+              notes = `ratio ${ratio.toFixed(4)} (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+            }
+          } else {
+            // Shares decreased → reverse split
+            const invRatio = Math.round(1 / ratio);
+            actionType = 'reverse';
+            notes = `${invRatio}:1 (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+          }
+
+          const r = insCA.run(ch.code, currD, actionType, ratio, ch.old_shares, ch.new_shares, ch.old_close, ch.new_close, 'pending', notes);
+          if (r.changes > 0) {
+            detected.push({ code: ch.code, ex_date: currD, action_type: actionType, ratio: Math.round(ratio * 10000) / 10000, old_shares: ch.old_shares, new_shares: ch.new_shares, notes });
+          }
+        }
+      }
+    })();
+
+    return detected;
+  }
+
+  // ── Manual re-detect (trigger scan without uploading) ──
+  router.post('/ca/detect', (req, res) => {
+    try {
+      const detected = detectCorporateActions();
+      res.json({ success: true, detected, total: detected.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── List all corporate actions ──
+  router.get('/ca', (req, res) => {
+    try {
+      const status = req.query.status || '';       // pending, confirmed, applied, dismissed
+      const code = (req.query.code || '').toUpperCase().trim();
+      let sql = 'SELECT * FROM corporate_actions WHERE 1=1';
+      const params = [];
+      if (status) { sql += ' AND status=?'; params.push(status); }
+      if (code) { sql += ' AND code=?'; params.push(code); }
+      sql += ' ORDER BY ex_date DESC, code';
+      const rows = db.prepare(sql).all(...params);
+      res.json({ data: rows, total: rows.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Get single CA ──
+  router.get('/ca/:id', (req, res) => {
+    try {
+      const row = db.prepare('SELECT * FROM corporate_actions WHERE id=?').get(req.params.id);
+      if (!row) return res.status(404).json({ error: 'Not found' });
+      res.json(row);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Confirm a pending CA (user reviews auto-detect, optionally edits ratio/type) ──
+  router.put('/ca/:id/confirm', (req, res) => {
+    try {
+      const row = db.prepare('SELECT * FROM corporate_actions WHERE id=?').get(req.params.id);
+      if (!row) return res.status(404).json({ error: 'Not found' });
+      const { action_type, ratio, notes } = req.body;
+      db.prepare(`UPDATE corporate_actions SET status='confirmed',
+        action_type=COALESCE(?,action_type), ratio=COALESCE(?,ratio), notes=COALESCE(?,notes)
+        WHERE id=?`).run(action_type || null, ratio || null, notes || null, req.params.id);
+      res.json({ success: true, status: 'confirmed' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Dismiss a pending CA (false positive, e.g. listing change not a split) ──
+  router.put('/ca/:id/dismiss', (req, res) => {
+    try {
+      db.prepare(`UPDATE corporate_actions SET status='dismissed', notes=COALESCE(?,notes) WHERE id=?`)
+        .run(req.body.notes || null, req.params.id);
+      res.json({ success: true, status: 'dismissed' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Add manual CA ──
+  router.post('/ca', (req, res) => {
+    try {
+      const { code, ex_date, action_type, ratio, notes } = req.body;
+      if (!code || !ex_date || !ratio) return res.status(400).json({ error: 'code, ex_date, ratio required' });
+      // Look up surrounding closes if available
+      const prevRow = db.prepare('SELECT close, listed_shares FROM idx_daily WHERE code=? AND trade_date<? ORDER BY trade_date DESC LIMIT 1')
+        .get(code.toUpperCase(), ex_date);
+      const currRow = db.prepare('SELECT close, listed_shares FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date ASC LIMIT 1')
+        .get(code.toUpperCase(), ex_date);
+      const r = db.prepare(`INSERT INTO corporate_actions(code, ex_date, action_type, ratio, old_shares, new_shares, old_close, new_close, status, notes)
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(code, ex_date) DO UPDATE SET action_type=excluded.action_type, ratio=excluded.ratio, notes=excluded.notes, status=excluded.status`)
+        .run(code.toUpperCase(), ex_date, action_type || 'manual', parseFloat(ratio),
+          prevRow?.listed_shares || 0, currRow?.listed_shares || 0,
+          prevRow?.close || 0, currRow?.close || 0,
+          'confirmed', notes || 'manual entry');
+      res.json({ success: true, id: r.lastInsertRowid });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Delete CA ──
+  router.delete('/ca/:id', (req, res) => {
+    try {
+      db.prepare('DELETE FROM corporate_actions WHERE id=?').run(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Bulk confirm all pending ──
+  router.post('/ca/confirm-all', (req, res) => {
+    try {
+      const r = db.prepare(`UPDATE corporate_actions SET status='confirmed' WHERE status='pending'`).run();
+      res.json({ success: true, confirmed: r.changes });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Bulk dismiss all pending ──
+  router.post('/ca/dismiss-all', (req, res) => {
+    try {
+      const r = db.prepare(`UPDATE corporate_actions SET status='dismissed' WHERE status='pending'`).run();
+      res.json({ success: true, dismissed: r.changes });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══════════════════════════════════════════════════════
+  // ═══ ADJUSTED OHLC — backward adjust using confirmed CAs
+  // ═══════════════════════════════════════════════════════
+
+  router.get('/adjusted/:code', (req, res) => {
+    try {
+      const code = req.params.code.toUpperCase().trim();
+      if (!code) return res.status(400).json({ error: 'No code' });
+
+      // Only use confirmed (or applied) CAs for adjustment
+      const actions = db.prepare(
+        `SELECT * FROM corporate_actions WHERE code=? AND status IN ('confirmed','applied') ORDER BY ex_date DESC`
+      ).all(code);
+
+      // Raw OHLC sorted ascending
+      const ohlc = db.prepare(
+        `SELECT trade_date, code, name, open_price, high, low, close, volume, prev_close,
+                value, frequency, foreign_buy, foreign_sell, listed_shares
+         FROM idx_daily WHERE code=? ORDER BY trade_date`
+      ).all(code);
+
+      if (!ohlc.length) return res.json({ code, data: [], actions: [] });
+
+      if (!actions.length) {
+        // No CAs — return raw with adj = raw
+        const data = ohlc.map(r => ({
+          ...r,
+          adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
+          adj_volume: r.volume, cum_factor: 1
+        }));
+        return res.json({ code, data, actions: [] });
+      }
+
+      // Backward adjustment: for each row, multiply cumulative factor of all CAs
+      // whose ex_date is AFTER this row's trade_date
+      // Factor for split: 1/ratio (ratio = new_shares/old_shares, e.g. 5 for 1:5 split)
+      //   → old prices × (1/5) = 0.2, old volumes × 5
+      // Factor for reverse: 1/ratio (ratio < 1, e.g. 0.1 for 10:1 reverse)
+      //   → old prices × (1/0.1) = 10, old volumes × 0.1
+      const data = ohlc.map(r => {
+        let cumFactor = 1;
+        for (const ca of actions) {
+          if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
+            cumFactor *= (1 / ca.ratio);
+          }
+        }
+
+        if (cumFactor === 1) {
+          return {
+            ...r,
+            adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
+            adj_volume: r.volume, cum_factor: 1
+          };
+        }
+
+        return {
+          ...r,
+          adj_open: Math.round(r.open_price * cumFactor),
+          adj_high: Math.round(r.high * cumFactor),
+          adj_low: Math.round(r.low * cumFactor),
+          adj_close: Math.round(r.close * cumFactor),
+          adj_volume: Math.round(r.volume / cumFactor),  // volume inverse
+          cum_factor: Math.round(cumFactor * 1000000) / 1000000
+        };
+      });
+
+      res.json({ code, data, actions });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── CA stats ──
+  router.get('/ca/stats', (req, res) => {
+    try {
+      const total = db.prepare('SELECT COUNT(*) as c FROM corporate_actions').get().c;
+      const pending = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='pending'`).get().c;
+      const confirmed = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='confirmed'`).get().c;
+      const dismissed = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='dismissed'`).get().c;
+      const byType = db.prepare('SELECT action_type, COUNT(*) as c FROM corporate_actions GROUP BY action_type').all();
+      const recent = db.prepare('SELECT * FROM corporate_actions ORDER BY created_at DESC LIMIT 10').all();
+      res.json({ total, pending, confirmed, dismissed, by_type: byType, recent });
+    } catch (e) { res.json({ error: e.message }); }
   });
 
   return router;

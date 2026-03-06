@@ -138,6 +138,24 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_fund_code ON idx_fundamental(code);
   CREATE INDEX IF NOT EXISTS idx_fund_snap ON idx_fundamental(snapshot_month);
+
+  CREATE TABLE IF NOT EXISTS corporate_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    action_type TEXT NOT NULL DEFAULT 'auto',
+    ratio REAL NOT NULL DEFAULT 1,
+    old_shares INTEGER DEFAULT 0,
+    new_shares INTEGER DEFAULT 0,
+    old_close INTEGER DEFAULT 0,
+    new_close INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'pending',
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(code, ex_date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ca_code ON corporate_actions(code);
+  CREATE INDEX IF NOT EXISTS idx_ca_date ON corporate_actions(ex_date);
 `);
 
 // ═══ Default header mappings ═══
