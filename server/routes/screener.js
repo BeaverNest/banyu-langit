@@ -197,6 +197,93 @@ router.post('/run', (req, res) => {
   } catch (e) { res.json({ data: [], error: e.message }); }
 });
 
+// ═══ Sector Overview — aggregate fundamental + daily data by sector/industry ═══
+router.get('/sectors', (req, res) => {
+  try {
+    const { latestFundDate } = require('../db');
+    const td = latestIdxDate();
+    const sm = latestFundDate();
+    if (!sm || !td) return res.json({ sectors: [], industries: [] });
+
+    // Join fundamental with latest daily for foreign flow
+    const rows = db.prepare(`
+      SELECT f.code, f.sector, f.industry, f.per, f.pbv, f.roe, f.roa, f.der, f.npm, f.mkt_cap, f.ytd,
+             d.close, d.value, d.volume, d.foreign_buy, d.foreign_sell,
+             ((d.foreign_buy - d.foreign_sell) * d.close) as fnet_val,
+             CASE WHEN d.prev_close > 0 THEN ROUND(CAST((d.close - d.prev_close) AS REAL) / d.prev_close * 100, 2) ELSE 0 END as chg_pct
+      FROM idx_fundamental f
+      LEFT JOIN idx_daily d ON f.code = d.code AND d.trade_date = ?
+      WHERE f.snapshot_month = ? AND f.sector != ''
+    `).all(td, sm);
+
+    // Aggregate by sector
+    const sectorMap = {};
+    rows.forEach(r => {
+      if (!sectorMap[r.sector]) sectorMap[r.sector] = { sector: r.sector, stocks: [], total_mcap: 0, total_fnet: 0, per_sum: 0, per_cnt: 0, roe_sum: 0, roe_cnt: 0, ytd_sum: 0, ytd_cnt: 0 };
+      const s = sectorMap[r.sector];
+      s.stocks.push(r);
+      if (r.mkt_cap) s.total_mcap += r.mkt_cap;
+      if (r.fnet_val) s.total_fnet += r.fnet_val;
+      if (r.per && r.per > 0 && r.per < 500) { s.per_sum += r.per; s.per_cnt++; }
+      if (r.roe) { s.roe_sum += r.roe; s.roe_cnt++; }
+      if (r.ytd) { s.ytd_sum += r.ytd; s.ytd_cnt++; }
+    });
+
+    const sectors = Object.values(sectorMap).map(s => ({
+      sector: s.sector,
+      count: s.stocks.length,
+      total_mcap: s.total_mcap,
+      total_fnet: s.total_fnet,
+      avg_per: s.per_cnt ? Math.round(s.per_sum / s.per_cnt * 10) / 10 : 0,
+      avg_roe: s.roe_cnt ? Math.round(s.roe_sum / s.roe_cnt * 10) / 10 : 0,
+      avg_ytd: s.ytd_cnt ? Math.round(s.ytd_sum / s.ytd_cnt * 10) / 10 : 0,
+    })).sort((a, b) => b.total_mcap - a.total_mcap);
+
+    // Aggregate by industry (within optional sector filter)
+    const sectorFilter = (req.query.sector || '').trim();
+    const indRows = sectorFilter ? rows.filter(r => r.sector === sectorFilter) : rows;
+    const indMap = {};
+    indRows.forEach(r => {
+      if (!r.industry) return;
+      if (!indMap[r.industry]) indMap[r.industry] = { industry: r.industry, sector: r.sector, stocks: [], total_mcap: 0, total_fnet: 0, per_sum: 0, per_cnt: 0, roe_sum: 0, roe_cnt: 0, ytd_sum: 0, ytd_cnt: 0 };
+      const s = indMap[r.industry];
+      s.stocks.push(r);
+      if (r.mkt_cap) s.total_mcap += r.mkt_cap;
+      if (r.fnet_val) s.total_fnet += r.fnet_val;
+      if (r.per && r.per > 0 && r.per < 500) { s.per_sum += r.per; s.per_cnt++; }
+      if (r.roe) { s.roe_sum += r.roe; s.roe_cnt++; }
+      if (r.ytd) { s.ytd_sum += r.ytd; s.ytd_cnt++; }
+    });
+
+    const industries = Object.values(indMap).map(s => ({
+      industry: s.industry,
+      sector: s.sector,
+      count: s.stocks.length,
+      total_mcap: s.total_mcap,
+      total_fnet: s.total_fnet,
+      avg_per: s.per_cnt ? Math.round(s.per_sum / s.per_cnt * 10) / 10 : 0,
+      avg_roe: s.roe_cnt ? Math.round(s.roe_sum / s.roe_cnt * 10) / 10 : 0,
+      avg_ytd: s.ytd_cnt ? Math.round(s.ytd_sum / s.ytd_cnt * 10) / 10 : 0,
+    })).sort((a, b) => b.total_mcap - a.total_mcap);
+
+    // Stocks for drill-down (optional industry filter)
+    const indFilter = (req.query.industry || '').trim();
+    let stockList = [];
+    if (indFilter) {
+      stockList = rows.filter(r => r.industry === indFilter)
+        .sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0))
+        .map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
+    } else if (sectorFilter) {
+      stockList = rows.filter(r => r.sector === sectorFilter)
+        .sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0))
+        .slice(0, 30)
+        .map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
+    }
+
+    res.json({ trade_date: td, snapshot_month: sm, sectors, industries, stocks: stockList });
+  } catch (e) { res.json({ error: e.message }); }
+});
+
 router.get('/configs', (req, res) => { try { const c = db.prepare('SELECT * FROM screener_configs ORDER BY updated_at DESC').all(); c.forEach(x => { try { x.filters = JSON.parse(x.filters); } catch { x.filters = {}; } }); res.json(c); } catch { res.json([]); } });
 router.post('/configs', (req, res) => { try { const { name, filters } = req.body; if (!name) return res.status(400).json({ error: 'Name required' }); const r = db.prepare('INSERT INTO screener_configs(name,filters) VALUES(?,?)').run(name, JSON.stringify(filters || {})); res.json({ success: true, id: r.lastInsertRowid }); } catch (e) { res.json({ error: e.message }); } });
 router.put('/configs/:id', (req, res) => { try { const { name, filters } = req.body; db.prepare("UPDATE screener_configs SET name=?,filters=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(filters || {}), req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });

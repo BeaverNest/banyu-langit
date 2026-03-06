@@ -88,7 +88,12 @@
 
   <!-- SCREENER -->
   <div class="tpanel" id="t-scr">
-    <div id="scr-content"></div>
+    <div class="wt">
+      <button class="wt-b on" onclick="scrSubTab('screener',this)">🔬 Screener</button>
+      <button class="wt-b" onclick="scrSubTab('sectors',this)">📊 Sectors</button>
+    </div>
+    <div class="wp on" id="scr-screener"><div id="scr-content"></div></div>
+    <div class="wp" id="scr-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
   </div>
 
   <!-- INSIDER -->
