@@ -141,3 +141,4 @@
 .cmp-chip-x{background:none;border:none;color:var(--t3);cursor:pointer;font-size:12px;padding:0 0 0 4px;line-height:1}
 .cmp-chip-x:hover{color:var(--rd)}
 .cmp-chart-area{background:var(--bg2);border:1px solid var(--b1);border-radius:10px;padding:10px;min-height:200px;overflow:hidden}
+.cmp-range-bar{display:flex;gap:3px;margin-bottom:8px}
