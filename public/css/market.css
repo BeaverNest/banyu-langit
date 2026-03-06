@@ -152,3 +152,7 @@
 .cmp-sc-pct.up{color:var(--gn)}.cmp-sc-pct.dn{color:var(--rd)}
 .cmp-sc-detail{font-size:10px;color:var(--t3);font-family:var(--fm);margin-top:2px}
 .cmp-sc-detail .up{color:var(--gn)}.cmp-sc-detail .dn{color:var(--rd)}
+.mkt-section-h{padding:8px 12px;font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--b1);background:var(--bgH);display:flex;align-items:center;gap:6px}/* ═══ Comparison Mode Selector ═══ */
+.cmp-mode-bar{display:flex;gap:3px;margin-bottom:10px;flex-wrap:wrap}
+.cmp-group-sel{background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 8px;color:var(--t1);font-size:11px;font-family:var(--f);outline:none;cursor:pointer;min-width:200px}
+.cmp-group-sel:focus{border-color:var(--bl)}

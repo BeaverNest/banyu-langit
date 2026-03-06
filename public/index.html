@@ -70,15 +70,11 @@
   <!-- MARKET -->
   <div class="tpanel" id="t-mkt">
     <div class="wt">
-      <button class="wt-b on" onclick="smkt('idx',this)">📊 Index</button>
-      <button class="wt-b" onclick="smkt('cmd',this)">🛢 Commodities</button>
-      <button class="wt-b" onclick="smkt('cur',this)">💱 Currencies</button>
+      <button class="wt-b on" onclick="smkt('ov',this)">🌍 Overview</button>
       <button class="wt-b" onclick="smkt('bei',this)">🇮🇩 IDX Daily</button>
       <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
     </div>
-    <div class="wp on" id="m-idx"><div class="mkt-list" id="ml-idx"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="m-cmd"><div class="mkt-list" id="ml-cmd"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="m-cur"><div class="mkt-list" id="ml-cur"><div class="ne">Loading...</div></div></div>
+    <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-bei"><div id="bei-content"><div class="ne">Loading IDX data...</div></div></div>
     <div class="wp" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>

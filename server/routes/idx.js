@@ -462,5 +462,108 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ═══ COMPARE GROUP — time series for sector/industry/konglomerat ═══
+  // Returns: { group_name, data: [{trade_date, avg_close, count, total_fnet_val}] }
+  // Used by Comparison Phase 2
+  router.get('/compare-group', (req, res) => {
+    try {
+      const mode = req.query.mode || 'sector'; // sector | industry | konglo
+      const groups = (req.query.groups || '').split(',').filter(Boolean).map(g => g.trim());
+      if (!groups.length) return res.json({ error: 'No groups specified' });
+
+      const { latestFundDate } = require('../db');
+      const fm = latestFundDate();
+
+      // Build ticker lists per group
+      const groupTickers = {};
+
+      if (mode === 'sector' || mode === 'industry') {
+        if (!fm) return res.json({ error: 'No fundamental data' });
+        const field = mode === 'sector' ? 'sector' : 'industry';
+        for (const g of groups) {
+          const rows = db.prepare(`SELECT code FROM idx_fundamental WHERE snapshot_month=? AND ${field}=?`).all(fm, g);
+          groupTickers[g] = rows.map(r => r.code);
+        }
+      } else if (mode === 'konglo') {
+        for (const g of groups) {
+          const rows = db.prepare('SELECT ticker FROM ticker_groups WHERE group_name=?').all(g);
+          groupTickers[g] = rows.map(r => r.ticker);
+        }
+      } else {
+        return res.json({ error: 'Invalid mode' });
+      }
+
+      // Check all groups have tickers
+      for (const g of groups) {
+        if (!groupTickers[g] || !groupTickers[g].length) {
+          groupTickers[g] = [];
+        }
+      }
+
+      // Get all trade dates
+      const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+      if (!allDates.length) return res.json({ error: 'No IDX data' });
+
+      // For each group, compute daily aggregate metrics
+      const result = {};
+      for (const g of groups) {
+        const tickers = groupTickers[g];
+        if (!tickers.length) { result[g] = { name: g, tickers: 0, data: [] }; continue; }
+
+        const ph = tickers.map(() => '?').join(',');
+
+        // Get daily data: avg close per date across tickers in this group
+        // We normalize by computing average % change from first available date
+        const rows = db.prepare(`
+          SELECT trade_date,
+                 AVG(close) as avg_close,
+                 COUNT(*) as count,
+                 SUM((foreign_buy - foreign_sell) * close) as total_fnet_val,
+                 SUM(value) as total_value
+          FROM idx_daily
+          WHERE code IN (${ph}) AND close > 0
+          GROUP BY trade_date
+          ORDER BY trade_date
+        `).all(...tickers);
+
+        result[g] = { name: g, tickers: tickers.length, ticker_list: tickers.slice(0, 20), data: rows };
+      }
+
+      res.json({ mode, groups: result });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ LIST AVAILABLE GROUPS — for dropdown selectors ═══
+  router.get('/compare-groups', (req, res) => {
+    try {
+      const mode = req.query.mode || 'sector';
+      const { latestFundDate } = require('../db');
+      const fm = latestFundDate();
+
+      if (mode === 'sector') {
+        if (!fm) return res.json({ items: [] });
+        const rows = db.prepare(`SELECT sector as name, COUNT(*) as count FROM idx_fundamental WHERE snapshot_month=? AND sector!='' GROUP BY sector ORDER BY COUNT(*) DESC`).all(fm);
+        return res.json({ items: rows });
+      }
+      if (mode === 'industry') {
+        if (!fm) return res.json({ items: [] });
+        const sector = req.query.sector || '';
+        let sql = `SELECT industry as name, sector, COUNT(*) as count FROM idx_fundamental WHERE snapshot_month=? AND industry!=''`;
+        const params = [fm];
+        if (sector) { sql += ' AND sector=?'; params.push(sector); }
+        sql += ' GROUP BY industry ORDER BY COUNT(*) DESC';
+        const rows = db.prepare(sql).all(...params);
+        return res.json({ items: rows });
+      }
+      if (mode === 'konglo') {
+        const rows = db.prepare(`SELECT g.name, g.category, g.key_person, COUNT(t.ticker) as count
+          FROM investor_groups g LEFT JOIN ticker_groups t ON g.name = t.group_name
+          GROUP BY g.name ORDER BY count DESC`).all();
+        return res.json({ items: rows });
+      }
+      res.json({ items: [] });
+    } catch (e) { res.json({ items: [], error: e.message }); }
+  });
+
   return router;
 };

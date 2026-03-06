@@ -234,6 +234,7 @@ function renderSetPrefs(c){
 function prefTogTheme(){togTh();renderSetPrefs($('smod-content'));}
 function prefTogChart(el){if(el)el.classList.toggle('on');var show=el&&el.classList.contains('on');localStorage.setItem('chartDefault',show?'visible':'hidden');}
 
+
 // ═══ SCREENER SUBTABS ═══
 let cmpTickers=[],cmpColors=['#0ea5e9','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#14b8a6','#f97316'];
 
@@ -248,69 +249,174 @@ function scrSubTab(n,b){
   if(n==='compare')renderCompare();
 }
 
-// ═══ COMPARISON — Ticker vs Ticker ═══
+// ═══ COMPARISON — Multi-mode: Ticker / Sector / Industry / Konglomerat ═══
 let cmpRange='6m';
+let cmpMode='ticker'; // ticker | sector | industry | konglo
+let cmpItems=[]; // selected items for current mode (tickers or group names)
+let cmpGroupOptions=null; // cached dropdown options
 
 function renderCompare(){
   var el=$('compare-content');if(!el)return;
   var h='<div style="padding:12px;font-family:var(--f)">';
-  h+='<div style="font-weight:700;font-size:14px;margin-bottom:10px">📈 Ticker Comparison</div>';
+  h+='<div style="font-weight:700;font-size:14px;margin-bottom:10px">📈 Comparison</div>';
+
+  // ── Mode selector ──
+  h+='<div style="display:flex;gap:3px;margin-bottom:10px;flex-wrap:wrap">';
+  [{k:'ticker',l:'📊 Ticker',d:'Saham vs Saham'},{k:'sector',l:'🏢 Sector',d:'Sector vs Sector'},{k:'industry',l:'🏭 Industry',d:'Industry vs Industry'},{k:'konglo',l:'👑 Konglomerat',d:'Grup vs Grup'}].forEach(function(m){
+    h+='<button class="bei-sort-btn'+(cmpMode===m.k?' on':'')+'" onclick="cmpSwitchMode(\''+m.k+'\')" title="'+m.d+'" style="padding:4px 10px;font-size:11px">'+m.l+'</button>';
+  });
+  h+='</div>';
+
+  // ── Input area (varies by mode) ──
   h+='<div class="cmp-input-bar">';
-  h+='<input id="cmp-input" class="bei-filter-input" style="max-width:160px" placeholder="Add ticker (BBCA)" onkeydown="if(event.key===\'Enter\')cmpAdd()">';
-  h+='<button class="bei-tab on" style="font-size:11px;padding:4px 12px" onclick="cmpAdd()">+ Add</button>';
-  if(cmpTickers.length)h+='<button class="bei-filter-clear" onclick="cmpTickers=[];renderCompare()">Clear All</button>';
+  if(cmpMode==='ticker'){
+    h+='<input id="cmp-input" class="bei-filter-input" style="max-width:160px" placeholder="Add ticker (BBCA)" onkeydown="if(event.key===\'Enter\')cmpAdd()">';
+    h+='<button class="bei-tab on" style="font-size:11px;padding:4px 12px" onclick="cmpAdd()">+ Add</button>';
+  }else{
+    h+='<select id="cmp-group-sel" class="bei-filter-sel" style="min-width:200px"><option value="">Select '+cmpModeLabel()+'...</option></select>';
+    h+='<button class="bei-tab on" style="font-size:11px;padding:4px 12px" onclick="cmpAddGroup()">+ Add</button>';
+  }
+  if(cmpItems.length)h+='<button class="bei-filter-clear" onclick="cmpItems=[];renderCompare()">Clear All</button>';
   h+='<span style="flex:1"></span>';
   h+='<span style="font-size:10px;color:var(--t3)">Max 8 · Normalized % change</span>';
   h+='</div>';
-  if(cmpTickers.length){
+
+  // ── Selected items chips ──
+  if(cmpItems.length){
     h+='<div class="cmp-chips">';
-    cmpTickers.forEach(function(t,i){
+    cmpItems.forEach(function(t,i){
       h+='<span class="cmp-chip" style="border-color:'+cmpColors[i%8]+'">';
       h+='<span class="cmp-chip-dot" style="background:'+cmpColors[i%8]+'"></span>'+esc(t);
-      h+='<button class="cmp-chip-x" onclick="cmpTickers.splice('+i+',1);renderCompare()">✕</button></span>';
+      h+='<button class="cmp-chip-x" onclick="cmpItems.splice('+i+',1);renderCompare()">✕</button></span>';
     });
     h+='</div>';
   }
-  // Range buttons
+
+  // ── Range buttons ──
   h+='<div class="cmp-range-bar">';
   [{k:'1m',l:'1M'},{k:'3m',l:'3M'},{k:'6m',l:'6M'},{k:'1y',l:'1Y'},{k:'3y',l:'3Y'},{k:'5y',l:'5Y'},{k:'all',l:'ALL'}].forEach(function(r){
-    h+='<button class="bei-sort-btn'+(cmpRange===r.k?' on':'')+'" onclick="cmpRange=\''+r.k+'\';loadCompareData()">'+r.l+'</button>';
+    h+='<button class="bei-sort-btn'+(cmpRange===r.k?' on':'')+'" onclick="cmpRange=\''+r.k+'\';cmpLoadData()">'+r.l+'</button>';
   });
   h+='</div>';
+
+  // ── Chart + Summary placeholders ──
   h+='<div id="cmp-chart" class="cmp-chart-area"></div>';
-  h+='<div id="cmp-summary"></div></div>';
+  h+='<div id="cmp-summary"></div>';
+  h+='<div id="cmp-detail" style="margin-top:8px"></div>';
+  h+='</div>';
   el.innerHTML=h;
-  if(cmpTickers.length>=2)loadCompareData();
-  else $('cmp-chart').innerHTML='<div class="ne" style="padding:30px">Add 2+ tickers to compare<br><span style="font-size:11px;color:var(--t3)">Example: BBCA, BBRI, BMRI</span></div>';
+
+  // Load group options for dropdown
+  if(cmpMode!=='ticker')cmpLoadGroupOptions();
+
+  // Auto-load if enough items
+  if(cmpItems.length>=2)cmpLoadData();
+  else{
+    var minLabel=cmpMode==='ticker'?'tickers':cmpModeLabel()+'s';
+    $('cmp-chart').innerHTML='<div class="ne" style="padding:30px">Add 2+ '+minLabel+' to compare</div>';
+  }
 }
 
+function cmpModeLabel(){return{ticker:'Ticker',sector:'Sector',industry:'Industry',konglo:'Konglomerat'}[cmpMode]||'Item';}
+
+function cmpSwitchMode(mode){
+  if(cmpMode===mode)return;
+  cmpMode=mode;
+  cmpItems=[];
+  cmpGroupOptions=null;
+  renderCompare();
+}
+
+// ── Add ticker (existing logic) ──
 function cmpAdd(){
   var inp=$('cmp-input');if(!inp)return;
   var code=inp.value.trim().toUpperCase();if(!code)return;
-  if(cmpTickers.includes(code)){showT('⚠','Already added');return;}
-  if(cmpTickers.length>=8){showT('⚠','Max 8');return;}
-  cmpTickers.push(code);inp.value='';renderCompare();
+  if(cmpItems.includes(code)){showT('⚠','Already added');return;}
+  if(cmpItems.length>=8){showT('⚠','Max 8');return;}
+  cmpItems.push(code);inp.value='';renderCompare();
 }
 
-async function loadCompareData(){
-  var chartEl=$('cmp-chart'),sumEl=$('cmp-summary');if(!chartEl)return;
-  // Update range button highlight
-  document.querySelectorAll('.cmp-range-bar .bei-sort-btn').forEach(function(b){b.classList.toggle('on',b.textContent.toLowerCase().replace(/\s/g,'')===cmpRange);});
+// ── Add group from dropdown ──
+function cmpAddGroup(){
+  var sel=$('cmp-group-sel');if(!sel||!sel.value)return;
+  var name=sel.value;
+  if(cmpItems.includes(name)){showT('⚠','Already added');return;}
+  if(cmpItems.length>=8){showT('⚠','Max 8');return;}
+  cmpItems.push(name);sel.value='';renderCompare();
+}
+
+// ── Load dropdown options from backend ──
+async function cmpLoadGroupOptions(){
+  var sel=$('cmp-group-sel');if(!sel)return;
+  try{
+    var url='/api/idx/compare-groups?mode='+cmpMode;
+    var r=await fetch(url);var d=await r.json();
+    var items=d.items||[];
+    var h='<option value="">Select '+cmpModeLabel()+'...</option>';
+    items.forEach(function(item){
+      var label=item.name;
+      var extra='';
+      if(item.count)extra=' ('+item.count+')';
+      if(item.category&&cmpMode==='konglo')extra=' · '+item.category+extra;
+      if(item.key_person&&cmpMode==='konglo')label+=' — '+item.key_person;
+      // Skip if already selected
+      if(cmpItems.includes(item.name))return;
+      h+='<option value="'+esc(item.name)+'">'+esc(label)+extra+'</option>';
+    });
+    sel.innerHTML=h;
+    cmpGroupOptions=items;
+  }catch(e){console.error('Group options error:',e);}
+}
+
+// ═══ LOAD DATA — unified for all modes ═══
+async function cmpLoadData(){
+  var chartEl=$('cmp-chart'),sumEl=$('cmp-summary'),detailEl=$('cmp-detail');
+  if(!chartEl)return;
+
+  // Update range highlight
+  document.querySelectorAll('.cmp-range-bar .bei-sort-btn').forEach(function(b){
+    b.classList.toggle('on',b.textContent.toLowerCase().replace(/\s/g,'')===cmpRange);
+  });
   chartEl.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3)">Loading...</div>';
+  if(sumEl)sumEl.innerHTML='';
+  if(detailEl)detailEl.innerHTML='';
+
   try{
     var allData={};
-    await Promise.all(cmpTickers.map(async function(code){
-      var r=await fetch('/api/idx/flow?code='+encodeURIComponent(code));
-      var d=await r.json();allData[code]=d.data||[];
-    }));
+
+    if(cmpMode==='ticker'){
+      // ── Ticker mode: fetch /api/idx/flow per ticker ──
+      await Promise.all(cmpItems.map(async function(code){
+        var r=await fetch('/api/idx/flow?code='+encodeURIComponent(code));
+        var d=await r.json();
+        allData[code]=(d.data||[]).map(function(r){return{trade_date:r.trade_date,close:r.close,fnet_val:r.foreign_net_val||0};});
+      }));
+    }else{
+      // ── Group mode: fetch /api/idx/compare-group ──
+      var groupsParam=cmpItems.join(',');
+      var r=await fetch('/api/idx/compare-group?mode='+cmpMode+'&groups='+encodeURIComponent(groupsParam));
+      var d=await r.json();
+      if(d.error){chartEl.innerHTML='<div class="ne">'+d.error+'</div>';return;}
+      var groups=d.groups||{};
+      cmpItems.forEach(function(name){
+        var g=groups[name];
+        if(g&&g.data){
+          allData[name]=g.data.map(function(r){return{trade_date:r.trade_date,close:r.avg_close,fnet_val:r.total_fnet_val||0,count:r.count};});
+        }else{
+          allData[name]=[];
+        }
+      });
+    }
+
+    // ── Build unified date axis ──
     var allDates=new Set();
-    cmpTickers.forEach(function(code){allData[code].forEach(function(r){allDates.add(r.trade_date);});});
+    cmpItems.forEach(function(key){(allData[key]||[]).forEach(function(r){allDates.add(r.trade_date);});});
     var dates=Array.from(allDates).sort();
     if(dates.length<2){chartEl.innerHTML='<div class="ne">Not enough data</div>';return;}
 
-    // Apply range filter
+    // ── Apply range filter ──
     if(cmpRange!=='all'){
-      var now=new Date();var cutoff=new Date();
+      var now=new Date(),cutoff=new Date();
       if(cmpRange==='1m')cutoff.setMonth(now.getMonth()-1);
       else if(cmpRange==='3m')cutoff.setMonth(now.getMonth()-3);
       else if(cmpRange==='6m')cutoff.setMonth(now.getMonth()-6);
@@ -319,64 +425,134 @@ async function loadCompareData(){
       else if(cmpRange==='5y')cutoff.setFullYear(now.getFullYear()-5);
       var cutStr=cutoff.toISOString().split('T')[0];
       dates=dates.filter(function(d){return d>=cutStr;});
-      cmpTickers.forEach(function(code){allData[code]=allData[code].filter(function(r){return r.trade_date>=cutStr;});});
+      cmpItems.forEach(function(key){allData[key]=(allData[key]||[]).filter(function(r){return r.trade_date>=cutStr;});});
     }
     if(dates.length<2){chartEl.innerHTML='<div class="ne">Not enough data for this range</div>';return;}
 
+    // ── Normalize to % change from first date ──
     var series={};
-    cmpTickers.forEach(function(code){
-      var map={};allData[code].forEach(function(r){map[r.trade_date]=r.close;});
+    cmpItems.forEach(function(key){
+      var map={};(allData[key]||[]).forEach(function(r){map[r.trade_date]=r.close;});
       var fc=null;
-      series[code]=dates.map(function(d){var c=map[d];if(c&&!fc)fc=c;if(!c||!fc)return null;return Math.round((c-fc)/fc*10000)/100;});
+      series[key]=dates.map(function(d){var c=map[d];if(c&&!fc)fc=c;if(!c||!fc)return null;return Math.round((c-fc)/fc*10000)/100;});
     });
 
-    var W=chartEl.offsetWidth||700,H=320;
-    var pad={t:20,r:60,b:30,l:55};
-    var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
-    var allV=[];cmpTickers.forEach(function(c){series[c].forEach(function(v){if(v!==null)allV.push(v);});});
-    var minV=Math.min.apply(null,allV),maxV=Math.max.apply(null,allV);
-    var rng=maxV-minV||1;minV-=rng*.05;maxV+=rng*.05;rng=maxV-minV;
-    function xS(i){return pad.l+i/(dates.length-1)*cW;}
-    function yS(v){return pad.t+(1-(v-minV)/rng)*cH;}
+    // ── Draw SVG chart (reuse existing logic) ──
+    cmpDrawChart(chartEl,dates,series);
 
-    var svg='<svg width="'+W+'" height="'+H+'" style="display:block">';
-    for(var g=0;g<=5;g++){var gy=pad.t+g/5*cH;var gv=maxV-g/5*rng;
-      svg+='<line x1="'+pad.l+'" y1="'+gy+'" x2="'+(W-pad.r)+'" y2="'+gy+'" stroke="var(--b1)" stroke-width="1"/>';
-      svg+='<text x="'+(W-pad.r+4)+'" y="'+(gy+3)+'" fill="var(--t3)" font-size="9" font-family="var(--fm)">'+(gv>0?'+':'')+gv.toFixed(1)+'%</text>';
-    }
-    if(minV<0&&maxV>0){var zy=yS(0);svg+='<line x1="'+pad.l+'" y1="'+zy+'" x2="'+(W-pad.r)+'" y2="'+zy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,3"/>';}
-    var ls=Math.max(1,Math.floor(dates.length/8));
-    for(var di=0;di<dates.length;di+=ls)svg+='<text x="'+xS(di)+'" y="'+(H-4)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+dates[di].substring(5)+'</text>';
-
-    cmpTickers.forEach(function(code,ci){
-      var clr=cmpColors[ci%8],pts=[];
-      series[code].forEach(function(v,i){if(v!==null)pts.push(xS(i)+','+yS(v));});
-      if(pts.length>=2){
-        svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+clr+'" stroke-width="2" stroke-linejoin="round"/>';
-        var lv=series[code].filter(function(v){return v!==null;});var last=lv[lv.length-1];
-        var li=series[code].lastIndexOf(last);
-        svg+='<circle cx="'+xS(li)+'" cy="'+yS(last)+'" r="3" fill="'+clr+'"/>';
-        svg+='<text x="'+(pad.l-4)+'" y="'+(yS(last)+3)+'" fill="'+clr+'" font-size="9" font-family="var(--fm)" text-anchor="end">'+code+'</text>';
-      }
-    });
-    svg+='</svg>';chartEl.innerHTML=svg;
-
-    // Summary — compact, no Days column, ticker clickable
+    // ── Summary cards ──
     var sh='<div class="cmp-summary-grid">';
-    cmpTickers.forEach(function(code,ci){
-      var data=allData[code];if(!data||!data.length)return;
+    cmpItems.forEach(function(key,ci){
+      var data=allData[key];if(!data||!data.length)return;
       var f=data[0],l=data[data.length-1];
-      var pct=f.close?((l.close-f.close)/f.close*100):0;var cls=pct>0?'up':pct<0?'dn':'';
-      var chg=l.close-f.close;
-      sh+='<div class="cmp-summary-card" onclick="gsOpen(\''+esc(code)+'\')">';
-      sh+='<div class="cmp-sc-head"><span class="cmp-sc-dot" style="background:'+cmpColors[ci%8]+'"></span><span class="cmp-sc-code">'+esc(code)+'</span></div>';
+      var pct=f.close?((l.close-f.close)/f.close*100):0;
+      var cls=pct>0?'up':pct<0?'dn':'';
+
+      // Total foreign net for period
+      var totalFnet=data.reduce(function(s,r){return s+(r.fnet_val||0);},0);
+      var fnetCls=totalFnet>0?'up':totalFnet<0?'dn':'';
+
+      var clickAttr=cmpMode==='ticker'?' onclick="gsOpen(\''+esc(key)+'\')" style="cursor:pointer"':'';
+
+      sh+='<div class="cmp-summary-card"'+clickAttr+'>';
+      sh+='<div class="cmp-sc-head"><span class="cmp-sc-dot" style="background:'+cmpColors[ci%8]+'"></span><span class="cmp-sc-code">'+esc(key)+'</span></div>';
       sh+='<div class="cmp-sc-pct '+cls+'">'+(pct>0?'+':'')+pct.toFixed(2)+'%</div>';
-      sh+='<div class="cmp-sc-detail">'+f.close.toLocaleString()+' → '+l.close.toLocaleString()+' <span class="'+cls+'">'+(chg>0?'+':'')+chg.toLocaleString()+'</span></div>';
+      if(cmpMode==='ticker'){
+        sh+='<div class="cmp-sc-detail">'+f.close.toLocaleString()+' → '+l.close.toLocaleString()+'</div>';
+      }else{
+        sh+='<div class="cmp-sc-detail">Avg: '+Math.round(f.close).toLocaleString()+' → '+Math.round(l.close).toLocaleString()+'</div>';
+      }
+      sh+='<div class="cmp-sc-detail"><span class="'+fnetCls+'">F.Net: '+fmtRp(totalFnet)+'</span></div>';
       sh+='</div>';
     });
-    sh+='</div>';sumEl.innerHTML=sh;
+    sh+='</div>';
+    if(sumEl)sumEl.innerHTML=sh;
+
+    // ── Detail: show ticker composition for group modes ──
+    if(cmpMode!=='ticker'&&detailEl){
+      var dh='<div style="margin-top:6px">';
+      dh+='<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:6px">Composition</div>';
+      dh+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+      var groupData={}; // need to re-fetch or cache — use allData metadata
+      // For group modes, show what tickers are in each group
+      cmpItems.forEach(function(key,ci){
+        var data=allData[key]||[];
+        var lastCount=data.length?data[data.length-1].count:0;
+        dh+='<div style="font-size:11px;display:flex;align-items:center;gap:4px">';
+        dh+='<span class="cmp-chip-dot" style="background:'+cmpColors[ci%8]+';width:6px;height:6px;border-radius:50%;display:inline-block"></span>';
+        dh+='<span style="font-weight:600">'+esc(key)+'</span>';
+        if(lastCount)dh+='<span style="color:var(--t3)">('+lastCount+' stocks)</span>';
+        dh+='</div>';
+      });
+      dh+='</div></div>';
+      detailEl.innerHTML=dh;
+    }
+
   }catch(e){chartEl.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
 }
+
+// ═══ SVG CHART RENDERER — shared by all modes ═══
+function cmpDrawChart(chartEl,dates,series){
+  var W=chartEl.offsetWidth||700,H=320;
+  var pad={t:20,r:60,b:30,l:55};
+  var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
+
+  var allV=[];cmpItems.forEach(function(c){(series[c]||[]).forEach(function(v){if(v!==null)allV.push(v);});});
+  if(!allV.length){chartEl.innerHTML='<div class="ne">No data to chart</div>';return;}
+
+  var minV=Math.min.apply(null,allV),maxV=Math.max.apply(null,allV);
+  var rng=maxV-minV||1;minV-=rng*.05;maxV+=rng*.05;rng=maxV-minV;
+  function xS(i){return pad.l+i/(dates.length-1)*cW;}
+  function yS(v){return pad.t+(1-(v-minV)/rng)*cH;}
+
+  var svg='<svg width="'+W+'" height="'+H+'" style="display:block">';
+
+  // Grid lines + labels
+  for(var g=0;g<=5;g++){
+    var gy=pad.t+g/5*cH;var gv=maxV-g/5*rng;
+    svg+='<line x1="'+pad.l+'" y1="'+gy+'" x2="'+(W-pad.r)+'" y2="'+gy+'" stroke="var(--b1)" stroke-width="1"/>';
+    svg+='<text x="'+(W-pad.r+4)+'" y="'+(gy+3)+'" fill="var(--t3)" font-size="9" font-family="var(--fm)">'+(gv>0?'+':'')+gv.toFixed(1)+'%</text>';
+  }
+
+  // Zero line
+  if(minV<0&&maxV>0){
+    var zy=yS(0);
+    svg+='<line x1="'+pad.l+'" y1="'+zy+'" x2="'+(W-pad.r)+'" y2="'+zy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,3"/>';
+  }
+
+  // Date labels
+  var ls=Math.max(1,Math.floor(dates.length/8));
+  for(var di=0;di<dates.length;di+=ls){
+    svg+='<text x="'+xS(di)+'" y="'+(H-4)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+dates[di].substring(5)+'</text>';
+  }
+
+  // Series lines
+  cmpItems.forEach(function(key,ci){
+    var clr=cmpColors[ci%8],pts=[];
+    (series[key]||[]).forEach(function(v,i){if(v!==null)pts.push(xS(i)+','+yS(v));});
+    if(pts.length>=2){
+      svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+clr+'" stroke-width="2" stroke-linejoin="round"/>';
+      // End dot + label
+      var vals=series[key].filter(function(v){return v!==null;});
+      var last=vals[vals.length-1];
+      var li=series[key].lastIndexOf(last);
+      svg+='<circle cx="'+xS(li)+'" cy="'+yS(last)+'" r="3" fill="'+clr+'"/>';
+      // Label on left side
+      var labelText=key.length>12?key.substring(0,12)+'…':key;
+      svg+='<text x="'+(pad.l-4)+'" y="'+(yS(last)+3)+'" fill="'+clr+'" font-size="9" font-family="var(--fm)" text-anchor="end">'+labelText+'</text>';
+    }
+  });
+
+  svg+='</svg>';
+  chartEl.innerHTML=svg;
+}
+
+// ═══ Backward compat: keep cmpTickers synced with cmpItems for ticker mode ═══
+// (some other code may reference cmpTickers directly)
+Object.defineProperty(window,'cmpTickers',{
+  get:function(){return cmpMode==='ticker'?cmpItems:[];},
+  set:function(v){if(cmpMode==='ticker')cmpItems=v;}
+});
 
 // ═══ SECTOR OVERVIEW ═══
 let sectorDrillSector='',sectorDrillIndustry='';
@@ -497,14 +673,41 @@ function loadChart(){
 }
 
 // TABS
-function stab(n,b){document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));$('t-'+n).classList.add('on');if(n==='wl'){loadWL();loadAl();}if(n==='mkt')loadMkt('indices','ml-idx');if(n==='scr')loadScreener();if(n==='ins')chkIns();}
+function stab(n,b){document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));$('t-'+n).classList.add('on');if(n==='wl'){loadWL();loadAl();}if(n==='mkt')loadMktOverview();if(n==='scr')loadScreener();if(n==='ins')chkIns();}
 function swt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('w-'+n).classList.add('on');}
-function smkt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('m-'+n).classList.add('on');if(n==='idx')loadMkt('indices','ml-idx');if(n==='cmd')loadMkt('commodities','ml-cmd');if(n==='cur')loadMkt('currencies','ml-cur');if(n==='bei')loadBei();if(n==='nws')lNews('');}
+function smkt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('m-'+n).classList.add('on');if(n==='ov')loadMktOverview();if(n==='bei')loadBei();if(n==='nws')lNews('');}
 function sins(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('i-'+n).classList.add('on');}
 
 const mktCache={};
-async function loadMkt(cat,elId){const el=$(elId);if(!el)return;if(mktCache[cat]&&Date.now()-mktCache[cat].ts<60000){renderMkt(mktCache[cat].data,el);return;}el.innerHTML='<div class="ne">Loading...</div>';try{const r=await fetch(`/api/market?cat=${cat}`);const data=await r.json();mktCache[cat]={data,ts:Date.now()};renderMkt(data,el);}catch{el.innerHTML='<div class="ne">Failed to load.</div>';}}
-function renderMkt(data,el){if(!data.length){el.innerHTML='<div class="ne">No data.</div>';return;}el.innerHTML=data.map(m=>{const c=m.change>0?'up':m.change<0?'dn':'fl';const ar=m.change>0?'▲':m.change<0?'▼':'';const s=m.change>0?'+':'';const pr=m.price?m.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—';const ch=m.price?`${ar} ${s}${m.change.toFixed(2)}%`:'—';return`<div class="mkt-item"><span class="mkt-label">${esc(m.label)}</span><span class="mkt-desc">${esc(m.desc)}</span><span class="mkt-price">${pr}</span><span class="mkt-chg ${c}">${ch}</span></div>`;}).join('');}
+async function loadMktOverview(){
+  var el=$('ml-ov');if(!el)return;
+  if(mktCache._ov&&Date.now()-mktCache._ov.ts<60000){el.innerHTML=mktCache._ov.html;return;}
+  el.innerHTML='<div class="ne">Loading...</div>';
+  try{
+    var [idx,cmd,cur]=await Promise.all([
+      fetch('/api/market?cat=indices').then(r=>r.json()),
+      fetch('/api/market?cat=commodities').then(r=>r.json()),
+      fetch('/api/market?cat=currencies').then(r=>r.json())
+    ]);
+    var h='';
+    function renderSection(title,icon,data){
+      h+='<div class="mkt-section-h">'+icon+' '+title+'</div>';
+      data.forEach(function(m){
+        var c=m.change>0?'up':m.change<0?'dn':'fl';
+        var ar=m.change>0?'▲':m.change<0?'▼':'';
+        var s=m.change>0?'+':'';
+        var pr=m.price?m.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
+        var ch=m.price?ar+' '+s+m.change.toFixed(2)+'%':'—';
+        h+='<div class="mkt-item"><span class="mkt-label">'+esc(m.label)+'</span><span class="mkt-desc">'+esc(m.desc)+'</span><span class="mkt-price">'+pr+'</span><span class="mkt-chg '+c+'">'+ch+'</span></div>';
+      });
+    }
+    renderSection('Indices','📊',idx);
+    renderSection('Commodities','🛢',cmd);
+    renderSection('Currencies','💱',cur);
+    mktCache._ov={html:h,ts:Date.now()};
+    el.innerHTML=h;
+  }catch{el.innerHTML='<div class="ne">Failed to load</div>';}
+}
 
 // RESIZE + CHART TOGGLE
 let chartHidden=false;
