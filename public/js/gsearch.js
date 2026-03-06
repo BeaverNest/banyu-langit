@@ -147,9 +147,9 @@ function renderTickerPage(d) {
       h += '</div>';
     }
 
-    // ═══ Adjusted Price Chart (if CA exists) ═══
+    // ═══ Adjusted Price Chart — always show with timeframe selector ═══
     if (d.adj_chart && d.adj_chart.length >= 5) {
-      h += tpAdjustedChart(d.adj_chart, d.corporate_actions, code);
+      h += tpChartWithRange(d.adj_chart, d.corporate_actions, code);
     }
 
     // Mini foreign flow chart (last 10 days)
@@ -172,20 +172,6 @@ function renderTickerPage(d) {
       var lastAcc = d.flow[d.flow.length - 1]?.acc || 0;
       var accCls = lastAcc > 0 ? 'up' : lastAcc < 0 ? 'dn' : '';
       h += '<div style="margin-top:4px;font-size:11px;color:var(--t2)">Accumulation: <b class="' + accCls + '">' + fmtRp(lastAcc) + '</b></div>';
-    }
-    // Insider summary
-    if (d.insider) {
-      h += '<div class="tp-section">Top Holders (insider ' + d.insider.totalPct + '% · FF ' + d.insider.freeFloat + '%)</div>';
-      d.insider.holders.slice(0, 5).forEach(function(ho) {
-        h += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px">';
-        h += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(ho.investor) + '</span>';
-        var typeClr = ho.type === 'Corporate' ? 'var(--bl)' : ho.type === 'Individual' ? 'var(--am)' : 'var(--t3)';
-        if (ho.type) h += '<span style="font-size:9px;color:' + typeClr + '">' + esc(ho.type) + '</span>';
-        var lfClr = ho.lf === 'A' || ho.lf === 'F' ? 'var(--rd)' : 'var(--gn)';
-        if (ho.lf) h += '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:' + (ho.lf === 'A' || ho.lf === 'F' ? 'var(--rdB)' : 'var(--gnB)') + ';color:' + lfClr + '">' + (ho.lf === 'A' || ho.lf === 'F' ? 'Foreign' : 'Local') + '</span>';
-        h += '<span style="font-family:var(--fm);font-weight:700;min-width:50px;text-align:right">' + ho.pct.toFixed(2) + '%</span>';
-        h += '</div>';
-      });
     }
 
   } else if (tpTab === 'foreign') {
@@ -279,16 +265,57 @@ function renderTickerPage(d) {
   window._tpData = d;
 }
 
-// ═══ Adjusted Price Chart — SVG sparkline with CA markers ═══
-function tpAdjustedChart(data, cas, code) {
-  if (!data || data.length < 5) return '';
+// ═══ Price Chart with Timeframe Selector ═══
+var tpChartRange = '3m';
+
+function tpChartWithRange(fullData, cas, code) {
+  var h = '<div class="tp-section" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+  h += '<span>Price Chart</span>';
+  var hasCa = cas && cas.length;
+  if (hasCa) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--amB);color:var(--am)">⚡ Adjusted</span>';
+  h += '<span style="flex:1"></span>';
+  // Range buttons
+  [{k:'1m',l:'1M'},{k:'3m',l:'3M'},{k:'6m',l:'6M'},{k:'1y',l:'1Y'},{k:'2y',l:'2Y'},{k:'all',l:'ALL'}].forEach(function(r) {
+    h += '<button class="bei-sort-btn' + (tpChartRange === r.k ? ' on' : '') + '" onclick="tpChartRange=\'' + r.k + '\';renderTickerPage(window._tpData)" style="padding:2px 7px;font-size:9px">' + r.l + '</button>';
+  });
+  h += '</div>';
+
+  // Filter data by range
+  var data = fullData;
+  if (tpChartRange !== 'all') {
+    var now = new Date(), cutoff = new Date();
+    if (tpChartRange === '1m') cutoff.setMonth(now.getMonth() - 1);
+    else if (tpChartRange === '3m') cutoff.setMonth(now.getMonth() - 3);
+    else if (tpChartRange === '6m') cutoff.setMonth(now.getMonth() - 6);
+    else if (tpChartRange === '1y') cutoff.setFullYear(now.getFullYear() - 1);
+    else if (tpChartRange === '2y') cutoff.setFullYear(now.getFullYear() - 2);
+    var cutStr = cutoff.toISOString().split('T')[0];
+    data = fullData.filter(function(r) { return r.trade_date >= cutStr; });
+  }
+  if (data.length < 2) data = fullData.slice(-20); // fallback
+
+  h += tpDrawPriceChart(data, cas);
+
+  // CA summary badges
+  if (hasCa) {
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">';
+    cas.forEach(function(ca) {
+      var typeLbl = { split: 'SPLIT', reverse: 'REVERSE', rights_or_bonus: 'RIGHTS/BONUS', manual: 'MANUAL' }[ca.action_type] || ca.action_type;
+      h += '<span style="font-size:10px;padding:3px 8px;border-radius:5px;background:var(--amB);color:var(--am);font-family:var(--fm)">⚡ ' + typeLbl + ' ' + ca.ex_date + ' (' + ca.ratio.toFixed(2) + 'x)</span>';
+    });
+    h += '</div>';
+  }
+
+  return h;
+}
+
+// ═══ SVG Price Chart Renderer ═══
+function tpDrawPriceChart(data, cas) {
   var W = 820, H = 180;
   var pad = { t: 16, r: 55, b: 24, l: 50 };
   var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
 
   var hasAdj = data.some(function(r) { return r.adjusted; });
-
-  // Use adj_close for chart
   var closes = data.map(function(r) { return r.adj_close; });
   var rawCloses = data.map(function(r) { return r.close; });
   var dates = data.map(function(r) { return r.trade_date; });
@@ -303,11 +330,6 @@ function tpAdjustedChart(data, cas, code) {
 
   function xS(i) { return pad.l + i / (data.length - 1) * cW; }
   function yS(v) { return pad.t + (1 - (v - minC) / rng) * cH; }
-
-  var h = '<div class="tp-section" style="display:flex;align-items:center;gap:8px">';
-  h += 'Price Chart (' + data.length + 'D)';
-  if (hasAdj) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--amB);color:var(--am)">⚡ Adjusted</span>';
-  h += '</div>';
 
   var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;border:1px solid var(--b1);border-radius:8px;background:var(--bg2)">';
 
@@ -324,14 +346,14 @@ function tpAdjustedChart(data, cas, code) {
     svg += '<text x="' + xS(di) + '" y="' + (H - 4) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">' + dates[di].substring(5) + '</text>';
   }
 
-  // Raw price line (gray, behind) — only show if there's actual adjustment
+  // Raw price line (gray dashed) — only if adjusted
   if (hasAdj) {
     var rawPts = [];
     rawCloses.forEach(function(c, i) { rawPts.push(xS(i) + ',' + yS(c)); });
     svg += '<polyline points="' + rawPts.join(' ') + '" fill="none" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
   }
 
-  // Adjusted price line (blue, main)
+  // Adjusted/main price line
   var adjPts = [];
   closes.forEach(function(c, i) { adjPts.push(xS(i) + ',' + yS(c)); });
   svg += '<polyline points="' + adjPts.join(' ') + '" fill="none" stroke="var(--bl)" stroke-width="2" stroke-linejoin="round"/>';
@@ -339,15 +361,12 @@ function tpAdjustedChart(data, cas, code) {
   // End dot
   svg += '<circle cx="' + xS(data.length - 1) + '" cy="' + yS(closes[closes.length - 1]) + '" r="3" fill="var(--bl)"/>';
 
-  // CA markers — vertical lines at ex_date
+  // CA markers
   if (cas && cas.length) {
     cas.forEach(function(ca) {
-      var idx = dates.indexOf(ca.ex_date);
-      // Find nearest date if exact not in chart range
-      if (idx < 0) {
-        for (var j = 0; j < dates.length; j++) {
-          if (dates[j] >= ca.ex_date) { idx = j; break; }
-        }
+      var idx = -1;
+      for (var j = 0; j < dates.length; j++) {
+        if (dates[j] >= ca.ex_date) { idx = j; break; }
       }
       if (idx >= 0 && idx < data.length) {
         var cx = xS(idx);
@@ -365,19 +384,7 @@ function tpAdjustedChart(data, cas, code) {
   }
 
   svg += '</svg>';
-  h += '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px">' + svg + '</div>';
-
-  // CA summary below chart
-  if (cas && cas.length) {
-    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">';
-    cas.forEach(function(ca) {
-      var typeLbl = { split: 'SPLIT', reverse: 'REVERSE', rights_or_bonus: 'RIGHTS/BONUS', manual: 'MANUAL' }[ca.action_type] || ca.action_type;
-      h += '<span style="font-size:10px;padding:3px 8px;border-radius:5px;background:var(--amB);color:var(--am);font-family:var(--fm)">⚡ ' + typeLbl + ' ' + ca.ex_date + ' (' + ca.ratio.toFixed(2) + 'x)</span>';
-    });
-    h += '</div>';
-  }
-
-  return h;
+  return '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px">' + svg + '</div>';
 }
 
 // Close on Escape or click overlay background

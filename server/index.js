@@ -96,11 +96,11 @@ app.get('/api/ticker/:code', async (req, res) => {
       if (fund) result.fundamental = fund;
     }
 
-    // Corporate actions + adjusted flow
+    // Corporate actions
     const cas = db.prepare(`SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`).all(code);
     if (cas.length) {
       result.corporate_actions = cas;
-      // Build adjusted flow: apply backward adjustment to flow data
+      // Enrich flow with adjusted close
       if (result.flow && result.flow.length) {
         result.flow = result.flow.map(r => {
           let cumFactor = 1;
@@ -115,26 +115,33 @@ app.get('/api/ticker/:code', async (req, res) => {
           return r;
         });
       }
-      // Also provide longer adjusted history for chart (last 120 days)
-      const hist = db.prepare('SELECT trade_date,close,high,low,volume,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 120').all(code);
+    }
+
+    // Price chart — always provide (last 120 days), with adjustment if CA exists
+    if (td) {
+      const hist = db.prepare('SELECT trade_date,close,high,low,volume,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 500').all(code);
       hist.reverse();
-      result.adj_chart = hist.map(r => {
-        let cumFactor = 1;
-        for (const ca of cas) {
-          if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
-            cumFactor *= (1 / ca.ratio);
+      if (hist.length >= 2) {
+        result.adj_chart = hist.map(r => {
+          let cumFactor = 1;
+          if (cas.length) {
+            for (const ca of cas) {
+              if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
+                cumFactor *= (1 / ca.ratio);
+              }
+            }
           }
-        }
-        return {
-          trade_date: r.trade_date,
-          close: r.close,
-          adj_close: cumFactor !== 1 ? Math.round(r.close * cumFactor) : r.close,
-          adj_high: cumFactor !== 1 ? Math.round(r.high * cumFactor) : r.high,
-          adj_low: cumFactor !== 1 ? Math.round(r.low * cumFactor) : r.low,
-          fnet_val: (r.foreign_buy - r.foreign_sell) * r.close,
-          adjusted: cumFactor !== 1
-        };
-      });
+          return {
+            trade_date: r.trade_date,
+            close: r.close,
+            adj_close: cumFactor !== 1 ? Math.round(r.close * cumFactor) : r.close,
+            adj_high: cumFactor !== 1 ? Math.round(r.high * cumFactor) : r.high,
+            adj_low: cumFactor !== 1 ? Math.round(r.low * cumFactor) : r.low,
+            fnet_val: (r.foreign_buy - r.foreign_sell) * r.close,
+            adjusted: cumFactor !== 1
+          };
+        });
+      }
     }
 
     res.json(result);
