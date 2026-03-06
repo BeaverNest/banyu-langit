@@ -74,13 +74,18 @@ function renderTickerPage(d) {
   var chgPct = p.change_pct || d.yahoo?.change || 0;
   var chg = p.close ? (p.close - (p.prev_close || 0)) : 0;
   var pCls = chgPct > 0 ? 'up' : chgPct < 0 ? 'dn' : '';
+  var hasCa = d.corporate_actions && d.corporate_actions.length > 0;
 
   var h = '<div class="tp-header">';
-  // Top row: close, code, name, actions
+  // Top row
   h += '<div class="tp-top">';
   h += '<button class="tp-close" onclick="gsClose()">✕</button>';
   h += '<span class="tp-code">' + esc(code) + '</span>';
   h += '<span class="tp-name">' + esc(name) + '</span>';
+  // CA badge
+  if (hasCa) {
+    h += '<span style="font-size:9px;padding:2px 8px;border-radius:4px;background:var(--amB);color:var(--am);font-weight:600" title="' + d.corporate_actions.length + ' corporate action(s)">⚡ ' + d.corporate_actions.length + ' CA</span>';
+  }
   h += '<div class="tp-actions">';
   h += '<button onclick="addWatchlistFrom(\'' + esc(code) + '\');showT(\'Watchlist\',\'' + esc(code) + '.JK added\')">+ Watchlist</button>';
   h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[3]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
@@ -88,7 +93,7 @@ function renderTickerPage(d) {
   h += '</div></div>';
   // Sector & index badges
   var fund = d.fundamental || {};
-  if (fund.sector || fund.idx_index) {
+  if (fund.sector || fund.idx_index || hasCa) {
     h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">';
     if (fund.sector) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--blB);color:var(--bl)">' + esc(fund.sector) + '</span>';
     if (fund.industry) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--bgH);color:var(--t2)">' + esc(fund.industry) + '</span>';
@@ -141,7 +146,13 @@ function renderTickerPage(d) {
       h += '<div class="tp-stat"><div class="sv">' + fmtNum(p.frequency || 0) + '</div><div class="sl">Freq</div></div>';
       h += '</div>';
     }
-    // Mini foreign flow chart (last 20 days)
+
+    // ═══ Adjusted Price Chart (if CA exists) ═══
+    if (d.adj_chart && d.adj_chart.length >= 5) {
+      h += tpAdjustedChart(d.adj_chart, d.corporate_actions, code);
+    }
+
+    // Mini foreign flow chart (last 10 days)
     if (d.flow && d.flow.length) {
       var maxAbs = Math.max.apply(null, d.flow.map(function(r) { return Math.abs(r.foreign_net_val || 0); }));
       h += '<div class="tp-section">Foreign Flow (' + d.flow.length + 'D)</div>';
@@ -158,7 +169,6 @@ function renderTickerPage(d) {
         h += '<span style="font-family:var(--fm);min-width:60px;text-align:right" class="' + cls + '">' + fmtRp(fnv) + '</span>';
         h += '</div>';
       });
-      // Accumulation
       var lastAcc = d.flow[d.flow.length - 1]?.acc || 0;
       var accCls = lastAcc > 0 ? 'up' : lastAcc < 0 ? 'dn' : '';
       h += '<div style="margin-top:4px;font-size:11px;color:var(--t2)">Accumulation: <b class="' + accCls + '">' + fmtRp(lastAcc) + '</b></div>';
@@ -179,15 +189,22 @@ function renderTickerPage(d) {
     }
 
   } else if (tpTab === 'foreign') {
-    // Full foreign flow table
+    // Full foreign flow table — with adjusted close column if CA exists
     if (d.flow && d.flow.length) {
       var maxAbs = Math.max.apply(null, d.flow.map(function(r) { return Math.abs(r.foreign_net_val || 0); }));
-      h += '<table class="tp-holders"><thead><tr><th>Date</th><th class="ar">Close</th><th>Flow</th><th class="ar">F.Net (IDR)</th><th class="ar">Accum</th></tr></thead><tbody>';
+      var showAdj = d.flow.some(function(r) { return r.adjusted; });
+      h += '<table class="tp-holders"><thead><tr><th>Date</th><th class="ar">Close</th>';
+      if (showAdj) h += '<th class="ar" style="color:var(--am)">Adj</th>';
+      h += '<th>Flow</th><th class="ar">F.Net (IDR)</th><th class="ar">Accum</th></tr></thead><tbody>';
       for (var i = d.flow.length - 1; i >= 0; i--) {
         var r = d.flow[i]; var fnv = r.foreign_net_val || 0; var cls = fnv > 0 ? 'up' : fnv < 0 ? 'dn' : '';
         var accCls = r.acc > 0 ? 'up' : r.acc < 0 ? 'dn' : '';
         var pct = maxAbs ? Math.min(90, Math.abs(fnv) / maxAbs * 90) : 0;
         h += '<tr><td style="font-size:10px">' + r.trade_date + '</td><td class="ar">' + (r.close || 0).toLocaleString() + '</td>';
+        if (showAdj) {
+          var adjStyle = r.adjusted ? 'color:var(--am);font-weight:600' : '';
+          h += '<td class="ar" style="' + adjStyle + '">' + (r.adj_close || r.close || 0).toLocaleString() + '</td>';
+        }
         h += '<td style="min-width:100px;padding:4px 2px"><div class="tp-flow-bar"><div class="bar-neg">';
         if (fnv < 0) h += '<div style="width:' + pct + '%;background:var(--rd);border-radius:2px;opacity:.8"></div>';
         h += '</div><div class="bar-mid"></div><div class="bar-pos">';
@@ -197,6 +214,9 @@ function renderTickerPage(d) {
         h += '<td class="ar ' + accCls + '">' + fmtRp(r.acc) + '</td></tr>';
       }
       h += '</tbody></table>';
+      if (showAdj) {
+        h += '<div style="margin-top:6px;font-size:10px;color:var(--am)">⚡ Adj = adjusted price (backward, accounts for corporate actions)</div>';
+      }
     } else h += '<div style="color:var(--t3);padding:20px;text-align:center">No flow data</div>';
 
   } else if (tpTab === 'insider') {
@@ -257,6 +277,107 @@ function renderTickerPage(d) {
   h += '</div>';
   pg.innerHTML = h;
   window._tpData = d;
+}
+
+// ═══ Adjusted Price Chart — SVG sparkline with CA markers ═══
+function tpAdjustedChart(data, cas, code) {
+  if (!data || data.length < 5) return '';
+  var W = 820, H = 180;
+  var pad = { t: 16, r: 55, b: 24, l: 50 };
+  var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+
+  var hasAdj = data.some(function(r) { return r.adjusted; });
+
+  // Use adj_close for chart
+  var closes = data.map(function(r) { return r.adj_close; });
+  var rawCloses = data.map(function(r) { return r.close; });
+  var dates = data.map(function(r) { return r.trade_date; });
+
+  var minC = Math.min.apply(null, closes);
+  var maxC = Math.max.apply(null, closes);
+  if (hasAdj) {
+    minC = Math.min(minC, Math.min.apply(null, rawCloses));
+    maxC = Math.max(maxC, Math.max.apply(null, rawCloses));
+  }
+  var rng = maxC - minC || 1; minC -= rng * .05; maxC += rng * .05; rng = maxC - minC;
+
+  function xS(i) { return pad.l + i / (data.length - 1) * cW; }
+  function yS(v) { return pad.t + (1 - (v - minC) / rng) * cH; }
+
+  var h = '<div class="tp-section" style="display:flex;align-items:center;gap:8px">';
+  h += 'Price Chart (' + data.length + 'D)';
+  if (hasAdj) h += '<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--amB);color:var(--am)">⚡ Adjusted</span>';
+  h += '</div>';
+
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;border:1px solid var(--b1);border-radius:8px;background:var(--bg2)">';
+
+  // Grid
+  for (var g = 0; g <= 4; g++) {
+    var gy = pad.t + g / 4 * cH; var gv = maxC - g / 4 * rng;
+    svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="1"/>';
+    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="9" font-family="var(--fm)">' + Math.round(gv).toLocaleString() + '</text>';
+  }
+
+  // Date labels
+  var ls = Math.max(1, Math.floor(data.length / 6));
+  for (var di = 0; di < data.length; di += ls) {
+    svg += '<text x="' + xS(di) + '" y="' + (H - 4) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">' + dates[di].substring(5) + '</text>';
+  }
+
+  // Raw price line (gray, behind) — only show if there's actual adjustment
+  if (hasAdj) {
+    var rawPts = [];
+    rawCloses.forEach(function(c, i) { rawPts.push(xS(i) + ',' + yS(c)); });
+    svg += '<polyline points="' + rawPts.join(' ') + '" fill="none" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
+  }
+
+  // Adjusted price line (blue, main)
+  var adjPts = [];
+  closes.forEach(function(c, i) { adjPts.push(xS(i) + ',' + yS(c)); });
+  svg += '<polyline points="' + adjPts.join(' ') + '" fill="none" stroke="var(--bl)" stroke-width="2" stroke-linejoin="round"/>';
+
+  // End dot
+  svg += '<circle cx="' + xS(data.length - 1) + '" cy="' + yS(closes[closes.length - 1]) + '" r="3" fill="var(--bl)"/>';
+
+  // CA markers — vertical lines at ex_date
+  if (cas && cas.length) {
+    cas.forEach(function(ca) {
+      var idx = dates.indexOf(ca.ex_date);
+      // Find nearest date if exact not in chart range
+      if (idx < 0) {
+        for (var j = 0; j < dates.length; j++) {
+          if (dates[j] >= ca.ex_date) { idx = j; break; }
+        }
+      }
+      if (idx >= 0 && idx < data.length) {
+        var cx = xS(idx);
+        svg += '<line x1="' + cx + '" y1="' + pad.t + '" x2="' + cx + '" y2="' + (H - pad.b) + '" stroke="var(--am)" stroke-width="1" stroke-dasharray="4,2"/>';
+        var typeLbl = { split: 'S', reverse: 'R', rights_or_bonus: 'RB', manual: 'M' }[ca.action_type] || '?';
+        svg += '<text x="' + cx + '" y="' + (pad.t - 3) + '" fill="var(--am)" font-size="8" font-family="var(--fm)" text-anchor="middle" font-weight="700">⚡' + typeLbl + ' ' + ca.ratio.toFixed(1) + 'x</text>';
+      }
+    });
+  }
+
+  // Legend
+  if (hasAdj) {
+    svg += '<text x="' + pad.l + '" y="' + (pad.t - 4) + '" fill="var(--bl)" font-size="8" font-family="var(--fm)">── Adjusted</text>';
+    svg += '<text x="' + (pad.l + 65) + '" y="' + (pad.t - 4) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)">╌╌ Raw</text>';
+  }
+
+  svg += '</svg>';
+  h += '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px">' + svg + '</div>';
+
+  // CA summary below chart
+  if (cas && cas.length) {
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">';
+    cas.forEach(function(ca) {
+      var typeLbl = { split: 'SPLIT', reverse: 'REVERSE', rights_or_bonus: 'RIGHTS/BONUS', manual: 'MANUAL' }[ca.action_type] || ca.action_type;
+      h += '<span style="font-size:10px;padding:3px 8px;border-radius:5px;background:var(--amB);color:var(--am);font-family:var(--fm)">⚡ ' + typeLbl + ' ' + ca.ex_date + ' (' + ca.ratio.toFixed(2) + 'x)</span>';
+    });
+    h += '</div>';
+  }
+
+  return h;
 }
 
 // Close on Escape or click overlay background
