@@ -233,7 +233,17 @@ module.exports = function(upload) {
       const sm = latestFundDate();
       const total = sm ? db.prepare('SELECT COUNT(*)as c FROM idx_fundamental WHERE snapshot_month=?').get(sm).c : 0;
       const sectors = sm ? db.prepare('SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!="" ORDER BY sector').all(sm).map(r => r.sector) : [];
-      res.json({ snapshot_month: sm, total, sectors });
+      const industries = sm ? db.prepare('SELECT DISTINCT industry FROM idx_fundamental WHERE snapshot_month=? AND industry!="" ORDER BY industry').all(sm).map(r => r.industry) : [];
+      // Sector → industry mapping for cascading dropdown
+      const sectorIndustryMap = {};
+      if (sm) {
+        const pairs = db.prepare('SELECT DISTINCT sector, industry FROM idx_fundamental WHERE snapshot_month=? AND sector!="" AND industry!="" ORDER BY sector, industry').all(sm);
+        pairs.forEach(p => {
+          if (!sectorIndustryMap[p.sector]) sectorIndustryMap[p.sector] = [];
+          if (!sectorIndustryMap[p.sector].includes(p.industry)) sectorIndustryMap[p.sector].push(p.industry);
+        });
+      }
+      res.json({ snapshot_month: sm, total, sectors, industries, sector_industry_map: sectorIndustryMap });
     } catch { res.json({ total: 0 }); }
   });
 

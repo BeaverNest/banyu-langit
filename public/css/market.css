@@ -2,25 +2,29 @@
 .mkt-list{flex:1;overflow-y:auto}
 .mkt-item{display:flex;align-items:center;padding:10px 12px;border-bottom:1px solid var(--b1);gap:8px;transition:background .15s}
 .mkt-item:hover{background:var(--bgH)}
-.bei-tabs{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap}
-.bei-tab{padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--b2);background:none;color:var(--t2);transition:all .15s;font-family:var(--f)}
-.bei-tab:hover{background:var(--bgH);color:var(--t1)}
-.bei-tab.on{background:var(--bl);color:#fff;border-color:var(--bl)}
-.bei-date{padding:4px 12px;font-size:10px;color:var(--t3);font-family:var(--fm)}
-.bei-tbl{width:100%;font-size:11px;border-collapse:collapse}
-.bei-tbl th{padding:6px 10px;font-size:10px;font-weight:600;color:var(--t3);border-bottom:1px solid var(--b1);position:sticky;top:0;background:var(--bg2);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;z-index:2}
-.bei-tbl td{padding:5px 10px;border-bottom:1px solid var(--b1);font-family:var(--fm);font-size:11px;white-space:nowrap}
-.bei-tbl tr:hover td{background:var(--bgH)}
-.bei-tbl .up{color:var(--gn)}.bei-tbl .dn{color:var(--rd)}
-.bei-tbl .code{font-weight:700;color:var(--bl);cursor:pointer}
-.bei-tbl .code:hover{text-decoration:underline}
-.bei-tbl .name{color:var(--t2);font-family:var(--f);font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.bei-tbl .ar{text-align:right}.bei-tbl .al{text-align:left}
-.bei-tbl .hi{font-weight:700;color:var(--am)}
-.bei-bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--b1);position:relative}
-.bei-bar input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 10px;color:var(--t1);font-size:12px;font-family:var(--f);outline:none}
-.bei-bar input:focus{border-color:var(--bl)}
-.bei-bar input::placeholder{color:var(--t3)}
+.mkt-label{font-family:var(--fm);font-weight:700;font-size:13px;min-width:85px;color:var(--t1)}
+.mkt-desc{font-size:10px;color:var(--t3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkt-price{font-family:var(--fm);font-size:13px;font-weight:600;text-align:right;min-width:80px}
+.mkt-chg{font-family:var(--fm);font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;text-align:right;min-width:75px;display:flex;align-items:center;justify-content:flex-end;gap:3px}
+.mkt-chg.up{background:var(--gnB);color:var(--gn)}
+.mkt-chg.dn{background:var(--rdB);color:var(--rd)}
+.mkt-chg.fl{background:var(--bgH);color:var(--t3)}
+.mkt-loading{padding:20px;text-align:center;color:var(--t3);font-size:12px}
+
+/* ═══ IDX Daily — Redesigned ═══ */
+.bei-status{padding:5px 12px;font-size:11px;color:var(--t2);border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bei-status-empty{color:var(--t3);padding:12px}
+
+/* Filter bar */
+.bei-filter-bar{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--b1);position:relative;flex-wrap:wrap}
+.bei-filter-input{flex:1;min-width:120px;max-width:220px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 10px;color:var(--t1);font-size:12px;font-family:var(--f);outline:none}
+.bei-filter-input:focus{border-color:var(--bl)}
+.bei-filter-input::placeholder{color:var(--t3)}
+.bei-filter-sel{background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 8px;color:var(--t1);font-size:11px;font-family:var(--f);outline:none;cursor:pointer;max-width:180px}
+.bei-filter-sel:focus{border-color:var(--bl)}
+.bei-filter-clear{padding:4px 8px;border-radius:5px;border:1px solid var(--rd);background:var(--rdB);color:var(--rd);font-size:10px;font-family:var(--f);cursor:pointer;font-weight:600}
+
+/* Autocomplete */
 .bei-ac{position:absolute;top:100%;left:12px;right:12px;background:var(--bg2);border:1px solid var(--b2);border-top:none;border-radius:0 0 8px 8px;max-height:200px;overflow-y:auto;z-index:50;display:none;box-shadow:0 4px 12px rgba(0,0,0,.15)}
 .bei-ac.v{display:block}
 .bei-ac-item{padding:6px 12px;font-size:12px;cursor:pointer;display:flex;justify-content:space-between;border-bottom:1px solid var(--b1);font-family:var(--fm)}
@@ -28,6 +32,58 @@
 .bei-ac-item .ac-code{font-weight:700;color:var(--bl)}
 .bei-ac-item .ac-name{color:var(--t2);font-family:var(--f);font-size:10px;flex:1;margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bei-ac-item .ac-price{font-size:10px;color:var(--t3)}
+
+/* Mode tabs */
+.bei-tabs{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap}
+.bei-tab{padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--b2);background:none;color:var(--t2);transition:all .15s;font-family:var(--f)}
+.bei-tab:hover{background:var(--bgH);color:var(--t1)}
+.bei-tab.on{background:var(--bl);color:#fff;border-color:var(--bl)}
+
+/* Sort bar — more compact than tabs */
+.bei-sort-bar{display:flex;gap:3px;padding:4px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap}
+.bei-sort-btn{padding:3px 8px;border-radius:5px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid transparent;background:none;color:var(--t3);transition:all .12s;font-family:var(--f)}
+.bei-sort-btn:hover{color:var(--t1);background:var(--bgH)}
+.bei-sort-btn.on{background:var(--blB);color:var(--bl);border-color:var(--blBo)}
+
+/* CA Banner */
+.bei-ca-banner{display:flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(245,158,11,.08);border-bottom:1px solid rgba(245,158,11,.2);font-size:12px;color:var(--t1)}
+
+/* Digest V2 — compact cards */
+.bei-digest-v2{border-bottom:1px solid var(--b1);padding:8px 12px}
+.bd-cards{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.bd-card{background:var(--bgH);border-radius:6px;padding:4px 10px;text-align:center;min-width:60px}
+.bd-card-label{font-size:8px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:600}
+.bd-card-val{font-size:13px;font-weight:800;font-family:var(--fm);color:var(--t1)}
+.bd-card-val .up{color:var(--gn)}.bd-card-val .dn{color:var(--rd)}
+.bd-insights{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--t2);line-height:1.8}
+.bd-insight{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
+.bd-insight .code{font-weight:700;color:var(--bl);cursor:pointer;font-family:var(--fm)}
+.bd-insight .code:hover{text-decoration:underline}
+.bd-tag{display:inline-block;padding:1px 5px;border-radius:3px;font-family:var(--fm);font-size:9px;margin:0 1px}
+.bd-tag.buy{background:var(--gnB);color:var(--gn)}
+.bd-tag.sell{background:var(--rdB);color:var(--rd)}
+.bd-tag.spike{background:var(--amB);color:var(--am)}
+
+/* Date label */
+.bei-date{padding:3px 12px;font-size:10px;color:var(--t3);font-family:var(--fm)}
+
+/* Data table */
+.bei-tbl{width:100%;font-size:11px;border-collapse:collapse}
+.bei-tbl th{padding:5px 8px;font-size:9px;font-weight:600;color:var(--t3);border-bottom:1px solid var(--b1);position:sticky;top:0;background:var(--bg2);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;z-index:2}
+.bei-tbl td{padding:4px 8px;border-bottom:1px solid var(--b1);font-family:var(--fm);font-size:11px;white-space:nowrap}
+.bei-tbl tr:hover td{background:var(--bgH)}
+.bei-tbl .up{color:var(--gn)}.bei-tbl .dn{color:var(--rd)}
+.bei-tbl .code{font-weight:700;color:var(--bl);cursor:pointer}
+.bei-tbl .code:hover{text-decoration:underline}
+.bei-tbl .name{color:var(--t2);font-family:var(--f);font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.bei-tbl .ar{text-align:right}.bei-tbl .al{text-align:left}
+.bei-tbl .hi{font-weight:700;color:var(--am)}
+
+/* ═══ OLD COMPAT — kept for digest references ═══ */
+.bei-bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--b1);position:relative}
+.bei-bar input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 10px;color:var(--t1);font-size:12px;font-family:var(--f);outline:none}
+.bei-bar input:focus{border-color:var(--bl)}
+.bei-bar input::placeholder{color:var(--t3)}
 .bei-head{padding:8px 12px;border-bottom:1px solid var(--b1)}
 .bei-head .h-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .bei-head .h-date{font-size:11px;color:var(--t3);font-family:var(--fm)}
@@ -46,17 +102,6 @@
 .bei-digest .tag.buy{background:var(--gnB);color:var(--gn)}
 .bei-digest .tag.sell{background:var(--rdB);color:var(--rd)}
 .bei-digest .tag.spike{background:var(--amB);color:var(--am)}
-.bei-status{padding:6px 12px;font-size:11px;color:var(--t2);border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.bei-status-empty{color:var(--t3);padding:12px}
-.mkt-label{font-family:var(--fm);font-weight:700;font-size:13px;min-width:85px;color:var(--t1)}
-.mkt-desc{font-size:10px;color:var(--t3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mkt-price{font-family:var(--fm);font-size:13px;font-weight:600;text-align:right;min-width:80px}
-.mkt-chg{font-family:var(--fm);font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;text-align:right;min-width:75px;display:flex;align-items:center;justify-content:flex-end;gap:3px}
-.mkt-chg.up{background:var(--gnB);color:var(--gn)}
-.mkt-chg.dn{background:var(--rdB);color:var(--rd)}
-.mkt-chg.fl{background:var(--bgH);color:var(--t3)}
-.mkt-loading{padding:20px;text-align:center;color:var(--t3);font-size:12px}
-
 
 /* Screener */
 .scr-sel{background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:4px 6px;color:var(--t1);font-size:11px;font-family:var(--f);outline:none;min-width:120px}
