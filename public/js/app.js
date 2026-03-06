@@ -153,7 +153,7 @@ async function renderSetCA(c){
     if(stats.pending>0){h+='<button class="s-ca-btn confirm" onclick="setCAConfirmAll()">✓ Confirm All</button><button class="s-ca-btn dismiss" onclick="setCADismissAll()">✕ Dismiss All</button>';}
     h+='<button class="s-ca-btn" onclick="setCARedetect()">🔄 Re-detect</button></div>';
     if(!rows.length){h+='<div style="text-align:center;padding:24px;color:var(--t3);font-size:12px">No corporate actions. Upload multi-day IDX data for auto-detection.</div>';c.innerHTML=h;return;}
-    h+='<div style="overflow-y:auto;max-height:300px"><table class="s-ca-tbl"><thead><tr><th>Code</th><th>Ex-Date</th><th>Type</th><th style="text-align:right">Ratio</th><th style="text-align:right">Old Shares</th><th style="text-align:right">New Shares</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+    h+='<div style="overflow-y:auto;max-height:calc(80vh - 280px)"><table class="s-ca-tbl"><thead><tr><th>Code</th><th>Ex-Date</th><th>Type</th><th style="text-align:right">Ratio</th><th style="text-align:right">Old Shares</th><th style="text-align:right">New Shares</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
     rows.forEach(function(r){
       var sCls=r.status==='pending'?'pending':r.status==='confirmed'?'confirmed':'dismissed';
       var typeLbl={split:'SPLIT',reverse:'REVERSE',rights_or_bonus:'RIGHTS/BONUS',unknown:'UNKNOWN',manual:'MANUAL'}[r.action_type]||r.action_type.toUpperCase();
