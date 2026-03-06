@@ -1,0 +1,18 @@
+services:
+  banyu-langit:
+    build: .
+    container_name: banyu-langit
+    ports:
+      - "3003:3000"
+    volumes:
+      - diary-uploads:/app/uploads
+      - diary-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  diary-uploads:
+    external: true
+    name: tradingdiary_diary-uploads
+  diary-data:
+    external: true
+    name: tradingdiary_diary-data
