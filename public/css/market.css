@@ -131,3 +131,13 @@
 .sc-stat-val{font-size:13px;font-weight:700;font-family:var(--fm);color:var(--t1)}
 .sc-stat-val.up{color:var(--gn)}.sc-stat-val.dn{color:var(--rd)}
 .sc-stat-lbl{font-size:8px;text-transform:uppercase;letter-spacing:.4px;color:var(--t3);margin-top:1px}
+/* ═══ Comparison ═══ */
+#scr-compare{overflow-y:auto!important}
+#compare-content{overflow-y:auto;height:100%;font-family:var(--f)}
+.cmp-input-bar{display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.cmp-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.cmp-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;border:2px solid;font-size:12px;font-weight:600;font-family:var(--fm);color:var(--t1);background:var(--bgH)}
+.cmp-chip-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.cmp-chip-x{background:none;border:none;color:var(--t3);cursor:pointer;font-size:12px;padding:0 0 0 4px;line-height:1}
+.cmp-chip-x:hover{color:var(--rd)}
+.cmp-chart-area{background:var(--bg2);border:1px solid var(--b1);border-radius:10px;padding:10px;min-height:200px;overflow:hidden}

@@ -235,6 +235,8 @@ function prefTogTheme(){togTh();renderSetPrefs($('smod-content'));}
 function prefTogChart(el){if(el)el.classList.toggle('on');var show=el&&el.classList.contains('on');localStorage.setItem('chartDefault',show?'visible':'hidden');}
 
 // ═══ SCREENER SUBTABS ═══
+let cmpTickers=[],cmpColors=['#0ea5e9','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#14b8a6','#f97316'];
+
 function scrSubTab(n,b){
   var panel=b.closest('.tpanel');
   panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));
@@ -243,6 +245,112 @@ function scrSubTab(n,b){
   $('scr-'+n).classList.add('on');
   if(n==='screener')loadScreener();
   if(n==='sectors')loadSectorView();
+  if(n==='compare')renderCompare();
+}
+
+// ═══ COMPARISON — Ticker vs Ticker ═══
+function renderCompare(){
+  var el=$('compare-content');if(!el)return;
+  var h='<div style="padding:12px;font-family:var(--f)">';
+  h+='<div style="font-weight:700;font-size:14px;margin-bottom:10px">📈 Ticker Comparison</div>';
+  h+='<div class="cmp-input-bar">';
+  h+='<input id="cmp-input" class="bei-filter-input" style="max-width:160px" placeholder="Add ticker (BBCA)" onkeydown="if(event.key===\'Enter\')cmpAdd()">';
+  h+='<button class="bei-tab on" style="font-size:11px;padding:4px 12px" onclick="cmpAdd()">+ Add</button>';
+  if(cmpTickers.length)h+='<button class="bei-filter-clear" onclick="cmpTickers=[];renderCompare()">Clear All</button>';
+  h+='<span style="flex:1"></span>';
+  h+='<span style="font-size:10px;color:var(--t3)">Max 8 · Normalized % change</span>';
+  h+='</div>';
+  if(cmpTickers.length){
+    h+='<div class="cmp-chips">';
+    cmpTickers.forEach(function(t,i){
+      h+='<span class="cmp-chip" style="border-color:'+cmpColors[i%8]+'">';
+      h+='<span class="cmp-chip-dot" style="background:'+cmpColors[i%8]+'"></span>'+esc(t);
+      h+='<button class="cmp-chip-x" onclick="cmpTickers.splice('+i+',1);renderCompare()">✕</button></span>';
+    });
+    h+='</div>';
+  }
+  h+='<div id="cmp-chart" class="cmp-chart-area"></div>';
+  h+='<div id="cmp-summary"></div></div>';
+  el.innerHTML=h;
+  if(cmpTickers.length>=2)loadCompareData();
+  else $('cmp-chart').innerHTML='<div class="ne" style="padding:30px">Add 2+ tickers to compare<br><span style="font-size:11px;color:var(--t3)">Example: BBCA, BBRI, BMRI</span></div>';
+}
+
+function cmpAdd(){
+  var inp=$('cmp-input');if(!inp)return;
+  var code=inp.value.trim().toUpperCase();if(!code)return;
+  if(cmpTickers.includes(code)){showT('⚠','Already added');return;}
+  if(cmpTickers.length>=8){showT('⚠','Max 8');return;}
+  cmpTickers.push(code);inp.value='';renderCompare();
+}
+
+async function loadCompareData(){
+  var chartEl=$('cmp-chart'),sumEl=$('cmp-summary');if(!chartEl)return;
+  chartEl.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3)">Loading...</div>';
+  try{
+    var allData={};
+    await Promise.all(cmpTickers.map(async function(code){
+      var r=await fetch('/api/idx/flow?code='+encodeURIComponent(code));
+      var d=await r.json();allData[code]=d.data||[];
+    }));
+    var allDates=new Set();
+    cmpTickers.forEach(function(code){allData[code].forEach(function(r){allDates.add(r.trade_date);});});
+    var dates=Array.from(allDates).sort();
+    if(dates.length<2){chartEl.innerHTML='<div class="ne">Not enough data</div>';return;}
+
+    var series={};
+    cmpTickers.forEach(function(code){
+      var map={};allData[code].forEach(function(r){map[r.trade_date]=r.close;});
+      var fc=null;
+      series[code]=dates.map(function(d){var c=map[d];if(c&&!fc)fc=c;if(!c||!fc)return null;return Math.round((c-fc)/fc*10000)/100;});
+    });
+
+    var W=chartEl.offsetWidth||700,H=300;
+    var pad={t:20,r:60,b:30,l:55};
+    var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
+    var allV=[];cmpTickers.forEach(function(c){series[c].forEach(function(v){if(v!==null)allV.push(v);});});
+    var minV=Math.min.apply(null,allV),maxV=Math.max.apply(null,allV);
+    var rng=maxV-minV||1;minV-=rng*.05;maxV+=rng*.05;rng=maxV-minV;
+    function xS(i){return pad.l+i/(dates.length-1)*cW;}
+    function yS(v){return pad.t+(1-(v-minV)/rng)*cH;}
+
+    var svg='<svg width="'+W+'" height="'+H+'" style="display:block">';
+    for(var g=0;g<=5;g++){var gy=pad.t+g/5*cH;var gv=maxV-g/5*rng;
+      svg+='<line x1="'+pad.l+'" y1="'+gy+'" x2="'+(W-pad.r)+'" y2="'+gy+'" stroke="var(--b1)" stroke-width="1"/>';
+      svg+='<text x="'+(W-pad.r+4)+'" y="'+(gy+3)+'" fill="var(--t3)" font-size="9" font-family="var(--fm)">'+(gv>0?'+':'')+gv.toFixed(1)+'%</text>';
+    }
+    if(minV<0&&maxV>0){var zy=yS(0);svg+='<line x1="'+pad.l+'" y1="'+zy+'" x2="'+(W-pad.r)+'" y2="'+zy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,3"/>';}
+    var ls=Math.max(1,Math.floor(dates.length/8));
+    for(var di=0;di<dates.length;di+=ls)svg+='<text x="'+xS(di)+'" y="'+(H-4)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+dates[di].substring(5)+'</text>';
+
+    cmpTickers.forEach(function(code,ci){
+      var clr=cmpColors[ci%8],pts=[];
+      series[code].forEach(function(v,i){if(v!==null)pts.push(xS(i)+','+yS(v));});
+      if(pts.length>=2){
+        svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+clr+'" stroke-width="2" stroke-linejoin="round"/>';
+        var lv=series[code].filter(function(v){return v!==null;});var last=lv[lv.length-1];
+        var li=series[code].lastIndexOf(last);
+        svg+='<circle cx="'+xS(li)+'" cy="'+yS(last)+'" r="3" fill="'+clr+'"/>';
+        svg+='<text x="'+(pad.l-4)+'" y="'+(yS(last)+3)+'" fill="'+clr+'" font-size="9" font-family="var(--fm)" text-anchor="end">'+code+'</text>';
+      }
+    });
+    svg+='</svg>';chartEl.innerHTML=svg;
+
+    // Summary table
+    var sh='<div style="margin-top:12px;overflow-x:auto"><table class="bei-tbl"><thead><tr><th class="al">Ticker</th><th class="ar">First</th><th class="ar">Last</th><th class="ar">Change</th><th class="ar">%</th><th class="ar">Days</th></tr></thead><tbody>';
+    cmpTickers.forEach(function(code,ci){
+      var data=allData[code];if(!data||!data.length)return;
+      var f=data[0],l=data[data.length-1];
+      var pct=f.close?((l.close-f.close)/f.close*100):0;var cls=pct>0?'up':pct<0?'dn':'';
+      sh+='<tr><td class="al" style="font-weight:700"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+cmpColors[ci%8]+';margin-right:6px;vertical-align:middle"></span>'+esc(code)+'</td>';
+      sh+='<td class="ar">'+f.close.toLocaleString()+'</td>';
+      sh+='<td class="ar">'+l.close.toLocaleString()+'</td>';
+      sh+='<td class="ar '+(l.close-f.close>0?'up':'dn')+'">'+(l.close-f.close>0?'+':'')+(l.close-f.close).toLocaleString()+'</td>';
+      sh+='<td class="ar '+cls+'" style="font-weight:700">'+(pct>0?'+':'')+pct.toFixed(2)+'%</td>';
+      sh+='<td class="ar">'+data.length+'</td></tr>';
+    });
+    sh+='</tbody></table></div>';sumEl.innerHTML=sh;
+  }catch(e){chartEl.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
 }
 
 // ═══ SECTOR OVERVIEW ═══
