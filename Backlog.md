@@ -13,33 +13,40 @@
 - [x] Keyboard shortcuts
 - [x] Skeleton loaders
 - [x] Phase 0 refactor (split files)
+- [x] Corporate Action auto-detect (listed_shares change ≥1.5x/≤0.67x)
+- [x] Tabel `corporate_actions` (code, ex_date, type, ratio, status)
+- [x] User confirm/dismiss flow di IDX Daily panel
+- [x] Adjusted OHLC endpoint (backward adjustment)
+- [x] CA notification saat upload IDX Daily
+- [x] Manual CA add via API
+- [x] Dev mode setup (docker-compose.dev.yml + nodemon)
+- [x] Indonesian month name support (Mei, Agt, Okt, Des, etc)
+- [x] Bulk upload limit 500 files
+- [x] BEI Fundamental data upload (PER/PBV/ROE/ROA/DER/NPM/Sector)
 
 ---
 
 ## 🔧 Backend / Data Engine
 
-### Corporate Action & Adjusted Price
-- [ ] Auto-detect stock split/reverse split dari perubahan listed_shares
-- [ ] Auto-detect right issue (shares naik, harga tetap)
-- [ ] Tabel `corporate_actions` (code, date, type, ratio)
-- [ ] User confirm flow saat upload detect CA
-- [ ] Adjust historical OHLC otomatis setelah confirm
-- [ ] Screener pakai adjusted price untuk indikator teknikal
+### Corporate Action — Remaining
+- [ ] Screener pakai adjusted price untuk indikator teknikal (MA/MACD/Stoch)
+- [ ] Ticker page pakai adjusted chart
+- [ ] CA history log (siapa confirm, kapan)
 
 ### Settings / System Management
 - [ ] Redesign settings jadi full page (bukan dropdown)
-- [ ] Data Management: upload insider, IDX daily, tags (sudah ada)
+- [ ] Tab: Data Upload | Database | Corporate Actions | System
 - [ ] Database Stats: total records, disk usage, date range, gap detection
 - [ ] Data Cleanup: delete by date range, delete snapshot, clear all
 - [ ] Export/backup database (download SQLite atau CSV)
 - [ ] API key management
-- [ ] Corporate Action manager (view, add manual, edit, delete)
+- [x] Corporate Action manager (view, add manual, confirm, dismiss, delete) ✅
 
 ### Data Quality
-- [ ] Duplicate detection saat upload (feedback "sudah pernah upload")
+- [ ] Duplicate detection saat upload (feedback "sudah pernah upload tanggal X")
 - [ ] Format validation (warning kalau header tidak dikenali)
-- [ ] Indonesian month name support ✅ (done: Mei, Agt, Okt, Des, etc)
-- [ ] Bulk upload limit 500 files ✅ (done)
+- [ ] Upload progress indicator (per file)
+- [ ] Upload history log viewer
 
 ---
 
@@ -50,7 +57,7 @@
 - [ ] Preset templates (Asing Akumulasi, Breakout, Oversold Bounce, etc)
 - [ ] Screener alert — notify kalau ada saham baru masuk criteria
 - [ ] Lookback period setting per indikator
-- [ ] Yahoo Finance adjusted price fallback untuk teknikal
+- [ ] Screener pakai adjusted price (dari confirmed CA)
 
 ### Analysis
 - [ ] Sector analysis — classify tickers, show sector rotation
@@ -123,12 +130,14 @@
 ## 🏗 Technical Debt
 
 - [ ] insider.js masih 566 baris — split jadi insider-view.js + insider-network.js
-- [ ] idx.js 351 baris — split kalau nambah lagi
+- [ ] idx.js frontend sekarang 500+ baris — split kalau nambah lagi
 - [ ] CSS naming consistency (BEM-lite: `.bl-*`)
 - [ ] Error handling improvement (retry, timeout)
 - [ ] Unit tests for technical indicators (MA, MACD, Stochastic)
-- [ ] Docker volume mount `./public` for dev mode (no rebuild for frontend)
+- [x] Docker volume mount for dev mode ✅ (docker-compose.dev.yml)
+- [ ] `.env` file support (PORT, API_KEY, DEBUG)
+- [ ] Database migration system (schema_version tracking)
 
 ---
 
-*Last updated: 2026-03-06*
+*Last updated: 2026-03-07*

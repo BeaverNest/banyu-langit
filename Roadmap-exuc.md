@@ -1,13 +1,15 @@
 # 🌊 Banyu Langit — Execution Roadmap
 
 ## Current State (March 2026)
-- V2 deployed, 27 files, all features working
-- Data: IDX daily (42+ days), insider ownership, investor tags
-- Pain points: no adjusted OHLC, settings masih dropdown, no export, no automation
+- V2 deployed, 31 files, all features working
+- Data: IDX daily (42+ days), insider ownership, investor tags, BEI fundamental
+- Corporate Action system live: auto-detect, confirm/dismiss, adjusted OHLC
+- Dev mode available (docker-compose.dev.yml)
+- Next priority: finish Sprint 2A (screener adjusted), then Sprint 2B (settings) or Sprint 3 (UX)
 
 ---
 
-## Sprint 1: Infrastructure & Stability
+## Sprint 1: Infrastructure & Stability ⏸ (partial)
 > Goal: Foundation yang solid sebelum tambah fitur baru
 
 ### 1A. Error Handling & Logging
@@ -16,10 +18,10 @@
 - [ ] Frontend error boundary (catch JS errors, show toast instead of blank page)
 - [ ] API response format standardization: `{success, data, error, meta}`
 
-### 1B. Dev Mode Setup
-- [ ] Docker volume mount `./public:/app/public` for frontend hot-reload
-- [ ] Docker volume mount `./server:/app/server` + nodemon for backend hot-reload
-- [ ] `docker-compose.dev.yml` (dev) vs `docker-compose.yml` (prod)
+### 1B. Dev Mode Setup ✅ Done
+- [x] Docker volume mount `./public:/app/public` for frontend hot-reload
+- [x] Docker volume mount `./server:/app/server` + nodemon for backend hot-reload
+- [x] `docker-compose.dev.yml` (dev) vs `docker-compose.yml` (prod)
 - [ ] `.env` file support (PORT, API_KEY, DEBUG)
 
 ### 1C. Database Migrations
@@ -28,23 +30,28 @@
 - [ ] Backup before migration
 
 ### 1D. Test Infrastructure
-- [ ] Unit test for technical indicators (MA, MACD, Stochastic) — validate against known values
+- [ ] Unit test for technical indicators (MA, MACD, Stochastic)
 - [ ] Test for parseTradeDate with all month formats
 - [ ] API endpoint smoke test script
 
-**Deliverable:** Dev workflow yang smooth, app tidak crash, data aman.
+**Status:** Dev mode done, rest deferred — moving fast on features first.
 
 ---
 
-## Sprint 2: Data Engine
+## Sprint 2: Data Engine 🔄 In Progress
 > Goal: Data quality & corporate action handling
 
-### 2A. Corporate Action System
-- [ ] Auto-detect dari listed_shares change saat upload
-- [ ] Tabel `corporate_actions` (code, date, type, ratio, confirmed)
-- [ ] Confirm/reject flow di frontend
-- [ ] Adjust historical OHLC after confirm
-- [ ] Screener & ticker page pakai adjusted data
+### 2A. Corporate Action System ✅ Done (core)
+- [x] Auto-detect dari listed_shares change saat upload
+- [x] Tabel `corporate_actions` (code, ex_date, type, ratio, status)
+- [x] Confirm/dismiss flow di frontend (IDX Daily → Corp Action tab)
+- [x] Adjust historical OHLC after confirm (backward adjustment)
+- [x] CA notification banner + toast saat upload
+- [x] Manual CA add via API (`POST /api/idx/ca`)
+- [x] Bulk confirm/dismiss all pending
+- [x] Re-detect trigger (`POST /api/idx/ca/detect`)
+- [ ] **Screener pakai adjusted price** ← next
+- [ ] **Ticker page pakai adjusted chart** ← next
 
 ### 2B. Settings Redesign
 - [ ] Full page settings (bukan dropdown)
@@ -59,7 +66,7 @@
 - [ ] Header validation warning
 - [ ] Upload history log viewer
 
-**Deliverable:** Data bersih & reliable, settings yang proper.
+**Status:** 2A core done. Screener adjusted + ticker page adjusted remaining.
 
 ---
 
@@ -87,9 +94,8 @@
 ### 3D. Compare Mode
 - [ ] Pilih 2-3 ticker, side by side
 - [ ] Compare: price, foreign flow, insider ownership
-- [ ] Useful for sector analysis (BBCA vs BMRI vs BBRI)
 
-**Deliverable:** App jadi daily driver, bukan cuma data viewer.
+**Status:** Not started.
 
 ---
 
@@ -107,7 +113,7 @@
 - [ ] Weekly summary report
 - [ ] Configurable email/file output
 
-**Deliverable:** Data bisa di-share, di-archive, di-analyze di luar app.
+**Status:** Not started.
 
 ---
 
@@ -121,15 +127,15 @@
 - [ ] Screener results push
 
 ### 5B. Auto-fetch
-- [ ] Cron job download Ringkasan Saham dari BEI (kalau server 24/7)
+- [ ] Cron job download Ringkasan Saham dari BEI
 - [ ] Or: reminder notification "Data belum di-update hari ini"
 
 ### 5C. API V2
-- [ ] Structured REST API for semua endpoint
+- [ ] Structured REST API
 - [ ] API documentation (Swagger/OpenAPI)
 - [ ] Webhook support for alerts
 
-**Deliverable:** App jalan sendiri, minimal manual intervention.
+**Status:** Not started.
 
 ---
 
@@ -137,38 +143,49 @@
 > Goal: Deeper market intelligence
 
 ### 6A. Sector Analysis
-- [ ] Classify tickers by sector (dari data BEI atau manual mapping)
-- [ ] Sector rotation chart (which sectors getting foreign inflow)
+- [ ] Classify tickers by sector (data BEI fundamental sudah ada)
+- [ ] Sector rotation chart (foreign inflow per sector)
 - [ ] Sector-level screener
 
 ### 6B. Pattern Detection
-- [ ] Accumulation/distribution pattern (consecutive foreign buy + volume increase)
+- [ ] Accumulation/distribution pattern
 - [ ] Breakout detection (price above resistance + volume spike)
-- [ ] Divergence alert (price up but foreign sell, or vice versa)
+- [ ] Divergence alert (price up but foreign sell)
 
 ### 6C. Multi-timeframe
 - [ ] Weekly aggregation dari daily data
 - [ ] Monthly summary
 - [ ] YTD performance tracking
 
-**Deliverable:** Actionable insights, bukan cuma raw data.
+**Status:** Not started. Sector data available from BEI fundamental upload.
+
+---
+
+## Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-03-05 | Skip Sprint 1 (infra), jump to Sprint 2 | Features > infra for solo project |
+| 2026-03-06 | Corporate Action via listed_shares auto-detect | More reliable than manual input, data already in idx_daily |
+| 2026-03-07 | Backward adjustment (not forward) | Industry standard, latest price = actual market price |
+| 2026-03-07 | CA endpoints inside idx.js (not separate route) | Tight coupling with IDX data, no extra index.js changes needed |
 
 ---
 
 ## Infrastructure Rules
 
 ### Before Each Sprint:
-1. Backup database
-2. Create git branch (kalau pakai git)
-3. Test existing features still work after update
+1. `git add . && git commit -m "backup before [feature]"`
+2. Test existing features still work after update
+3. Rollback: `git checkout . && docker compose up -d --build`
 
 ### File Update Rules:
 | Change scope | Files to update | Rebuild needed? |
 |---|---|---|
-| CSS only | `public/css/*.css` | Yes (Docker) or No (dev mode) |
-| Frontend JS only | `public/js/*.js` | Yes (Docker) or No (dev mode) |
-| Backend route | `server/routes/*.js` | Yes |
-| Database schema | `server/db.js` | Yes + check migration |
+| CSS only | `public/css/*.css` | Yes (prod) / No (dev mode) |
+| Frontend JS only | `public/js/*.js` | Yes (prod) / No (dev mode) |
+| Backend route | `server/routes/*.js` | Yes (prod) / nodemon auto (dev) |
+| Database schema | `server/db.js` | Yes + verify table created |
 | New feature | Multiple files | Yes + full test |
 
 ### Naming Convention:
@@ -180,4 +197,4 @@
 
 ---
 
-*Last updated: 2026-03-06*
+*Last updated: 2026-03-07*

@@ -62,6 +62,38 @@ function applyOp(val, op, target) {
   return true;
 }
 
+// ═══ Load confirmed CAs and build adjustment lookup ═══
+// Returns { CODE: [ {ex_date, ratio}, ... ] } sorted ex_date DESC
+function loadConfirmedCAs() {
+  const rows = db.prepare(`SELECT code, ex_date, ratio FROM corporate_actions WHERE status='confirmed' ORDER BY ex_date DESC`).all();
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.code]) map[r.code] = [];
+    map[r.code].push(r);
+  }
+  return map;
+}
+
+// Apply backward adjustment to a single row's OHLC
+// actions = array of {ex_date, ratio} for this ticker, sorted DESC
+function adjustRow(row, actions) {
+  if (!actions || !actions.length) return row;
+  let cumFactor = 1;
+  for (const ca of actions) {
+    if (row.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
+      cumFactor *= (1 / ca.ratio);
+    }
+  }
+  if (cumFactor === 1) return row;
+  return {
+    ...row,
+    close: Math.round(row.close * cumFactor),
+    high: Math.round(row.high * cumFactor),
+    low: Math.round(row.low * cumFactor),
+    volume: Math.round(row.volume / cumFactor)
+  };
+}
+
 router.post('/run', (req, res) => {
   try {
     const rules = req.body.rules || [];
@@ -86,21 +118,30 @@ router.post('/run', (req, res) => {
     const techFields = ['close_vs_ma','ma5','ma10','ma20','ma50','ma100','ma200','macd','stoch','vol_spike'];
     const needTech = rules.some(r => techFields.some(tf => (r.field || '').includes(tf)));
 
+    // Pre-load all confirmed CAs once (not per-ticker)
+    const caMap = needTech ? loadConfirmedCAs() : {};
+
     const results = [];
     for (const stock of stocks) {
       let pass = true;
       let tech = {};
 
       if (needTech) {
-        const hist = db.prepare('SELECT close,high,low,volume FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
+        const hist = db.prepare('SELECT trade_date,close,high,low,volume FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
         if (hist.length >= 5) {
-          const closes = hist.map(h => h.close), highs = hist.map(h => h.high || h.close), lows = hist.map(h => h.low || h.close), vols = hist.map(h => h.volume);
+          // Apply adjustment if this ticker has confirmed CAs
+          const actions = caMap[stock.code];
+          const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
+
+          const closes = adjusted.map(h => h.close), highs = adjusted.map(h => h.high || h.close), lows = adjusted.map(h => h.low || h.close), vols = adjusted.map(h => h.volume);
           tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10); tech.ma20 = calcMA(closes, 20);
           tech.ma50 = calcMA(closes, 50); tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
           if (closes.length >= 26) tech.macd = calcMACD(closes);
           if (closes.length >= 14) tech.stoch = calcStochastic(highs, lows, closes);
           const avgVol = vols.slice(-20, -1);
           if (avgVol.length) tech.vol_ratio = Math.round(stock.volume / (avgVol.reduce((s, v) => s + v, 0) / avgVol.length) * 10) / 10;
+          // Flag if adjusted
+          if (actions && actions.length) tech.adjusted = true;
         }
       }
 
@@ -152,7 +193,7 @@ router.post('/run', (req, res) => {
     }
 
     results.sort((a, b) => Math.abs(b.foreign_net_val || 0) - Math.abs(a.foreign_net_val || 0));
-    res.json({ data: results.slice(0, limit), total: results.length, trade_date: td });
+    res.json({ data: results.slice(0, limit), total: results.length, trade_date: td, adjusted: Object.keys(caMap).length > 0 });
   } catch (e) { res.json({ data: [], error: e.message }); }
 });
 
