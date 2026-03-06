@@ -37,7 +37,7 @@ module.exports = function(upload) {
       const dates = db.prepare('SELECT COUNT(DISTINCT trade_date)as c FROM idx_daily').get().c;
       const tickers = db.prepare('SELECT COUNT(DISTINCT code)as c FROM idx_daily').get().c;
 
-      // ═══ Auto-detect corporate actions from listed_shares changes ═══
+      // Auto-detect corporate actions after upload
       const detected = detectCorporateActions();
 
       res.json({ success: true, imported: totalCount, files: fileDates, dates, tickers, detected_ca: detected });
@@ -237,13 +237,13 @@ module.exports = function(upload) {
     } catch { res.json({ total: 0 }); }
   });
 
-  // ═══════════════════════════════════════════════════════════════
-  // ═══ CORPORATE ACTIONS — auto-detect, confirm, adjust OHLC ═══
-  // ═══════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // ═══ CORPORATE ACTIONS — auto-detect, confirm/dismiss, adjust OHLC
+  // ═══════════════════════════════════════════════════════════════════
 
-  // ── Auto-detect: scan all consecutive date pairs for listed_shares jumps ──
-  // Threshold: ratio >= 1.5 or <= 0.67 (catches splits, reverse splits, rights)
-  // Inserts as status='pending' so user can review before applying
+  // Auto-detect: scan consecutive date pairs for listed_shares jumps
+  // Threshold: ratio >= 1.5x or <= 0.67x → likely split/reverse/rights
+  // Inserts as status='pending' for user review
   function detectCorporateActions() {
     const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
     if (dates.length < 2) return [];
@@ -255,7 +255,6 @@ module.exports = function(upload) {
     db.transaction(() => {
       for (let i = 1; i < dates.length; i++) {
         const prevD = dates[i - 1], currD = dates[i];
-        // Find tickers where listed_shares changed significantly between consecutive dates
         const changes = db.prepare(`
           SELECT c.code, c.name, c.listed_shares as new_shares, c.close as new_close,
                  p.listed_shares as old_shares, p.close as old_close
@@ -270,24 +269,21 @@ module.exports = function(upload) {
 
         for (const ch of changes) {
           const ratio = ch.new_shares / ch.old_shares;
-          // Guess action type from ratio
-          let actionType = 'unknown';
-          let notes = '';
+          let actionType = 'unknown', notes = '';
+
           if (ratio >= 1.5) {
-            // Shares increased → split or rights issue or bonus
             const roundRatio = Math.round(ratio);
             if (Math.abs(ratio - roundRatio) < 0.05) {
               actionType = 'split';
-              notes = `1:${roundRatio} (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+              notes = `1:${roundRatio} (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
             } else {
               actionType = 'rights_or_bonus';
-              notes = `ratio ${ratio.toFixed(4)} (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+              notes = `ratio ${ratio.toFixed(4)}x (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
             }
           } else {
-            // Shares decreased → reverse split
             const invRatio = Math.round(1 / ratio);
             actionType = 'reverse';
-            notes = `${invRatio}:1 (auto-detected, shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+            notes = `${invRatio}:1 (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
           }
 
           const r = insCA.run(ch.code, currD, actionType, ratio, ch.old_shares, ch.new_shares, ch.old_close, ch.new_close, 'pending', notes);
@@ -301,7 +297,7 @@ module.exports = function(upload) {
     return detected;
   }
 
-  // ── Manual re-detect (trigger scan without uploading) ──
+  // Re-run detection manually
   router.post('/ca/detect', (req, res) => {
     try {
       const detected = detectCorporateActions();
@@ -309,10 +305,10 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── List all corporate actions ──
+  // List corporate actions
   router.get('/ca', (req, res) => {
     try {
-      const status = req.query.status || '';       // pending, confirmed, applied, dismissed
+      const status = req.query.status || '';
       const code = (req.query.code || '').toUpperCase().trim();
       let sql = 'SELECT * FROM corporate_actions WHERE 1=1';
       const params = [];
@@ -324,16 +320,17 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Get single CA ──
-  router.get('/ca/:id', (req, res) => {
+  // CA stats
+  router.get('/ca/stats', (req, res) => {
     try {
-      const row = db.prepare('SELECT * FROM corporate_actions WHERE id=?').get(req.params.id);
-      if (!row) return res.status(404).json({ error: 'Not found' });
-      res.json(row);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const total = db.prepare('SELECT COUNT(*) as c FROM corporate_actions').get().c;
+      const pending = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='pending'`).get().c;
+      const confirmed = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='confirmed'`).get().c;
+      res.json({ total, pending, confirmed });
+    } catch (e) { res.json({ total: 0, pending: 0, confirmed: 0 }); }
   });
 
-  // ── Confirm a pending CA (user reviews auto-detect, optionally edits ratio/type) ──
+  // Confirm a pending CA (user can edit type/ratio)
   router.put('/ca/:id/confirm', (req, res) => {
     try {
       const row = db.prepare('SELECT * FROM corporate_actions WHERE id=?').get(req.params.id);
@@ -342,41 +339,39 @@ module.exports = function(upload) {
       db.prepare(`UPDATE corporate_actions SET status='confirmed',
         action_type=COALESCE(?,action_type), ratio=COALESCE(?,ratio), notes=COALESCE(?,notes)
         WHERE id=?`).run(action_type || null, ratio || null, notes || null, req.params.id);
-      res.json({ success: true, status: 'confirmed' });
+      res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Dismiss a pending CA (false positive, e.g. listing change not a split) ──
+  // Dismiss (false positive)
   router.put('/ca/:id/dismiss', (req, res) => {
     try {
-      db.prepare(`UPDATE corporate_actions SET status='dismissed', notes=COALESCE(?,notes) WHERE id=?`)
-        .run(req.body.notes || null, req.params.id);
-      res.json({ success: true, status: 'dismissed' });
+      db.prepare(`UPDATE corporate_actions SET status='dismissed' WHERE id=?`).run(req.params.id);
+      res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Add manual CA ──
+  // Add manual CA
   router.post('/ca', (req, res) => {
     try {
       const { code, ex_date, action_type, ratio, notes } = req.body;
       if (!code || !ex_date || !ratio) return res.status(400).json({ error: 'code, ex_date, ratio required' });
-      // Look up surrounding closes if available
       const prevRow = db.prepare('SELECT close, listed_shares FROM idx_daily WHERE code=? AND trade_date<? ORDER BY trade_date DESC LIMIT 1')
         .get(code.toUpperCase(), ex_date);
       const currRow = db.prepare('SELECT close, listed_shares FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date ASC LIMIT 1')
         .get(code.toUpperCase(), ex_date);
-      const r = db.prepare(`INSERT INTO corporate_actions(code, ex_date, action_type, ratio, old_shares, new_shares, old_close, new_close, status, notes)
+      db.prepare(`INSERT INTO corporate_actions(code, ex_date, action_type, ratio, old_shares, new_shares, old_close, new_close, status, notes)
         VALUES(?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(code, ex_date) DO UPDATE SET action_type=excluded.action_type, ratio=excluded.ratio, notes=excluded.notes, status=excluded.status`)
         .run(code.toUpperCase(), ex_date, action_type || 'manual', parseFloat(ratio),
           prevRow?.listed_shares || 0, currRow?.listed_shares || 0,
           prevRow?.close || 0, currRow?.close || 0,
           'confirmed', notes || 'manual entry');
-      res.json({ success: true, id: r.lastInsertRowid });
+      res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Delete CA ──
+  // Delete CA
   router.delete('/ca/:id', (req, res) => {
     try {
       db.prepare('DELETE FROM corporate_actions WHERE id=?').run(req.params.id);
@@ -384,7 +379,7 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Bulk confirm all pending ──
+  // Bulk confirm all pending
   router.post('/ca/confirm-all', (req, res) => {
     try {
       const r = db.prepare(`UPDATE corporate_actions SET status='confirmed' WHERE status='pending'`).run();
@@ -392,7 +387,7 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Bulk dismiss all pending ──
+  // Bulk dismiss all pending
   router.post('/ca/dismiss-all', (req, res) => {
     try {
       const r = db.prepare(`UPDATE corporate_actions SET status='dismissed' WHERE status='pending'`).run();
@@ -400,21 +395,16 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ═══════════════════════════════════════════════════════
-  // ═══ ADJUSTED OHLC — backward adjust using confirmed CAs
-  // ═══════════════════════════════════════════════════════
-
+  // ═══ ADJUSTED OHLC — backward adjust using confirmed CAs ═══
   router.get('/adjusted/:code', (req, res) => {
     try {
       const code = req.params.code.toUpperCase().trim();
       if (!code) return res.status(400).json({ error: 'No code' });
 
-      // Only use confirmed (or applied) CAs for adjustment
       const actions = db.prepare(
-        `SELECT * FROM corporate_actions WHERE code=? AND status IN ('confirmed','applied') ORDER BY ex_date DESC`
+        `SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`
       ).all(code);
 
-      // Raw OHLC sorted ascending
       const ohlc = db.prepare(
         `SELECT trade_date, code, name, open_price, high, low, close, volume, prev_close,
                 value, frequency, foreign_buy, foreign_sell, listed_shares
@@ -424,21 +414,17 @@ module.exports = function(upload) {
       if (!ohlc.length) return res.json({ code, data: [], actions: [] });
 
       if (!actions.length) {
-        // No CAs — return raw with adj = raw
         const data = ohlc.map(r => ({
-          ...r,
-          adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
+          ...r, adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
           adj_volume: r.volume, cum_factor: 1
         }));
         return res.json({ code, data, actions: [] });
       }
 
-      // Backward adjustment: for each row, multiply cumulative factor of all CAs
-      // whose ex_date is AFTER this row's trade_date
-      // Factor for split: 1/ratio (ratio = new_shares/old_shares, e.g. 5 for 1:5 split)
-      //   → old prices × (1/5) = 0.2, old volumes × 5
-      // Factor for reverse: 1/ratio (ratio < 1, e.g. 0.1 for 10:1 reverse)
-      //   → old prices × (1/0.1) = 10, old volumes × 0.1
+      // Backward: dates BEFORE ex_date get factor applied
+      // factor = 1/ratio (ratio = new_shares/old_shares)
+      // Split 1:5 → ratio=5, factor=0.2 → old prices shrink
+      // Reverse 10:1 → ratio=0.1, factor=10 → old prices grow
       const data = ohlc.map(r => {
         let cumFactor = 1;
         for (const ca of actions) {
@@ -448,11 +434,7 @@ module.exports = function(upload) {
         }
 
         if (cumFactor === 1) {
-          return {
-            ...r,
-            adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
-            adj_volume: r.volume, cum_factor: 1
-          };
+          return { ...r, adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close, adj_volume: r.volume, cum_factor: 1 };
         }
 
         return {
@@ -461,26 +443,13 @@ module.exports = function(upload) {
           adj_high: Math.round(r.high * cumFactor),
           adj_low: Math.round(r.low * cumFactor),
           adj_close: Math.round(r.close * cumFactor),
-          adj_volume: Math.round(r.volume / cumFactor),  // volume inverse
+          adj_volume: Math.round(r.volume / cumFactor),
           cum_factor: Math.round(cumFactor * 1000000) / 1000000
         };
       });
 
       res.json({ code, data, actions });
     } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── CA stats ──
-  router.get('/ca/stats', (req, res) => {
-    try {
-      const total = db.prepare('SELECT COUNT(*) as c FROM corporate_actions').get().c;
-      const pending = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='pending'`).get().c;
-      const confirmed = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='confirmed'`).get().c;
-      const dismissed = db.prepare(`SELECT COUNT(*) as c FROM corporate_actions WHERE status='dismissed'`).get().c;
-      const byType = db.prepare('SELECT action_type, COUNT(*) as c FROM corporate_actions GROUP BY action_type').all();
-      const recent = db.prepare('SELECT * FROM corporate_actions ORDER BY created_at DESC LIMIT 10').all();
-      res.json({ total, pending, confirmed, dismissed, by_type: byType, recent });
-    } catch (e) { res.json({ error: e.message }); }
   });
 
   return router;

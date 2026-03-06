@@ -19,7 +19,6 @@ function beiStatusBar(){
   if(gap>1)h+=' <span style="color:var(--rd)">('+gap+' hari tertinggal)</span>';
   else if(gap===1)h+=' <span style="color:var(--am)">(kemarin)</span>';
   h+=' · '+beiStats.dates+' hari · '+beiStats.tickers+' saham';
-  // Gap: only count between first and last uploaded date
   if(beiStats.all_dates&&beiStats.all_dates.length>=2){
     var ds=new Set(beiStats.all_dates);
     var first=new Date(beiStats.all_dates[0]+'T00:00:00');
@@ -47,15 +46,25 @@ async function loadBei(mode,opts){
   if(!beiStats)await loadBeiStats();
 
   var h=beiStatusBar();
+
+  // ═══ CA pending banner ═══
+  h+=await beiCaBanner();
+
   // Search bar with autocomplete
   h+='<div class="bei-bar"><input id="bei-q" placeholder="Search ticker... (BBCA, ASII)" value="'+esc(beiSearch)+'" oninput="beiAcType()" onkeydown="beiAcKey(event)" autocomplete="off"><div class="bei-ac" id="bei-ac"></div></div>';
 
   // Mode tabs
-  [{k:'top',l:'📊 Rankings'},{k:'foreign',l:'🌍 Foreign Flow'},{k:'anomaly',l:'🔍 Anomaly'}].forEach(function(t){
+  [{k:'top',l:'📊 Rankings'},{k:'foreign',l:'🌍 Foreign Flow'},{k:'anomaly',l:'🔍 Anomaly'},{k:'ca',l:'⚡ Corp Action'}].forEach(function(t){
     if(!h.includes('bei-tabs'))h+='<div class="bei-tabs">';
     h+='<button class="bei-tab'+(t.k===beiMode?' on':'')+'" onclick="beiSearch=\'\';loadBei(\''+t.k+'\')">'+t.l+'</button>';
   });
   h+='</div>';
+
+  if(beiMode==='ca'){
+    el.innerHTML=h+''+skelRows(4)+'';
+    await loadBeiCaPanel(el,h);
+    return;
+  }
 
   if(beiMode==='top'){
     if(opts.sort)beiSort=opts.sort;if(opts.dir)beiDir=opts.dir;
@@ -262,6 +271,7 @@ async function showFlowDetail(code){
     h+='<span style="font-weight:800;font-size:18px;font-family:var(--fm);color:var(--bl)">'+esc(code)+'</span>';
     if(qt.name)h+='<span style="color:var(--t2);font-size:12px">'+esc(qt.name)+'</span>';
     h+='<span style="flex:1"></span>';
+    h+='<button class="bei-tab" onclick="showAdjustedOHLC(\''+esc(code)+'\')">📐 Adjusted</button>';
     h+='<button class="bei-tab" onclick="addWatchlistFrom(\''+esc(code)+'\')">+ Watchlist</button>';
     h+='<button class="bei-tab" onclick="stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[3]);setTimeout(function(){insGoStock(\''+esc(code)+'\')},200)">🔍 Insider</button>';
     h+='<button class="bei-tab" onclick="stab(\'wl\',document.querySelectorAll(\'.tabs .tab\')[1]);setTimeout(function(){swt(\'alt\',document.querySelectorAll(\'.wt-b\')[1]);$(\'as\').value=\''+esc(code)+'.JK\';},200)">🔔 Alert</button>';
@@ -349,3 +359,197 @@ async function addWatchlistFrom(code){
 function fmtNum(n){if(!n)return'0';var a=Math.abs(n);var s=n<0?'-':'';if(a>=1e12)return s+(a/1e12).toFixed(1)+'T';if(a>=1e9)return s+(a/1e9).toFixed(1)+'B';if(a>=1e6)return s+(a/1e6).toFixed(1)+'M';if(a>=1e3)return s+(a/1e3).toFixed(1)+'K';return n.toLocaleString();}
 function fmtRp(n){if(!n)return'0';var a=Math.abs(n);var s=n<0?'-':'';if(a>=1e12)return s+(a/1e12).toFixed(1)+' T';if(a>=1e9)return s+(a/1e9).toFixed(1)+' B';if(a>=1e6)return s+(a/1e6).toFixed(1)+' M';if(a>=1e3)return s+(a/1e3).toFixed(0)+' K';return n.toLocaleString();}
 
+// ═══════════════════════════════════════════════════════════
+// ═══ CORPORATE ACTION — banner, review panel, adjusted OHLC
+// ═══════════════════════════════════════════════════════════
+
+// Pending CA banner — shows at top of IDX panel when there are unreviewed CAs
+async function beiCaBanner(){
+  try{
+    var r=await fetch('/api/idx/ca/stats');
+    var d=await r.json();
+    if(!d.pending||d.pending===0)return'';
+    return'<div style="background:rgba(255,167,38,.12);border:1px solid rgba(255,167,38,.3);border-radius:8px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
+      +'<span>⚡</span>'
+      +'<span><b>'+d.pending+' corporate action</b> terdeteksi, perlu review</span>'
+      +'<span style="flex:1"></span>'
+      +'<button class="bei-tab on" style="font-size:11px;padding:3px 10px" onclick="loadBei(\'ca\')">Review →</button>'
+      +'</div>';
+  }catch{return'';}
+}
+
+// Corp Action review panel
+async function loadBeiCaPanel(el,headerH){
+  try{
+    var [rAll,rStats]=await Promise.all([
+      fetch('/api/idx/ca'),
+      fetch('/api/idx/ca/stats')
+    ]);
+    var all=await rAll.json();
+    var stats=await rStats.json();
+    var rows=all.data||[];
+
+    var h=headerH;
+
+    // Stats
+    h+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+    h+='<div class="ov-card"><div class="ov-card-n" style="color:var(--am)">'+(stats.pending||0)+'</div><div class="ov-card-l">Pending</div></div>';
+    h+='<div class="ov-card"><div class="ov-card-n up">'+(stats.confirmed||0)+'</div><div class="ov-card-l">Confirmed</div></div>';
+    h+='<div class="ov-card"><div class="ov-card-n">'+(stats.total||0)+'</div><div class="ov-card-l">Total</div></div>';
+    h+='</div>';
+
+    // Bulk actions
+    if(stats.pending>0){
+      h+='<div style="display:flex;gap:6px;margin-bottom:10px">';
+      h+='<button class="bei-tab" onclick="caConfirmAll()" style="font-size:11px;background:rgba(102,187,106,.15);border-color:var(--gn)">✓ Confirm All Pending</button>';
+      h+='<button class="bei-tab" onclick="caDismissAll()" style="font-size:11px;background:rgba(239,83,80,.1);border-color:var(--rd)">✕ Dismiss All</button>';
+      h+='<button class="bei-tab" onclick="caRedetect()" style="font-size:11px">🔄 Re-detect</button>';
+      h+='</div>';
+    }else{
+      h+='<div style="display:flex;gap:6px;margin-bottom:10px">';
+      h+='<button class="bei-tab" onclick="caRedetect()" style="font-size:11px">🔄 Re-detect</button>';
+      h+='</div>';
+    }
+
+    if(!rows.length){
+      h+='<div class="ne" style="padding:24px">Belum ada corporate action terdeteksi. Upload data multi-hari untuk auto-detect.</div>';
+      el.innerHTML=h;return;
+    }
+
+    // Table
+    h+='<div style="overflow-y:auto;max-height:calc(100vh - 340px)">';
+    h+='<table class="bei-tbl"><thead><tr>';
+    h+='<th class="al">Code</th><th class="al">Ex-Date</th><th class="al">Type</th>';
+    h+='<th class="ar">Old Shares</th><th class="ar">New Shares</th><th class="ar">Ratio</th>';
+    h+='<th class="ar">Old Close</th><th class="ar">New Close</th>';
+    h+='<th class="al">Status</th><th class="al">Aksi</th>';
+    h+='</tr></thead><tbody>';
+
+    rows.forEach(function(r){
+      var sCls=r.status==='pending'?'color:var(--am)':r.status==='confirmed'?'color:var(--gn)':'color:var(--t3)';
+      var sIcon=r.status==='pending'?'⏳':r.status==='confirmed'?'✅':'❌';
+      var typeLbl=caTypeLabel(r.action_type);
+      h+='<tr>';
+      h+='<td class="code al" onclick="showFlowDetail(\''+esc(r.code)+'\')">'+esc(r.code)+'</td>';
+      h+='<td class="al" style="font-size:11px">'+esc(r.ex_date)+'</td>';
+      h+='<td class="al"><span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(79,195,247,.1);color:var(--bl)">'+typeLbl+'</span></td>';
+      h+='<td class="ar" style="font-size:11px">'+fmtNum(r.old_shares)+'</td>';
+      h+='<td class="ar" style="font-size:11px">'+fmtNum(r.new_shares)+'</td>';
+      h+='<td class="ar" style="font-weight:700">'+r.ratio.toFixed(2)+'x</td>';
+      h+='<td class="ar">'+(r.old_close||0).toLocaleString()+'</td>';
+      h+='<td class="ar">'+(r.new_close||0).toLocaleString()+'</td>';
+      h+='<td class="al" style="'+sCls+'">'+sIcon+' '+esc(r.status)+'</td>';
+      h+='<td class="al" style="white-space:nowrap">';
+      if(r.status==='pending'){
+        h+='<button style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--gn);background:rgba(102,187,106,.1);color:var(--gn);cursor:pointer;margin-right:4px" onclick="caConfirm('+r.id+')">✓</button>';
+        h+='<button style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--rd);background:rgba(239,83,80,.1);color:var(--rd);cursor:pointer" onclick="caDismiss('+r.id+')">✕</button>';
+      }else{
+        h+='<button style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--b2);color:var(--t3);cursor:pointer" onclick="caDelete('+r.id+')">🗑</button>';
+      }
+      h+='</td>';
+      h+='</tr>';
+    });
+
+    h+='</tbody></table></div>';
+
+    // Notes
+    h+='<div style="font-size:10px;color:var(--t3);margin-top:8px;padding:8px;background:var(--bg2);border-radius:6px">';
+    h+='💡 <b>Auto-detect logic:</b> listed_shares berubah ≥1.5x atau ≤0.67x antar hari berturutan. ';
+    h+='Ratio bulat → split, non-bulat → rights/bonus, turun → reverse. ';
+    h+='Confirm untuk aktifkan adjusted OHLC, dismiss untuk false positive.';
+    h+='</div>';
+
+    el.innerHTML=h;
+  }catch(e){el.innerHTML=headerH+'<div class="ne">Error: '+e.message+'</div>';}
+}
+
+function caTypeLabel(t){
+  var map={split:'SPLIT',reverse:'REVERSE',rights_or_bonus:'RIGHTS/BONUS',unknown:'UNKNOWN',manual:'MANUAL'};
+  return map[t]||t.toUpperCase();
+}
+
+async function caConfirm(id){
+  try{await fetch('/api/idx/ca/'+id+'/confirm',{method:'PUT',headers:{'Content-Type':'application/json'},body:'{}'});showT('Corp Action','Confirmed');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+async function caDismiss(id){
+  try{await fetch('/api/idx/ca/'+id+'/dismiss',{method:'PUT',headers:{'Content-Type':'application/json'},body:'{}'});showT('Corp Action','Dismissed');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+async function caDelete(id){
+  if(!confirm('Hapus corporate action ini?'))return;
+  try{await fetch('/api/idx/ca/'+id,{method:'DELETE'});showT('Corp Action','Deleted');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+async function caConfirmAll(){
+  if(!confirm('Confirm semua pending corporate actions?'))return;
+  try{var r=await fetch('/api/idx/ca/confirm-all',{method:'POST'});var d=await r.json();showT('Corp Action','Confirmed '+d.confirmed+' actions');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+async function caDismissAll(){
+  if(!confirm('Dismiss semua pending corporate actions?'))return;
+  try{var r=await fetch('/api/idx/ca/dismiss-all',{method:'POST'});var d=await r.json();showT('Corp Action','Dismissed '+d.dismissed+' actions');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+async function caRedetect(){
+  try{var r=await fetch('/api/idx/ca/detect',{method:'POST'});var d=await r.json();showT('Corp Action','Detected '+d.total+' new actions');loadBei('ca');}catch(e){showT('Error',e.message);}
+}
+
+// ═══ Adjusted OHLC view ═══
+async function showAdjustedOHLC(code){
+  var el=$('bei-content');
+  el.innerHTML='<div style="padding:12px">'+skelRows(6)+'</div>';
+  try{
+    var r=await fetch('/api/idx/adjusted/'+encodeURIComponent(code));
+    var d=await r.json();
+    var data=d.data||[];
+    var actions=d.actions||[];
+    var hasAdj=data.some(function(r){return r.cum_factor!==1;});
+
+    var h='<div style="padding:12px">';
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+    h+='<button class="ins-back" style="display:inline-flex" onclick="showFlowDetail(\''+esc(code)+'\')">← Back</button>';
+    h+='<span style="font-weight:800;font-size:18px;font-family:var(--fm);color:var(--bl)">'+esc(code)+'</span>';
+    h+='<span style="color:var(--t2);font-size:12px">📐 Adjusted OHLC</span>';
+    h+='</div>';
+
+    // Actions summary
+    if(actions.length){
+      h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
+      actions.forEach(function(a){
+        h+='<span style="font-size:10px;padding:3px 8px;border-radius:4px;background:rgba(79,195,247,.1);color:var(--bl)">';
+        h+=caTypeLabel(a.action_type)+' '+esc(a.ex_date)+' ('+a.ratio.toFixed(2)+'x)';
+        h+='</span>';
+      });
+      h+='</div>';
+    }else{
+      h+='<div style="font-size:12px;color:var(--t3);margin-bottom:10px">Tidak ada corporate action yang confirmed untuk ticker ini</div>';
+    }
+
+    if(!data.length){
+      h+='<div class="ne">No OHLC data</div></div>';
+      el.innerHTML=h;return;
+    }
+
+    // Last 60 rows table (newest first)
+    var tail=data.slice(-60).reverse();
+    h+='<div style="overflow-y:auto;max-height:calc(100vh - 300px)">';
+    h+='<table class="bei-tbl"><thead><tr>';
+    h+='<th class="al">Date</th><th class="ar">Close</th><th class="ar" style="color:var(--bl)">Adj Close</th>';
+    h+='<th class="ar">Adj Open</th><th class="ar">Adj High</th><th class="ar">Adj Low</th>';
+    h+='<th class="ar">Adj Vol(lot)</th><th class="ar">Factor</th>';
+    h+='</tr></thead><tbody>';
+
+    tail.forEach(function(r){
+      var adjusted=r.cum_factor!==1;
+      var fCls=adjusted?'color:var(--bl);font-weight:600':'';
+      h+='<tr>';
+      h+='<td class="al" style="font-size:10px">'+esc(r.trade_date)+'</td>';
+      h+='<td class="ar">'+(r.close||0).toLocaleString()+'</td>';
+      h+='<td class="ar" style="'+fCls+'">'+(r.adj_close||0).toLocaleString()+'</td>';
+      h+='<td class="ar" style="font-size:11px">'+(r.adj_open||0).toLocaleString()+'</td>';
+      h+='<td class="ar" style="font-size:11px">'+(r.adj_high||0).toLocaleString()+'</td>';
+      h+='<td class="ar" style="font-size:11px">'+(r.adj_low||0).toLocaleString()+'</td>';
+      h+='<td class="ar">'+fmtNum(Math.round((r.adj_volume||0)/100))+'</td>';
+      h+='<td class="ar" style="font-size:10px;'+(adjusted?'color:var(--am)':'')+'">'+r.cum_factor+'</td>';
+      h+='</tr>';
+    });
+    h+='</tbody></table></div></div>';
+    el.innerHTML=h;
+  }catch(e){el.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
+}

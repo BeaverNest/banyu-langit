@@ -45,8 +45,17 @@ $('idxfi').addEventListener('change',async function(){
     if(d.success){
       var msg='IDX: '+d.imported.toLocaleString()+' records, '+d.dates+' dates, '+d.tickers+' tickers';
       if(d.files&&d.files.length>1)msg+='\n'+d.files.map(function(f){return f.date+': '+f.rows+' rows';}).join(', ');
+      // Corporate action detection notification
+      if(d.detected_ca&&d.detected_ca.length){
+        msg+='\n⚡ '+d.detected_ca.length+' corporate action(s) detected!';
+        var caList=d.detected_ca.map(function(ca){return ca.code+' '+ca.action_type+' ('+ca.ratio+'x)';}).join(', ');
+        showT('⚡ Corp Action Detected',d.detected_ca.length+' action(s): '+caList+'. Go to IDX Daily → Corp Action to review.');
+      }else{
+        showT('IDX Data','Imported '+d.imported.toLocaleString()+' records from '+d.files.length+' file(s)');
+      }
       info.textContent=msg;
-      showT('IDX Data','Imported '+d.imported.toLocaleString()+' records from '+d.files.length+' file(s)');
+      // Refresh IDX panel if visible
+      if(typeof beiStats!=='undefined')beiStats=null;
     }else{info.textContent='Error: '+(d.error||'unknown');}
   }catch(e){info.textContent='Error: '+e.message;}this.value='';
 });
