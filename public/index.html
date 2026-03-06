@@ -36,6 +36,7 @@
     <button class="tab on" onclick="stab('diary',this)">📝 Diary</button>
     <button class="tab" onclick="stab('wl',this)">📊 Watchlist</button>
     <button class="tab" onclick="stab('mkt',this)">🌐 Market</button>
+    <button class="tab" onclick="stab('scr',this)">🔬 Screener</button>
     <button class="tab" onclick="stab('ins',this)">🔍 Insider</button>
   </div>
 
@@ -73,18 +74,21 @@
       <button class="wt-b" onclick="smkt('cmd',this)">🛢 Commodities</button>
       <button class="wt-b" onclick="smkt('cur',this)">💱 Currencies</button>
       <button class="wt-b" onclick="smkt('bei',this)">🇮🇩 IDX Daily</button>
-      <button class="wt-b" onclick="smkt('scr',this)">🔬 Screener</button>
       <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
     </div>
     <div class="wp on" id="m-idx"><div class="mkt-list" id="ml-idx"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-cmd"><div class="mkt-list" id="ml-cmd"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-cur"><div class="mkt-list" id="ml-cur"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-bei"><div id="bei-content"><div class="ne">Loading IDX data...</div></div></div>
-    <div class="wp" id="m-scr"><div id="scr-content"></div></div>
     <div class="wp" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading market news...</div></div>
     </div>
+  </div>
+
+  <!-- SCREENER -->
+  <div class="tpanel" id="t-scr">
+    <div id="scr-content"></div>
   </div>
 
   <!-- INSIDER -->

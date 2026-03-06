@@ -247,9 +247,9 @@ function loadChart(){
 }
 
 // TABS
-function stab(n,b){document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));$('t-'+n).classList.add('on');if(n==='wl'){loadWL();loadAl();}if(n==='mkt')loadMkt('indices','ml-idx');if(n==='ins')chkIns();}
+function stab(n,b){document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));$('t-'+n).classList.add('on');if(n==='wl'){loadWL();loadAl();}if(n==='mkt')loadMkt('indices','ml-idx');if(n==='scr')loadScreener();if(n==='ins')chkIns();}
 function swt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('w-'+n).classList.add('on');}
-function smkt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('m-'+n).classList.add('on');if(n==='idx')loadMkt('indices','ml-idx');if(n==='cmd')loadMkt('commodities','ml-cmd');if(n==='cur')loadMkt('currencies','ml-cur');if(n==='bei')loadBei();if(n==='scr')loadScreener();if(n==='nws')lNews('');}
+function smkt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('m-'+n).classList.add('on');if(n==='idx')loadMkt('indices','ml-idx');if(n==='cmd')loadMkt('commodities','ml-cmd');if(n==='cur')loadMkt('currencies','ml-cur');if(n==='bei')loadBei();if(n==='nws')lNews('');}
 function sins(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('i-'+n).classList.add('on');}
 
 const mktCache={};
@@ -273,7 +273,7 @@ function up(){h.classList.remove('ac');document.body.classList.remove('rz');docu
 document.addEventListener('keydown',function(e){
   var tag=e.target.tagName;if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
-  if(e.key>='1'&&e.key<='4'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var tabs=document.querySelectorAll('.tabs .tab');var idx=parseInt(e.key)-1;if(tabs[idx]){tabs[idx].click();e.preventDefault();}}
+  if(e.key>='1'&&e.key<='5'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var tabs=document.querySelectorAll('.tabs .tab');var idx=parseInt(e.key)-1;if(tabs[idx]){tabs[idx].click();e.preventDefault();}}
   if(e.key==='c'){var ct=$('cta');if(ct){ct.focus();e.preventDefault();}}
   if(e.key==='?'){showT('Shortcuts','/ Search · 1-4 Tabs · C Compose · Esc Close');e.preventDefault();}
   if(e.key==='Escape')closeSettings();
