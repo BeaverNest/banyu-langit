@@ -249,6 +249,8 @@ function scrSubTab(n,b){
 }
 
 // ═══ COMPARISON — Ticker vs Ticker ═══
+let cmpRange='6m';
+
 function renderCompare(){
   var el=$('compare-content');if(!el)return;
   var h='<div style="padding:12px;font-family:var(--f)">';
@@ -269,6 +271,12 @@ function renderCompare(){
     });
     h+='</div>';
   }
+  // Range buttons
+  h+='<div class="cmp-range-bar">';
+  [{k:'1m',l:'1M'},{k:'3m',l:'3M'},{k:'6m',l:'6M'},{k:'1y',l:'1Y'},{k:'3y',l:'3Y'},{k:'5y',l:'5Y'},{k:'all',l:'ALL'}].forEach(function(r){
+    h+='<button class="bei-sort-btn'+(cmpRange===r.k?' on':'')+'" onclick="cmpRange=\''+r.k+'\';loadCompareData()">'+r.l+'</button>';
+  });
+  h+='</div>';
   h+='<div id="cmp-chart" class="cmp-chart-area"></div>';
   h+='<div id="cmp-summary"></div></div>';
   el.innerHTML=h;
@@ -286,6 +294,8 @@ function cmpAdd(){
 
 async function loadCompareData(){
   var chartEl=$('cmp-chart'),sumEl=$('cmp-summary');if(!chartEl)return;
+  // Update range button highlight
+  document.querySelectorAll('.cmp-range-bar .bei-sort-btn').forEach(function(b){b.classList.toggle('on',b.textContent.toLowerCase().replace(/\s/g,'')===cmpRange);});
   chartEl.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3)">Loading...</div>';
   try{
     var allData={};
@@ -298,6 +308,21 @@ async function loadCompareData(){
     var dates=Array.from(allDates).sort();
     if(dates.length<2){chartEl.innerHTML='<div class="ne">Not enough data</div>';return;}
 
+    // Apply range filter
+    if(cmpRange!=='all'){
+      var now=new Date();var cutoff=new Date();
+      if(cmpRange==='1m')cutoff.setMonth(now.getMonth()-1);
+      else if(cmpRange==='3m')cutoff.setMonth(now.getMonth()-3);
+      else if(cmpRange==='6m')cutoff.setMonth(now.getMonth()-6);
+      else if(cmpRange==='1y')cutoff.setFullYear(now.getFullYear()-1);
+      else if(cmpRange==='3y')cutoff.setFullYear(now.getFullYear()-3);
+      else if(cmpRange==='5y')cutoff.setFullYear(now.getFullYear()-5);
+      var cutStr=cutoff.toISOString().split('T')[0];
+      dates=dates.filter(function(d){return d>=cutStr;});
+      cmpTickers.forEach(function(code){allData[code]=allData[code].filter(function(r){return r.trade_date>=cutStr;});});
+    }
+    if(dates.length<2){chartEl.innerHTML='<div class="ne">Not enough data for this range</div>';return;}
+
     var series={};
     cmpTickers.forEach(function(code){
       var map={};allData[code].forEach(function(r){map[r.trade_date]=r.close;});
@@ -305,7 +330,7 @@ async function loadCompareData(){
       series[code]=dates.map(function(d){var c=map[d];if(c&&!fc)fc=c;if(!c||!fc)return null;return Math.round((c-fc)/fc*10000)/100;});
     });
 
-    var W=chartEl.offsetWidth||700,H=300;
+    var W=chartEl.offsetWidth||700,H=320;
     var pad={t:20,r:60,b:30,l:55};
     var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
     var allV=[];cmpTickers.forEach(function(c){series[c].forEach(function(v){if(v!==null)allV.push(v);});});
@@ -336,20 +361,20 @@ async function loadCompareData(){
     });
     svg+='</svg>';chartEl.innerHTML=svg;
 
-    // Summary table
-    var sh='<div style="margin-top:12px;overflow-x:auto"><table class="bei-tbl"><thead><tr><th class="al">Ticker</th><th class="ar">First</th><th class="ar">Last</th><th class="ar">Change</th><th class="ar">%</th><th class="ar">Days</th></tr></thead><tbody>';
+    // Summary — compact, no Days column, ticker clickable
+    var sh='<div class="cmp-summary-grid">';
     cmpTickers.forEach(function(code,ci){
       var data=allData[code];if(!data||!data.length)return;
       var f=data[0],l=data[data.length-1];
       var pct=f.close?((l.close-f.close)/f.close*100):0;var cls=pct>0?'up':pct<0?'dn':'';
-      sh+='<tr><td class="al" style="font-weight:700"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+cmpColors[ci%8]+';margin-right:6px;vertical-align:middle"></span>'+esc(code)+'</td>';
-      sh+='<td class="ar">'+f.close.toLocaleString()+'</td>';
-      sh+='<td class="ar">'+l.close.toLocaleString()+'</td>';
-      sh+='<td class="ar '+(l.close-f.close>0?'up':'dn')+'">'+(l.close-f.close>0?'+':'')+(l.close-f.close).toLocaleString()+'</td>';
-      sh+='<td class="ar '+cls+'" style="font-weight:700">'+(pct>0?'+':'')+pct.toFixed(2)+'%</td>';
-      sh+='<td class="ar">'+data.length+'</td></tr>';
+      var chg=l.close-f.close;
+      sh+='<div class="cmp-summary-card" onclick="gsOpen(\''+esc(code)+'\')">';
+      sh+='<div class="cmp-sc-head"><span class="cmp-sc-dot" style="background:'+cmpColors[ci%8]+'"></span><span class="cmp-sc-code">'+esc(code)+'</span></div>';
+      sh+='<div class="cmp-sc-pct '+cls+'">'+(pct>0?'+':'')+pct.toFixed(2)+'%</div>';
+      sh+='<div class="cmp-sc-detail">'+f.close.toLocaleString()+' → '+l.close.toLocaleString()+' <span class="'+cls+'">'+(chg>0?'+':'')+chg.toLocaleString()+'</span></div>';
+      sh+='</div>';
     });
-    sh+='</tbody></table></div>';sumEl.innerHTML=sh;
+    sh+='</div>';sumEl.innerHTML=sh;
   }catch(e){chartEl.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
 }
 

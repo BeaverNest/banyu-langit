@@ -142,3 +142,13 @@
 .cmp-chip-x:hover{color:var(--rd)}
 .cmp-chart-area{background:var(--bg2);border:1px solid var(--b1);border-radius:10px;padding:10px;min-height:200px;overflow:hidden}
 .cmp-range-bar{display:flex;gap:3px;margin-bottom:8px}
+.cmp-summary-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.cmp-summary-card{background:var(--bg2);border:1px solid var(--b2);border-radius:8px;padding:10px 14px;min-width:140px;flex:1;cursor:pointer;transition:all .12s}
+.cmp-summary-card:hover{border-color:var(--bl);background:var(--bgH)}
+.cmp-sc-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.cmp-sc-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.cmp-sc-code{font-weight:700;font-family:var(--fm);font-size:12px;color:var(--bl)}
+.cmp-sc-pct{font-size:20px;font-weight:800;font-family:var(--fm);color:var(--t1)}
+.cmp-sc-pct.up{color:var(--gn)}.cmp-sc-pct.dn{color:var(--rd)}
+.cmp-sc-detail{font-size:10px;color:var(--t3);font-family:var(--fm);margin-top:2px}
+.cmp-sc-detail .up{color:var(--gn)}.cmp-sc-detail .dn{color:var(--rd)}
