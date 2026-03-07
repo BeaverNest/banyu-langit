@@ -394,94 +394,179 @@ router.get('/sector-intelligence', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
 // ═══ Correlation — price movement correlation between stocks ═══
 router.get('/correlation', (req, res) => {
   try {
-    const { latestFundDate } = require('../db');
+    const { latestFundDate, latestSnap } = require('../db');
     const sm = latestFundDate();
+    const sd = latestSnap();
+    const mode = (req.query.mode || 'ownership').trim();
     const sector = (req.query.sector || '').trim();
     const industry = (req.query.industry || '').trim();
-    const days = parseInt(req.query.days) || 60;
+    const days = parseInt(req.query.days) || 65;
     const minCorr = parseFloat(req.query.min) || 0.7;
 
-    // Get tickers to analyze
-    let tickers;
-    if (industry) {
-      tickers = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND industry=?').all(sm, industry).map(r => r.code);
-    } else if (sector) {
-      tickers = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND sector=?').all(sm, sector).map(r => r.code);
-    } else {
-      // Top 100 by value
-      const td = latestIdxDate();
-      tickers = db.prepare('SELECT code FROM idx_daily WHERE trade_date=? AND close>0 ORDER BY value DESC LIMIT 100').all(td).map(r => r.code);
-    }
-    if (tickers.length < 2) return res.json({ pairs: [], tickers: tickers.length });
+    let tickerPairs = [];
+    let tickers = [];
 
-    // Get recent dates
+    const fundInfo = {};
+    if (sm) {
+      db.prepare("SELECT code, sector, industry, name FROM idx_fundamental WHERE snapshot_month=? AND sector!=''").all(sm)
+        .forEach(f => { fundInfo[f.code] = f; });
+    }
+
+    if (mode === 'ownership') {
+      if (!sd) return res.json({ pairs: [], error: 'No holdings data', mode });
+      const invMap = {};
+      db.prepare('SELECT code, investor_norm FROM holdings WHERE snapshot_date=? AND pct>=1').all(sd)
+        .forEach(r => {
+          if (!invMap[r.investor_norm]) invMap[r.investor_norm] = new Set();
+          invMap[r.investor_norm].add(r.code);
+        });
+      const pairSet = new Set();
+      for (const [inv, codes] of Object.entries(invMap)) {
+        if (codes.size < 2 || codes.size > 50) continue;
+        const arr = [...codes];
+        for (let i = 0; i < arr.length && i < 20; i++) {
+          for (let j = i + 1; j < arr.length && j < 20; j++) {
+            const key = [arr[i], arr[j]].sort().join('|');
+            pairSet.add(key);
+          }
+        }
+      }
+      tickerPairs = [...pairSet].map(k => { const [a, b] = k.split('|'); return { a, b }; });
+      tickers = [...new Set(tickerPairs.flatMap(p => [p.a, p.b]))];
+
+    } else if (mode === 'industry') {
+      const indMap = {};
+      for (const [code, f] of Object.entries(fundInfo)) {
+        if (!f.industry) continue;
+        if (!indMap[f.industry]) indMap[f.industry] = [];
+        indMap[f.industry].push(code);
+      }
+      for (const [ind, codes] of Object.entries(indMap)) {
+        if (codes.length < 2) continue;
+        const limited = codes.slice(0, 30);
+        for (let i = 0; i < limited.length; i++) {
+          for (let j = i + 1; j < limited.length; j++) {
+            tickerPairs.push({ a: limited[i], b: limited[j] });
+          }
+        }
+      }
+      tickers = [...new Set(tickerPairs.flatMap(p => [p.a, p.b]))];
+
+    } else {
+      if (industry) {
+        tickers = Object.keys(fundInfo).filter(c => fundInfo[c].industry === industry);
+      } else if (sector) {
+        tickers = Object.keys(fundInfo).filter(c => fundInfo[c].sector === sector);
+      } else {
+        const td = latestIdxDate();
+        tickers = db.prepare('SELECT code FROM idx_daily WHERE trade_date=? AND close>0 ORDER BY value DESC LIMIT 150').all(td).map(r => r.code);
+      }
+    }
+
+    if (tickers.length < 2) return res.json({ pairs: [], tickers: tickers.length, mode });
+
     const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(days).map(r => r.trade_date).reverse();
     if (dates.length < 10) return res.json({ pairs: [], error: 'Need more data' });
 
-    // Build daily returns for each ticker
     const returns = {};
     for (const code of tickers) {
       const rows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date')
         .all(code, dates[0]);
-      if (rows.length < dates.length * 0.7) continue; // need at least 70% of dates
+      if (rows.length < dates.length * 0.7) continue;
       const dailyRet = [];
       for (let i = 1; i < rows.length; i++) {
-        if (rows[i - 1].close > 0) {
-          dailyRet.push((rows[i].close - rows[i - 1].close) / rows[i - 1].close);
-        }
+        if (rows[i - 1].close > 0) dailyRet.push((rows[i].close - rows[i - 1].close) / rows[i - 1].close);
       }
       if (dailyRet.length >= 10) returns[code] = dailyRet;
     }
 
-    // Calculate pairwise Pearson correlation
-    const codes = Object.keys(returns);
     const pairs = [];
+    const calcCorr = (codeA, codeB) => {
+      const a = returns[codeA], b = returns[codeB];
+      if (!a || !b) return null;
+      const n = Math.min(a.length, b.length);
+      if (n < 10) return null;
+      const ax = a.slice(-n), bx = b.slice(-n);
+      const ma = ax.reduce((s, v) => s + v, 0) / n;
+      const mb = bx.reduce((s, v) => s + v, 0) / n;
+      let num = 0, da = 0, db2 = 0;
+      for (let k = 0; k < n; k++) {
+        num += (ax[k] - ma) * (bx[k] - mb);
+        da += (ax[k] - ma) ** 2;
+        db2 += (bx[k] - mb) ** 2;
+      }
+      return (da > 0 && db2 > 0) ? num / Math.sqrt(da * db2) : 0;
+    };
 
-    for (let i = 0; i < codes.length; i++) {
-      for (let j = i + 1; j < codes.length; j++) {
-        const a = returns[codes[i]], b = returns[codes[j]];
-        const n = Math.min(a.length, b.length);
-        if (n < 10) continue;
-        const ax = a.slice(-n), bx = b.slice(-n);
-        const ma = ax.reduce((s, v) => s + v, 0) / n;
-        const mb = bx.reduce((s, v) => s + v, 0) / n;
-        let num = 0, da = 0, db2 = 0;
-        for (let k = 0; k < n; k++) {
-          num += (ax[k] - ma) * (bx[k] - mb);
-          da += (ax[k] - ma) ** 2;
-          db2 += (bx[k] - mb) ** 2;
+    if (tickerPairs.length > 0) {
+      for (const { a, b } of tickerPairs) {
+        const corr = calcCorr(a, b);
+        if (corr !== null && Math.abs(corr) >= minCorr) {
+          pairs.push({ a, b, corr: Math.round(corr * 1000) / 1000 });
         }
-        const corr = (da > 0 && db2 > 0) ? num / Math.sqrt(da * db2) : 0;
-        if (Math.abs(corr) >= minCorr) {
-          pairs.push({ a: codes[i], b: codes[j], corr: Math.round(corr * 1000) / 1000, days: n });
+      }
+    } else {
+      const codes = Object.keys(returns);
+      for (let i = 0; i < codes.length; i++) {
+        for (let j = i + 1; j < codes.length; j++) {
+          const corr = calcCorr(codes[i], codes[j]);
+          if (corr !== null && Math.abs(corr) >= minCorr) {
+            pairs.push({ a: codes[i], b: codes[j], corr: Math.round(corr * 1000) / 1000 });
+          }
         }
       }
     }
 
     pairs.sort((a, b) => Math.abs(b.corr) - Math.abs(a.corr));
 
-    // Enrich with sector/industry info
-    const fundInfo = {};
-    if (sm) {
-      db.prepare('SELECT code, sector, industry, name FROM idx_fundamental WHERE snapshot_month=?').all(sm)
-        .forEach(f => { fundInfo[f.code] = f; });
+    const holdingsCache = {};
+    function getHolders(code) {
+      if (!holdingsCache[code] && sd) {
+        holdingsCache[code] = db.prepare('SELECT investor_norm, investor, pct FROM holdings WHERE snapshot_date=? AND code=? AND pct>=1 ORDER BY pct DESC').all(sd, code);
+      }
+      return holdingsCache[code] || [];
     }
 
-    const enriched = pairs.slice(0, 50).map(p => ({
-      ...p,
-      a_name: fundInfo[p.a]?.name || '',
-      a_sector: fundInfo[p.a]?.sector || '',
-      a_industry: fundInfo[p.a]?.industry || '',
-      b_name: fundInfo[p.b]?.name || '',
-      b_sector: fundInfo[p.b]?.sector || '',
-      b_industry: fundInfo[p.b]?.industry || ''
-    }));
+    const enriched = pairs.slice(0, 50).map(p => {
+      const holdersA = getHolders(p.a);
+      const holdersB = getHolders(p.b);
+      const aSet = new Set(holdersA.map(h => h.investor_norm));
+      const common = holdersB.filter(h => aSet.has(h.investor_norm)).map(h => h.investor.substring(0, 30));
+      return {
+        ...p,
+        a_sector: fundInfo[p.a]?.sector || '',
+        a_industry: fundInfo[p.a]?.industry || '',
+        b_sector: fundInfo[p.b]?.sector || '',
+        b_industry: fundInfo[p.b]?.industry || '',
+        common_owners: common.slice(0, 5)
+      };
+    });
 
-    res.json({ pairs: enriched, tickers: codes.length, days: dates.length, min_corr: minCorr, sector, industry });
+    res.json({ pairs: enriched, tickers: Object.keys(returns).length, days: dates.length, min_corr: minCorr, mode, sector, industry });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══ Fundamental lists — sector/industry dropdowns ═══
+router.get('/fundamental-lists', (req, res) => {
+  try {
+    const { latestFundDate } = require('../db');
+    const sm = latestFundDate();
+    if (!sm) return res.json({ sectors: [], industries: [], sector_industry_map: {} });
+    const rows = db.prepare("SELECT DISTINCT sector, industry FROM idx_fundamental WHERE snapshot_month=? AND sector!='' AND industry!=''").all(sm);
+    const sectors = [...new Set(rows.map(r => r.sector))].sort();
+    const industries = [...new Set(rows.map(r => r.industry))].sort();
+    const sim = {};
+    rows.forEach(r => {
+      if (!sim[r.sector]) sim[r.sector] = [];
+      if (!sim[r.sector].includes(r.industry)) sim[r.sector].push(r.industry);
+    });
+    for (const k of Object.keys(sim)) sim[k].sort();
+    res.json({ sectors, industries, sector_industry_map: sim });
+  } catch (e) { res.json({ sectors: [], industries: [] }); }
 });
 
 module.exports = router;
