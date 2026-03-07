@@ -1,122 +1,93 @@
 # 🌊 Banyu Langit — Feature Backlog
 
-## ✅ Done
+## ✅ Done (42 items)
+
+### Core Features
 - [x] Diary (trade journal, replies, images, tags)
 - [x] Watchlist + Price Alerts
 - [x] Market Data (indices, commodities, currencies, news)
 - [x] IDX Daily (rankings, foreign flow, anomaly, daily digest)
-- [x] Screener V2 (rule-based, MA/MACD/Stoch, saved configs, sortable columns)
+- [x] Screener V2 (rule-based, MA/MACD/Stoch, saved configs)
 - [x] Insider Ownership (network graph, tags, investor groups)
 - [x] Global Search + Unified Ticker Page
 - [x] TradingView chart embed
-- [x] Rebranding (Banyu Langit, color scheme)
-- [x] Keyboard shortcuts
-- [x] Skeleton loaders
-- [x] Phase 0 refactor (split files)
+- [x] Keyboard shortcuts + Skeleton loaders
+
+### Sprint 2 — Data Engine
 - [x] Corporate Action auto-detect + confirm/dismiss + adjusted OHLC
-- [x] Screener pakai adjusted price (MA/MACD/Stoch)
-- [x] Settings modal popup (Upload, Database, Corp Actions, Export, Preferences)
-- [x] Export CSV (IDX Daily, Foreign Flow, Fundamental, Corporate Actions)
-- [x] Database stats + gap detection
-- [x] Light mode default + chart hidden on startup
-- [x] IDX Daily redesign (sector/industry dropdown filter, compact digest cards)
-- [x] Screener as top-level tab
-- [x] Sector Overview (drill-down sector → industry → ticker list)
-- [x] Ticker Comparison chart (normalized % change, range 1M-ALL, summary cards)
-- [x] Market Overview (Index + Commodities + Currencies merged 1 tab)
-- [x] Dev mode (docker-compose.dev.yml + nodemon)
-- [x] BEI Fundamental data upload
-- [x] Indonesian month name support
+- [x] Screener pakai adjusted price
+- [x] Settings modal 6 tabs (Upload, Database, CA, Tags, Export, Preferences)
+- [x] Export CSV (4 types), Database stats + gap detection
+- [x] Light mode default, chart hidden on startup
+- [x] BEI Fundamental data upload, Indonesian month name support
 - [x] Bulk upload limit 500 files
 
+### Sprint 3 — Analysis & UX
+- [x] IDX Daily redesign (sector/industry filter, compact digest)
+- [x] Screener as top-level tab
+- [x] Sector Overview (drill-down sector → industry → ticker list)
+- [x] Ticker Comparison + Mixed Mode (ticker/sector/industry/konglo)
+- [x] Market Overview (merged Index/Commodities/Currencies)
+- [x] Dev mode (docker-compose.dev.yml + nodemon)
+
+### Sprint 4 — Sector Intelligence & Polish
+- [x] Ticker Page adjusted price chart + timeframe (1M-ALL) + CA markers
+- [x] Investor Tags CRUD editor (4 sub-tabs in Settings)
+- [x] Font consistency fix (monospace for numbers only)
+- [x] Ticker Page flow table symmetric layout
+- [x] Sector Rotation Heatmap (monthly, 3 metrics, sortable, clickable)
+- [x] Sector Flow Timeline (multi-line SVG, toggle visibility, Top 3/5)
+- [x] Correlation 3 modes (Ownership / Industry / Custom) + common owners
+- [x] Sector stock table: sortable headers + column toggle
+- [x] Code split: sector-intelligence.js extracted from app.js
+- [x] Upload duplicate detection + format validation (backend)
+- [x] Upload history log viewer (backend)
+- [x] README.md documentation
+
 ---
 
-## 🔧 Backend / Data Engine
+## 📋 Remaining Backlog
 
-### Corporate Action — Remaining
-- [ ] Ticker page pakai adjusted chart
+### 🔧 Data Quality
+- [ ] Gap detection: exclude weekends
+- [ ] Upload progress indicator (frontend)
 
-### Data Quality
-- [ ] Duplicate detection saat upload
-- [ ] Format validation (warning header tidak dikenali)
-- [ ] Upload progress indicator
-- [ ] Upload history log viewer
-
----
-
-## 📊 Screener & Analysis
-
-### Screener Enhancement
+### 📊 Screener Enhancement
 - [ ] OR logic (selain AND)
 - [ ] Preset templates (Asing Akumulasi, Breakout, Oversold Bounce)
 - [ ] Screener alert — notify saham baru masuk criteria
-
-### Comparison — Phase 2
-- [ ] **Sector vs Sector comparison**
-- [ ] **Industry vs Industry comparison**
-- [ ] **Konglomerat vs Konglomerat comparison**
 - [ ] Foreign flow overlay on comparison chart
 
-### Sector Analysis
-- [ ] Sector rotation heatmap (asing masuk sektor mana per minggu)
-- [ ] Sector-level foreign flow aggregation timeline
-
-### Other Analysis
-- [ ] Correlation detection — saham yang gerak bareng
-- [ ] Date picker — view historical date, compare 2 dates
-- [ ] Multi-timeframe MA (daily, weekly)
-
----
-
-## 🔍 Insider Enhancement
-
-- [ ] **Konglomerat network — cross-ticker ownership + politik mapping**
-- [ ] Insider + price overlay
-- [ ] Foreign flow vs insider comparison
+### 🔍 Insider Enhancement
+- [ ] Konglomerat network V2 (cross-ticker ownership + politik mapping)
+- [ ] Insider + price overlay (ownership timeline vs price chart)
 - [ ] Insider change alert (ownership change > X%)
 
----
-
-## 📱 UX / UI
-
+### 📱 UX / UI
 - [ ] Morning dashboard (digest, watchlist, alerts, screener matches)
 - [ ] Diary ↔ data integration (tag ticker, auto-embed snapshot)
 - [ ] Watchlist V2 (inline flow, groups, drag reorder)
-- [ ] Visual redesign polish (all pages consistent)
 - [ ] Notification center
 
----
-
-## 📥 Export & Reporting
-
-- [x] Screener results → CSV ✅
-- [x] Foreign flow → CSV ✅
-- [x] Fundamental → CSV ✅
-- [x] Corporate actions → CSV ✅
+### 📥 Export & Reporting
 - [ ] Ticker detail → PDF report
-- [ ] Insider ownership → CSV (needs API endpoint)
-- [ ] Scheduled reports (daily digest as HTML)
+- [ ] Insider ownership → CSV
+- [ ] Scheduled reports (daily digest HTML)
 
----
-
-## 🤖 Automation
-
+### 🤖 Automation
 - [ ] Telegram Bot (digest, alerts, query)
 - [ ] Auto-fetch BEI data (cron)
 - [ ] API V2 + Webhook
 
----
-
-## 🏗 Technical Debt
-
-- [ ] Split insider.js (566 baris)
-- [ ] Split idx.js frontend (500+ baris)
-- [ ] app.js sekarang 530+ baris — split kalau nambah lagi
+### 🏗 Technical Debt
+- [ ] Split app.js further (968 lines → settings.js, compare.js, tags-editor.js)
+- [ ] Split insider.js (566 lines), idx.js (500+ lines) frontend
 - [ ] `.env` file support
 - [ ] Database migration system
 - [ ] Unit tests for indicators
-- [ ] Error handling improvement
+- [ ] Error handling + structured logging
+- [ ] API response caching
 
 ---
 
-*Last updated: 2026-03-07*
+*Last updated: 2026-03-08*
