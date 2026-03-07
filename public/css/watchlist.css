@@ -6,7 +6,7 @@
 .wp{flex:1;overflow:hidden;display:none;flex-direction:column}
 .wp.on{display:flex}
 .wla{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-shrink:0}
-.wla input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:7px;padding:6px 10px;color:var(--t1);font-family:var(--fm);font-size:12px;outline:none;text-transform:uppercase}
+.wla input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:7px;padding:6px 10px;color:var(--t1);font-family:var(--f);font-size:12px;outline:none;text-transform:uppercase}
 .wla input::placeholder{text-transform:none;color:var(--t3)}
 .wla button{padding:6px 14px;border-radius:7px;border:none;background:var(--gn);color:#fff;font-weight:700;font-size:12px;cursor:pointer}
 .wln{padding:5px 12px;font-size:10px;color:var(--t3);background:var(--bgH);border-bottom:1px solid var(--b1);flex-shrink:0}
@@ -24,8 +24,8 @@
 
 /* alerts */
 .ala{display:flex;gap:5px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-shrink:0;flex-wrap:wrap}
-.ala input,.ala select{background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 7px;color:var(--t1);font-family:var(--fm);font-size:11px;outline:none}
-.ala .a_s{width:75px;text-transform:uppercase}.ala .a_c{width:60px;cursor:pointer}.ala .a_p{width:80px}.ala .a_n{flex:1;min-width:60px;font-family:var(--f)}
+.ala input,.ala select{background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:5px 7px;color:var(--t1);font-family:var(--f);font-size:11px;outline:none}
+.ala .a_s{width:75px;text-transform:uppercase;font-family:var(--fm)}.ala .a_c{width:60px;cursor:pointer}.ala .a_p{width:80px;font-family:var(--fm)}.ala .a_n{flex:1;min-width:60px}
 .ala .a_go{padding:5px 10px;border-radius:6px;border:none;background:var(--am);color:#fff;font-weight:700;font-size:11px;cursor:pointer}
 .all{flex:1;overflow-y:auto}
 .ai{display:flex;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid var(--b1);font-size:12px}
@@ -39,7 +39,7 @@
 
 /* ═══ NEWS ═══ */
 .nbar{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-shrink:0}
-.nbar input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:8px;padding:6px 10px;color:var(--t1);font-family:var(--fm);font-size:12px;outline:none;text-transform:uppercase}
+.nbar input{flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:8px;padding:6px 10px;color:var(--t1);font-family:var(--f);font-size:12px;outline:none;text-transform:uppercase}
 .nbar input::placeholder{text-transform:none;color:var(--t3)}
 .nbar button{padding:6px 14px;border-radius:8px;border:none;background:var(--gn);color:#fff;font-weight:700;font-size:12px;cursor:pointer}
 .nlist{flex:1;overflow-y:auto}

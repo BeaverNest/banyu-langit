@@ -6,41 +6,79 @@ const { parseTradeDate } = require('../utils/normalize');
 
 const router = express.Router();
 
-// Upload (bulk) — now with auto-detect corporate actions
+// Upload (bulk) — with duplicate detection, format validation, corporate actions
 module.exports = function(upload) {
+  // Expected IDX headers
+  var IDX_HEADERS = ['Kode Saham','Nama Perusahaan','Tanggal Perdagangan Terakhir','Sebelumnya','Open Price','Tertinggi','Terendah','Penutupan','Selisih','Volume','Nilai','Frekuensi','Bid','Bid Volume','Offer','Offer Volume','Listed Shares','Tradeble Shares','Foreign Buy','Foreign Sell'];
+
   router.post('/upload', upload.array('file', 500), async (req, res) => {
     try {
       const files = req.files || [];
       if (!files.length) return res.status(400).json({ error: 'No files' });
+
       const ins = db.prepare(`INSERT INTO idx_daily(trade_date,code,name,prev_close,open_price,high,low,close,change,volume,value,frequency,bid,bid_vol,offer,offer_vol,listed_shares,tradeable_shares,foreign_buy,foreign_sell)VALUES(@trade_date,@code,@name,@prev_close,@open_price,@high,@low,@close,@change,@volume,@value,@frequency,@bid,@bid_vol,@offer,@offer_vol,@listed_shares,@tradeable_shares,@foreign_buy,@foreign_sell)ON CONFLICT(trade_date,code) DO UPDATE SET name=excluded.name,prev_close=excluded.prev_close,open_price=excluded.open_price,high=excluded.high,low=excluded.low,close=excluded.close,change=excluded.change,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,bid=excluded.bid,bid_vol=excluded.bid_vol,offer=excluded.offer,offer_vol=excluded.offer_vol,listed_shares=excluded.listed_shares,tradeable_shares=excluded.tradeable_shares,foreign_buy=excluded.foreign_buy,foreign_sell=excluded.foreign_sell`);
-      let totalCount = 0; const fileDates = [];
+
+      const chk = db.prepare('SELECT id FROM idx_daily WHERE trade_date=? AND code=?');
+
+      let totalNew = 0, totalUpdated = 0, totalSkipped = 0;
+      const fileDates = [];
+      const warnings = [];
       const manualDate = req.body.trade_date || '';
+
       db.transaction(() => {
         for (const file of files) {
           const wb = XLSX.readFile(file.path);
           const ws = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(ws);
-          let fileCount = 0, fileDate = '';
+
+          // Format validation — check headers
+          if (rows.length > 0) {
+            var fileHeaders = Object.keys(rows[0]);
+            var missing = IDX_HEADERS.filter(function(h) { return !fileHeaders.some(function(fh) { return fh.trim() === h; }); });
+            var unknown = fileHeaders.filter(function(fh) { return !IDX_HEADERS.some(function(h) { return h === fh.trim(); }); });
+            if (missing.length > 3) {
+              warnings.push({ file: file.originalname, type: 'headers', message: 'Missing ' + missing.length + ' expected columns: ' + missing.slice(0, 5).join(', '), missing: missing.slice(0, 10) });
+            }
+            if (unknown.length > 0 && unknown.length > fileHeaders.length / 2) {
+              warnings.push({ file: file.originalname, type: 'format', message: 'Unrecognized format — ' + unknown.length + ' unknown columns', unknown: unknown.slice(0, 5) });
+            }
+          }
+
+          let fileNew = 0, fileUpdated = 0, fileSkipped = 0, fileDate = '';
           for (const r of rows) {
             const code = String(r['Kode Saham'] || '').trim().toUpperCase();
             if (!code) continue;
             const td = manualDate || parseTradeDate(r['Tanggal Perdagangan Terakhir']) || '';
             if (!td) continue;
             if (!fileDate) fileDate = td;
+
+            // Duplicate detection
+            const existing = chk.get(td, code);
+
             ins.run({ trade_date: td, code, name: String(r['Nama Perusahaan'] || '').trim(), prev_close: parseInt(r['Sebelumnya']) || 0, open_price: parseInt(r['Open Price']) || 0, high: parseInt(r['Tertinggi']) || 0, low: parseInt(r['Terendah']) || 0, close: parseInt(r['Penutupan']) || 0, change: parseInt(r['Selisih']) || 0, volume: parseInt(r['Volume']) || 0, value: parseInt(r['Nilai']) || 0, frequency: parseInt(r['Frekuensi']) || 0, bid: parseInt(r['Bid']) || 0, bid_vol: parseInt(r['Bid Volume']) || 0, offer: parseInt(r['Offer']) || 0, offer_vol: parseInt(r['Offer Volume']) || 0, listed_shares: parseInt(r['Listed Shares']) || 0, tradeable_shares: parseInt(r['Tradeble Shares']) || 0, foreign_buy: parseInt(r['Foreign Buy']) || 0, foreign_sell: parseInt(r['Foreign Sell']) || 0 });
-            fileCount++;
+
+            if (existing) fileUpdated++;
+            else fileNew++;
           }
-          if (fileDate) fileDates.push({ file: file.originalname, date: fileDate, rows: fileCount });
-          totalCount += fileCount;
+
+          if (fileDate) fileDates.push({ file: file.originalname, date: fileDate, new: fileNew, updated: fileUpdated });
+          totalNew += fileNew;
+          totalUpdated += fileUpdated;
         }
       })();
+
       const dates = db.prepare('SELECT COUNT(DISTINCT trade_date)as c FROM idx_daily').get().c;
       const tickers = db.prepare('SELECT COUNT(DISTINCT code)as c FROM idx_daily').get().c;
 
-      // Auto-detect corporate actions after upload
+      // Log upload
+      for (const fd of fileDates) {
+        db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,rows_updated,tickers,upload_type)VALUES(?,?,?,?,?,?,?)').run(fd.file, fd.date, fd.new + fd.updated, fd.new, fd.updated, tickers, 'idx_daily');
+      }
+
+      // Auto-detect corporate actions
       const detected = detectCorporateActions();
 
-      res.json({ success: true, imported: totalCount, files: fileDates, dates, tickers, detected_ca: detected });
+      res.json({ success: true, imported: totalNew + totalUpdated, new_rows: totalNew, updated_rows: totalUpdated, files: fileDates, dates, tickers, warnings, detected_ca: detected });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -210,6 +248,7 @@ module.exports = function(upload) {
         }
       })();
       fs.unlinkSync(req.file.path);
+      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,tickers,upload_type)VALUES(?,?,?,?,?,?)').run(req.file.originalname, snapMonth, count, count, count, 'fundamental');
       res.json({ success: true, count, snapshot_month: snapMonth });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -34,7 +34,9 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT, snapshot_date TEXT, rows_total INTEGER DEFAULT 0,
     rows_new INTEGER DEFAULT 0, rows_updated INTEGER DEFAULT 0,
-    tickers INTEGER DEFAULT 0, uploaded_at TEXT DEFAULT (datetime('now'))
+    tickers INTEGER DEFAULT 0, upload_type TEXT DEFAULT '',
+    warnings TEXT DEFAULT '',
+    uploaded_at TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS header_mappings (
@@ -173,6 +175,13 @@ const defaultMappings = {
 };
 const insM = db.prepare('INSERT OR IGNORE INTO header_mappings(source_header,target_field)VALUES(?,?)');
 db.transaction(() => { for (const [s, t] of Object.entries(defaultMappings)) insM.run(s, t); })();
+
+// ═══ Auto-migrate: add columns if missing ═══
+try {
+  const cols = db.prepare("PRAGMA table_info(upload_logs)").all().map(c => c.name);
+  if (!cols.includes('upload_type')) db.exec("ALTER TABLE upload_logs ADD COLUMN upload_type TEXT DEFAULT ''");
+  if (!cols.includes('warnings')) db.exec("ALTER TABLE upload_logs ADD COLUMN warnings TEXT DEFAULT ''");
+} catch (e) { console.error('Migration:', e.message); }
 
 // ═══ Helper functions ═══
 function latestSnap() {

@@ -186,6 +186,14 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', version: '2.0.0', name: 'Banyu Langit Trading Diary', db: 'sqlite', holdings: s.c });
 });
 
+// ═══ Upload Logs — unified for all upload types ═══
+app.get('/api/upload-logs', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM upload_logs ORDER BY uploaded_at DESC LIMIT 50').all();
+    res.json({ logs: rows });
+  } catch { res.json({ logs: [] }); }
+});
+
 // ═══ Auto-load investor tags ═══
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Banyu Langit v2 on http://localhost:${PORT}`);

@@ -179,25 +179,34 @@ function renderTickerPage(d) {
     if (d.flow && d.flow.length) {
       var maxAbs = Math.max.apply(null, d.flow.map(function(r) { return Math.abs(r.foreign_net_val || 0); }));
       var showAdj = d.flow.some(function(r) { return r.adjusted; });
-      h += '<table class="tp-holders"><thead><tr><th>Date</th><th class="ar">Close</th>';
+      h += '<table class="tp-holders" style="table-layout:fixed;width:100%"><colgroup>';
+      h += '<col style="width:80px">';  // Date
+      h += '<col style="width:60px">';  // Close
+      if (showAdj) h += '<col style="width:55px">';  // Adj
+      h += '<col style="width:auto;min-width:120px">';  // Flow bar
+      h += '<col style="width:85px">';  // F.Net
+      h += '<col style="width:75px">';  // Accum
+      h += '</colgroup>';
+      h += '<thead><tr><th>Date</th><th class="ar">Close</th>';
       if (showAdj) h += '<th class="ar" style="color:var(--am)">Adj</th>';
-      h += '<th>Flow</th><th class="ar">F.Net (IDR)</th><th class="ar">Accum</th></tr></thead><tbody>';
+      h += '<th style="text-align:center">Flow</th><th class="ar">F.Net (IDR)</th><th class="ar">Accum</th></tr></thead><tbody>';
       for (var i = d.flow.length - 1; i >= 0; i--) {
         var r = d.flow[i]; var fnv = r.foreign_net_val || 0; var cls = fnv > 0 ? 'up' : fnv < 0 ? 'dn' : '';
         var accCls = r.acc > 0 ? 'up' : r.acc < 0 ? 'dn' : '';
         var pct = maxAbs ? Math.min(90, Math.abs(fnv) / maxAbs * 90) : 0;
-        h += '<tr><td style="font-size:10px">' + r.trade_date + '</td><td class="ar">' + (r.close || 0).toLocaleString() + '</td>';
+        h += '<tr><td style="font-size:10px;font-family:var(--fm)">' + r.trade_date + '</td>';
+        h += '<td class="ar" style="font-family:var(--fm)">' + (r.close || 0).toLocaleString() + '</td>';
         if (showAdj) {
           var adjStyle = r.adjusted ? 'color:var(--am);font-weight:600' : '';
-          h += '<td class="ar" style="' + adjStyle + '">' + (r.adj_close || r.close || 0).toLocaleString() + '</td>';
+          h += '<td class="ar" style="font-family:var(--fm);' + adjStyle + '">' + (r.adj_close || r.close || 0).toLocaleString() + '</td>';
         }
-        h += '<td style="min-width:100px;padding:4px 2px"><div class="tp-flow-bar"><div class="bar-neg">';
+        h += '<td style="padding:4px 2px"><div class="tp-flow-bar"><div class="bar-neg">';
         if (fnv < 0) h += '<div style="width:' + pct + '%;background:var(--rd);border-radius:2px;opacity:.8"></div>';
         h += '</div><div class="bar-mid"></div><div class="bar-pos">';
         if (fnv > 0) h += '<div style="width:' + pct + '%;background:var(--gn);border-radius:2px;opacity:.8"></div>';
         h += '</div></div></td>';
-        h += '<td class="ar ' + cls + '" style="font-weight:600">' + fmtRp(fnv) + '</td>';
-        h += '<td class="ar ' + accCls + '">' + fmtRp(r.acc) + '</td></tr>';
+        h += '<td class="ar ' + cls + '" style="font-family:var(--fm);font-weight:600">' + fmtRp(fnv) + '</td>';
+        h += '<td class="ar ' + accCls + '" style="font-family:var(--fm)">' + fmtRp(r.acc) + '</td></tr>';
       }
       h += '</tbody></table>';
       if (showAdj) {

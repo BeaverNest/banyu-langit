@@ -44,11 +44,13 @@ module.exports = function(upload) {
       }
       if (!parsed.length) return res.status(400).json({ error: 'No valid rows' });
       const ups = db.prepare(`INSERT INTO holdings(snapshot_date,code,issuer,investor,investor_norm,type,lf,nationality,domicile,holdings,pct)VALUES(@snapshot_date,@code,@issuer,@investor,@investor_norm,@type,@lf,@nationality,@domicile,@holdings,@pct)ON CONFLICT(snapshot_date,code,investor)DO UPDATE SET issuer=excluded.issuer,investor_norm=excluded.investor_norm,type=excluded.type,lf=excluded.lf,holdings=excluded.holdings,pct=excluded.pct`);
-      let ins = 0; db.transaction(() => { for (const r of parsed) { ups.run(r); ins++; } })();
+      const chkH = db.prepare('SELECT id FROM holdings WHERE snapshot_date=? AND code=? AND investor=?');
+      let newRows = 0, updRows = 0;
+      db.transaction(() => { for (const r of parsed) { const ex = chkH.get(r.snapshot_date, r.code, r.investor); ups.run(r); if (ex) updRows++; else newRows++; } })();
       const sd = parsed[0].snapshot_date; const tks = [...new Set(parsed.map(r => r.code))].length;
-      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,tickers)VALUES(?,?,?,?,?)').run(req.file.originalname, sd, parsed.length, ins, tks);
+      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,rows_updated,tickers,upload_type)VALUES(?,?,?,?,?,?,?)').run(req.file.originalname, sd, parsed.length, newRows, updRows, tks, 'insider');
       fs.unlinkSync(req.file.path);
-      res.json({ success: true, total: parsed.length, tickers: tks, date: sd, headers: hmap });
+      res.json({ success: true, total: parsed.length, new_rows: newRows, updated_rows: updRows, tickers: tks, date: sd, headers: hmap });
     } catch (e) { console.error('Upload:', e); res.status(500).json({ error: 'Parse failed: ' + e.message }); }
   });
 
@@ -199,6 +201,144 @@ module.exports = function(upload) {
       const ins = db.prepare('INSERT OR IGNORE INTO holdings(snapshot_date,code,issuer,investor,investor_norm,type,lf,nationality,domicile,holdings,pct)VALUES(@snapshot_date,@code,@issuer,@investor,@investor_norm,@type,@lf,@nationality,@domicile,@holdings,@pct)');
       let c = 0; db.transaction(() => { for (const r of data) { ins.run({ snapshot_date: r.date || 'unknown', code: (r.code || '').toUpperCase(), issuer: r.issuer || '', investor: r.investor || '', investor_norm: normInv(r.investor || ''), type: r.type || '', lf: r.lf || '', nationality: r.nationality || '', domicile: r.domicile || '', holdings: r.holdings || 0, pct: r.pct || 0 }); c++; } })();
       res.json({ migrated: c });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ INVESTOR TAGS CRUD ═══
+
+  // ── Groups CRUD ──
+  router.get('/tags/groups/all', (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM investor_groups ORDER BY category, name").all();
+      res.json({ data: rows });
+    } catch (e) { res.json({ data: [], error: e.message }); }
+  });
+
+  router.post('/tags/groups', (req, res) => {
+    try {
+      const { name, category, key_person, tickers, description } = req.body;
+      if (!name) return res.status(400).json({ error: 'Name required' });
+      db.prepare("INSERT INTO investor_groups(name,category,key_person,tickers,description)VALUES(?,?,?,?,?)")
+        .run(name, category || '', key_person || '', tickers || '', description || '');
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.put('/tags/groups/:id', (req, res) => {
+    try {
+      const { name, category, key_person, tickers, description } = req.body;
+      db.prepare("UPDATE investor_groups SET name=?,category=?,key_person=?,tickers=?,description=? WHERE id=?")
+        .run(name, category || '', key_person || '', tickers || '', description || '', req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/tags/groups/:id', (req, res) => {
+    try {
+      db.prepare("DELETE FROM investor_groups WHERE id=?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Rules CRUD ──
+  router.get('/tags/rules/all', (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM investor_rules ORDER BY group_name, keyword").all();
+      res.json({ data: rows });
+    } catch (e) { res.json({ data: [], error: e.message }); }
+  });
+
+  router.post('/tags/rules', (req, res) => {
+    try {
+      const { keyword, match_type, group_name, notes } = req.body;
+      if (!keyword || !group_name) return res.status(400).json({ error: 'keyword + group_name required' });
+      db.prepare("INSERT INTO investor_rules(keyword,match_type,group_name,notes)VALUES(?,?,?,?)")
+        .run(keyword, match_type || 'contains', group_name, notes || '');
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.put('/tags/rules/:id', (req, res) => {
+    try {
+      const { keyword, match_type, group_name, notes } = req.body;
+      db.prepare("UPDATE investor_rules SET keyword=?,match_type=?,group_name=?,notes=? WHERE id=?")
+        .run(keyword, match_type || 'contains', group_name, notes || '', req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/tags/rules/:id', (req, res) => {
+    try {
+      db.prepare("DELETE FROM investor_rules WHERE id=?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Ticker Map CRUD ──
+  router.get('/tags/tickers/all', (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM ticker_groups ORDER BY group_name, ticker").all();
+      res.json({ data: rows });
+    } catch (e) { res.json({ data: [], error: e.message }); }
+  });
+
+  router.post('/tags/tickers', (req, res) => {
+    try {
+      const { ticker, group_name, category } = req.body;
+      if (!ticker || !group_name) return res.status(400).json({ error: 'ticker + group_name required' });
+      db.prepare("INSERT OR IGNORE INTO ticker_groups(ticker,group_name,category)VALUES(?,?,?)")
+        .run(ticker.toUpperCase().trim(), group_name, category || '');
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.put('/tags/tickers/:id', (req, res) => {
+    try {
+      const { ticker, group_name, category } = req.body;
+      db.prepare("UPDATE ticker_groups SET ticker=?,group_name=?,category=? WHERE id=?")
+        .run(ticker.toUpperCase().trim(), group_name, category || '', req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/tags/tickers/:id', (req, res) => {
+    try {
+      db.prepare("DELETE FROM ticker_groups WHERE id=?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Overrides CRUD ──
+  router.get('/tags/overrides/all', (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM investor_overrides ORDER BY group_name, investor_name").all();
+      res.json({ data: rows });
+    } catch (e) { res.json({ data: [], error: e.message }); }
+  });
+
+  router.post('/tags/overrides', (req, res) => {
+    try {
+      const { investor_name, group_name, notes } = req.body;
+      if (!investor_name || !group_name) return res.status(400).json({ error: 'investor_name + group_name required' });
+      db.prepare("INSERT OR IGNORE INTO investor_overrides(investor_name,group_name,notes)VALUES(?,?,?)")
+        .run(investor_name, group_name, notes || '');
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.put('/tags/overrides/:id', (req, res) => {
+    try {
+      const { investor_name, group_name, notes } = req.body;
+      db.prepare("UPDATE investor_overrides SET investor_name=?,group_name=?,notes=? WHERE id=?")
+        .run(investor_name, group_name, notes || '', req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/tags/overrides/:id', (req, res) => {
+    try {
+      db.prepare("DELETE FROM investor_overrides WHERE id=?").run(req.params.id);
+      res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

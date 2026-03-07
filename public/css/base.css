@@ -20,7 +20,7 @@ body{background:var(--bg0);color:var(--t1);font-family:var(--f);height:100vh;ove
 .ndrop-l{max-height:320px;overflow-y:auto}
 .nit{padding:10px 14px;border-bottom:1px solid var(--b1);font-size:12px}
 .nit.ur{background:var(--amB)}
-.nit-s{font-family:var(--fm);font-weight:700;color:var(--am)}
+.nit-s{font-weight:700;color:var(--am);font-size:12px}
 .nit-m{color:var(--t2);margin-top:2px;font-size:11px}
 .nit-t{color:var(--t3);font-size:10px;margin-top:2px}
 .ndrop-e{padding:24px;text-align:center;color:var(--t3);font-size:12px}
@@ -88,7 +88,8 @@ body{background:var(--bg0);color:var(--t1);font-family:var(--f);height:100vh;ove
 .tp-stat .sl{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-top:1px}
 .tp-holders{width:100%;font-size:11px;border-collapse:collapse;margin-top:6px}
 .tp-holders th{text-align:left;padding:4px 8px;font-size:9px;font-weight:600;color:var(--t3);border-bottom:1px solid var(--b1);text-transform:uppercase}
-.tp-holders td{padding:4px 8px;border-bottom:1px solid var(--b1);font-family:var(--fm);font-size:11px}
+.tp-holders td{padding:4px 8px;border-bottom:1px solid var(--b1);font-size:11px}
+.tp-holders td.ar{font-family:var(--fm)}
 .tp-holders .ar{text-align:right}
 .tp-flow-bar{display:flex;height:14px;margin:3px 0}
 .tp-flow-bar .bar-neg{flex:1;display:flex;justify-content:flex-end}
