@@ -289,4 +289,199 @@ router.post('/configs', (req, res) => { try { const { name, filters } = req.body
 router.put('/configs/:id', (req, res) => { try { const { name, filters } = req.body; db.prepare("UPDATE screener_configs SET name=?,filters=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(filters || {}), req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 router.delete('/configs/:id', (req, res) => { try { db.prepare('DELETE FROM screener_configs WHERE id=?').run(req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 
+
+// ═══ Sector Intelligence — rotation heatmap, flow timeline, correlation ═══
+
+// Weekly aggregated sector/industry data
+router.get('/sector-intelligence', (req, res) => {
+  try {
+    const { latestFundDate } = require('../db');
+    const td = latestIdxDate();
+    const sm = latestFundDate();
+    if (!sm || !td) return res.json({ error: 'No data' });
+    const weeks = parseInt(req.query.weeks) || 12;
+    const level = req.query.level || 'sector'; // sector | industry
+
+    // Get all trade dates
+    const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+    if (allDates.length < 5) return res.json({ error: 'Need more data' });
+
+    // Build week buckets (Mon-Fri groups)
+    const weekBuckets = [];
+    let currentWeek = [];
+    for (const d of allDates) {
+      const dow = new Date(d + 'T00:00:00').getDay();
+      if (dow === 1 && currentWeek.length > 0) { // Monday = new week
+        weekBuckets.push(currentWeek);
+        currentWeek = [];
+      }
+      currentWeek.push(d);
+    }
+    if (currentWeek.length) weekBuckets.push(currentWeek);
+
+    // Take last N weeks
+    const recentWeeks = weekBuckets.slice(-weeks);
+
+    // Build ticker → sector/industry map
+    const fundMap = {};
+    db.prepare("SELECT code, sector, industry FROM idx_fundamental WHERE snapshot_month=? AND sector!=''").all(sm)
+      .forEach(f => { fundMap[f.code] = { sector: f.sector, industry: f.industry }; });
+
+    // For each week, aggregate by sector/industry
+    const weeklyData = [];
+    for (const wDates of recentWeeks) {
+      if (!wDates.length) continue;
+      const ph = wDates.map(() => '?').join(',');
+      const rows = db.prepare(`
+        SELECT code, 
+               SUM((foreign_buy - foreign_sell) * close) as fnet_val,
+               SUM(value) as total_value,
+               SUM(volume) as total_volume,
+               MIN(close) as week_low, MAX(close) as week_high
+        FROM idx_daily WHERE trade_date IN (${ph}) AND close > 0
+        GROUP BY code
+      `).all(...wDates);
+
+      // Get first/last close for price change calc
+      const firstDate = wDates[0], lastDate = wDates[wDates.length - 1];
+      const firstCloses = {};
+      const lastCloses = {};
+      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(firstDate)
+        .forEach(r => { firstCloses[r.code] = r.close; });
+      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(lastDate)
+        .forEach(r => { lastCloses[r.code] = r.close; });
+
+      const groups = {};
+      for (const r of rows) {
+        const f = fundMap[r.code];
+        if (!f) continue;
+        const key = level === 'industry' ? f.industry : f.sector;
+        if (!key) continue;
+        if (!groups[key]) groups[key] = { name: key, sector: f.sector, fnet: 0, value: 0, volume: 0, stocks: 0, chg_sum: 0, chg_count: 0 };
+        const g = groups[key];
+        g.fnet += r.fnet_val || 0;
+        g.value += r.total_value || 0;
+        g.volume += r.total_volume || 0;
+        g.stocks++;
+        // Price change for this stock this week
+        const fc = firstCloses[r.code], lc = lastCloses[r.code];
+        if (fc && lc && fc > 0) {
+          g.chg_sum += (lc - fc) / fc * 100;
+          g.chg_count++;
+        }
+      }
+
+      weeklyData.push({
+        week_start: firstDate,
+        week_end: lastDate,
+        days: wDates.length,
+        groups: Object.values(groups).map(g => ({
+          name: g.name,
+          sector: g.sector,
+          fnet: g.fnet,
+          value: g.value,
+          volume: g.volume,
+          stocks: g.stocks,
+          avg_chg: g.chg_count ? Math.round(g.chg_sum / g.chg_count * 100) / 100 : 0
+        }))
+      });
+    }
+
+    // Get unique group names for consistent ordering
+    const groupNames = [...new Set(weeklyData.flatMap(w => w.groups.map(g => g.name)))].sort();
+
+    res.json({ level, weeks: weeklyData, group_names: groupNames, trade_date: td, snapshot_month: sm });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══ Correlation — price movement correlation between stocks ═══
+router.get('/correlation', (req, res) => {
+  try {
+    const { latestFundDate } = require('../db');
+    const sm = latestFundDate();
+    const sector = (req.query.sector || '').trim();
+    const industry = (req.query.industry || '').trim();
+    const days = parseInt(req.query.days) || 60;
+    const minCorr = parseFloat(req.query.min) || 0.7;
+
+    // Get tickers to analyze
+    let tickers;
+    if (industry) {
+      tickers = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND industry=?').all(sm, industry).map(r => r.code);
+    } else if (sector) {
+      tickers = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND sector=?').all(sm, sector).map(r => r.code);
+    } else {
+      // Top 100 by value
+      const td = latestIdxDate();
+      tickers = db.prepare('SELECT code FROM idx_daily WHERE trade_date=? AND close>0 ORDER BY value DESC LIMIT 100').all(td).map(r => r.code);
+    }
+    if (tickers.length < 2) return res.json({ pairs: [], tickers: tickers.length });
+
+    // Get recent dates
+    const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(days).map(r => r.trade_date).reverse();
+    if (dates.length < 10) return res.json({ pairs: [], error: 'Need more data' });
+
+    // Build daily returns for each ticker
+    const returns = {};
+    for (const code of tickers) {
+      const rows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date')
+        .all(code, dates[0]);
+      if (rows.length < dates.length * 0.7) continue; // need at least 70% of dates
+      const dailyRet = [];
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i - 1].close > 0) {
+          dailyRet.push((rows[i].close - rows[i - 1].close) / rows[i - 1].close);
+        }
+      }
+      if (dailyRet.length >= 10) returns[code] = dailyRet;
+    }
+
+    // Calculate pairwise Pearson correlation
+    const codes = Object.keys(returns);
+    const pairs = [];
+
+    for (let i = 0; i < codes.length; i++) {
+      for (let j = i + 1; j < codes.length; j++) {
+        const a = returns[codes[i]], b = returns[codes[j]];
+        const n = Math.min(a.length, b.length);
+        if (n < 10) continue;
+        const ax = a.slice(-n), bx = b.slice(-n);
+        const ma = ax.reduce((s, v) => s + v, 0) / n;
+        const mb = bx.reduce((s, v) => s + v, 0) / n;
+        let num = 0, da = 0, db2 = 0;
+        for (let k = 0; k < n; k++) {
+          num += (ax[k] - ma) * (bx[k] - mb);
+          da += (ax[k] - ma) ** 2;
+          db2 += (bx[k] - mb) ** 2;
+        }
+        const corr = (da > 0 && db2 > 0) ? num / Math.sqrt(da * db2) : 0;
+        if (Math.abs(corr) >= minCorr) {
+          pairs.push({ a: codes[i], b: codes[j], corr: Math.round(corr * 1000) / 1000, days: n });
+        }
+      }
+    }
+
+    pairs.sort((a, b) => Math.abs(b.corr) - Math.abs(a.corr));
+
+    // Enrich with sector/industry info
+    const fundInfo = {};
+    if (sm) {
+      db.prepare('SELECT code, sector, industry, name FROM idx_fundamental WHERE snapshot_month=?').all(sm)
+        .forEach(f => { fundInfo[f.code] = f; });
+    }
+
+    const enriched = pairs.slice(0, 50).map(p => ({
+      ...p,
+      a_name: fundInfo[p.a]?.name || '',
+      a_sector: fundInfo[p.a]?.sector || '',
+      a_industry: fundInfo[p.a]?.industry || '',
+      b_name: fundInfo[p.b]?.name || '',
+      b_sector: fundInfo[p.b]?.sector || '',
+      b_industry: fundInfo[p.b]?.industry || ''
+    }));
+
+    res.json({ pairs: enriched, tickers: codes.length, days: dates.length, min_corr: minCorr, sector, industry });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
