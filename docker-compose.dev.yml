@@ -9,6 +9,7 @@ services:
       - diary-data:/app/data
       - ./public:/app/public
       - ./server:/app/server
+      - ./.env:/app/.env:ro
     restart: unless-stopped
     command: npx nodemon --watch server server/index.js
 

@@ -4,12 +4,28 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
+
+// ═══ .env support — read from .env file if exists ═══
+try {
+  const envPath = path.join(__dirname, '..', '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+      const [key, ...rest] = line.split('=');
+      const val = rest.join('=').trim();
+      if (key && val && !process.env[key.trim()]) process.env[key.trim()] = val;
+    });
+  }
+} catch (e) { /* ignore */ }
+
 const { db, dataDir } = require('./db');
 const { yq } = require('./utils/yahoo');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT) || 3000;
 const API_KEY = process.env.API_KEY || '';
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 
 // Directories
 const uploadDir = path.join(__dirname, '..', 'uploads');
@@ -192,6 +208,63 @@ app.get('/api/upload-logs', (req, res) => {
     const rows = db.prepare('SELECT * FROM upload_logs ORDER BY uploaded_at DESC LIMIT 50').all();
     res.json({ logs: rows });
   } catch { res.json({ logs: [] }); }
+});
+
+// ═══ Quarterly Financials ═══
+app.get('/api/quarterly/:code', (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase().trim();
+    const rows = db.prepare('SELECT * FROM quarterly_financials WHERE code=? ORDER BY period DESC').all(code);
+    res.json({ code, data: rows });
+  } catch (e) { res.json({ code: req.params.code, data: [], error: e.message }); }
+});
+
+app.post('/api/quarterly/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file' });
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(req.file.path);
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+    if (!rows.length) return res.status(400).json({ error: 'Empty file' });
+
+    const ins = db.prepare(`INSERT INTO quarterly_financials(code,period,period_type,revenue,net_income,operating_income,gross_profit,eps,total_assets,total_equity,total_debt,total_cash,operating_cashflow,free_cashflow,capex,dividend_per_share,shares_outstanding)
+      VALUES(@code,@period,@period_type,@revenue,@net_income,@operating_income,@gross_profit,@eps,@total_assets,@total_equity,@total_debt,@total_cash,@operating_cashflow,@free_cashflow,@capex,@dividend_per_share,@shares_outstanding)
+      ON CONFLICT(code,period,period_type) DO UPDATE SET revenue=excluded.revenue,net_income=excluded.net_income,operating_income=excluded.operating_income,gross_profit=excluded.gross_profit,eps=excluded.eps,total_assets=excluded.total_assets,total_equity=excluded.total_equity,total_debt=excluded.total_debt,total_cash=excluded.total_cash,operating_cashflow=excluded.operating_cashflow,free_cashflow=excluded.free_cashflow,capex=excluded.capex,dividend_per_share=excluded.dividend_per_share,shares_outstanding=excluded.shares_outstanding`);
+
+    let count = 0;
+    db.transaction(() => {
+      for (const r of rows) {
+        const code = String(r.code || '').trim().toUpperCase();
+        const period = String(r.period || '').trim();
+        if (!code || !period) continue;
+        ins.run({
+          code, period, period_type: String(r.period_type || 'quarterly'),
+          revenue: parseFloat(r.revenue) || 0, net_income: parseFloat(r.net_income) || 0,
+          operating_income: parseFloat(r.operating_income) || 0, gross_profit: parseFloat(r.gross_profit) || 0,
+          eps: parseFloat(r.eps) || 0, total_assets: parseFloat(r.total_assets) || 0,
+          total_equity: parseFloat(r.total_equity) || 0, total_debt: parseFloat(r.total_debt) || 0,
+          total_cash: parseFloat(r.total_cash) || 0, operating_cashflow: parseFloat(r.operating_cashflow) || 0,
+          free_cashflow: parseFloat(r.free_cashflow) || 0, capex: parseFloat(r.capex) || 0,
+          dividend_per_share: parseFloat(r.dividend_per_share) || 0,
+          shares_outstanding: parseFloat(r.shares_outstanding) || 0
+        });
+        count++;
+      }
+    })();
+    fs.unlinkSync(req.file.path);
+    db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,tickers,upload_type)VALUES(?,?,?,?,?,?)').run(req.file.originalname, '', count, count, [...new Set(rows.map(r => r.code))].length, 'quarterly');
+    res.json({ success: true, count, tickers: [...new Set(rows.map(r => r.code))].length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/quarterly/stats', (req, res) => {
+  try {
+    const total = db.prepare('SELECT COUNT(*)as c FROM quarterly_financials').get().c;
+    const tickers = db.prepare('SELECT COUNT(DISTINCT code)as c FROM quarterly_financials').get().c;
+    const periods = db.prepare('SELECT COUNT(DISTINCT period)as c FROM quarterly_financials').get().c;
+    const latest = db.prepare('SELECT MAX(period)as p FROM quarterly_financials').get().p;
+    res.json({ total, tickers, periods, latest });
+  } catch { res.json({ total: 0, tickers: 0, periods: 0 }); }
 });
 
 // ═══ Auto-load investor tags ═══

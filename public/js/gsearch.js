@@ -125,8 +125,8 @@ function renderTickerPage(d) {
 
   // Tabs
   h += '<div class="tp-tabs">';
-  ['overview', 'foreign', 'insider', 'fundamental'].forEach(function(t) {
-    var lbl = t === 'overview' ? '📊 Overview' : t === 'foreign' ? '🌍 Foreign' : t === 'insider' ? '👥 Insider' : '📈 Fundamental';
+  ['overview', 'foreign', 'insider', 'fundamental', 'quarterly'].forEach(function(t) {
+    var lbl = t === 'overview' ? '📊 Overview' : t === 'foreign' ? '🌍 Foreign' : t === 'insider' ? '👥 Insider' : t === 'fundamental' ? '📈 Fundamental' : '📋 Quarterly';
     h += '<button class="tp-tab' + (tpTab === t ? ' on' : '') + '" onclick="tpTab=\'' + t + '\';renderTickerPage(window._tpData)">' + lbl + '</button>';
   });
   h += '</div>';
@@ -267,6 +267,12 @@ function renderTickerPage(d) {
       }
       h += '<div style="margin-top:10px;font-size:10px;color:var(--t3)">Data: BEI Screener ' + esc(fund.snapshot_month) + '</div>';
     } else h += '<div style="color:var(--t3);padding:20px;text-align:center">No fundamental data. Upload BEI Screener XLSX via Settings.</div>';
+
+  } else if (tpTab === 'quarterly') {
+    // Quarterly financials from Yahoo Finance data
+    h += '<div id="tp-quarterly" style="padding:4px 0"><div style="color:var(--t3);text-align:center;padding:12px">Loading quarterly data...</div></div>';
+    // Async load after render
+    setTimeout(function() { loadQuarterlyTab(d.code); }, 50);
   }
 
   h += '</div>';
@@ -403,3 +409,110 @@ document.addEventListener('keydown', function(e) {
 $('ticker-ov').addEventListener('click', function(e) {
   if (e.target === this) gsClose();
 });
+
+// ═══ QUARTERLY FINANCIALS TAB ═══
+var qfMetric = 'revenue'; // revenue | net_income | eps | operating_cashflow | free_cashflow
+
+async function loadQuarterlyTab(code) {
+  var el = $('tp-quarterly'); if (!el) return;
+  try {
+    var r = await fetch('/api/quarterly/' + code);
+    var d = await r.json();
+    if (!d.data || !d.data.length) {
+      el.innerHTML = '<div style="color:var(--t3);text-align:center;padding:20px">No quarterly data available.<br><span style="font-size:10px">Upload via Python script: <code>python scrape_quarterly.py</code></span></div>';
+      return;
+    }
+    window._qfData = d.data;
+    renderQuarterlyTab(el, d.data, code);
+  } catch (e) {
+    el.innerHTML = '<div class="ne">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderQuarterlyTab(el, data, code) {
+  // Sort by period ascending (oldest first)
+  var sorted = data.slice().sort(function(a, b) { return a.period.localeCompare(b.period); });
+
+  // Metric selector
+  var h = '<div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">';
+  [{k:'revenue',l:'Revenue'},{k:'net_income',l:'Net Income'},{k:'eps',l:'EPS'},
+   {k:'gross_profit',l:'Gross Profit'},{k:'operating_cashflow',l:'Op. Cash Flow'},{k:'free_cashflow',l:'Free CF'}].forEach(function(m) {
+    h += '<button class="bei-sort-btn' + (qfMetric === m.k ? ' on' : '') + '" onclick="qfMetric=\'' + m.k + '\';renderQuarterlyTab($(\'tp-quarterly\'),window._qfData,\'' + esc(code) + '\')" style="padding:3px 8px;font-size:10px">' + m.l + '</button>';
+  });
+  h += '</div>';
+
+  // ── Bar chart ──
+  var vals = sorted.map(function(r) { return r[qfMetric] || 0; });
+  var labels = sorted.map(function(r) { return r.period.substring(2, 7); }); // YY-MM
+  var maxAbs = Math.max.apply(null, vals.map(function(v) { return Math.abs(v); })) || 1;
+
+  var W = el.offsetWidth || 500, H = 180;
+  var pad = {t: 15, r: 10, b: 25, l: 65};
+  var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+  var barW = Math.max(8, Math.min(30, cW / vals.length - 3));
+  var hasNeg = vals.some(function(v) { return v < 0; });
+  var minV = hasNeg ? -maxAbs : 0;
+  var maxV = maxAbs;
+  var rng = maxV - minV || 1;
+  function yS(v) { return pad.t + (1 - (v - minV) / rng) * cH; }
+  var zeroY = yS(0);
+
+  var svg = '<svg width="' + W + '" height="' + H + '" style="display:block">';
+  // Grid
+  for (var g = 0; g <= 4; g++) {
+    var gy = pad.t + g / 4 * cH; var gv = maxV - g / 4 * rng;
+    svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="1"/>';
+    svg += '<text x="' + (pad.l - 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="end">' + fmtRp(gv) + '</text>';
+  }
+  // Zero line
+  if (hasNeg) svg += '<line x1="' + pad.l + '" y1="' + zeroY + '" x2="' + (W - pad.r) + '" y2="' + zeroY + '" stroke="var(--t2)" stroke-width="1"/>';
+  // Bars
+  vals.forEach(function(v, i) {
+    var x = pad.l + (i + 0.5) * (cW / vals.length) - barW / 2;
+    var clr = v >= 0 ? 'var(--gn)' : 'var(--rd)';
+    var barH, barY;
+    if (v >= 0) { barH = Math.max(1, (v / rng) * cH); barY = zeroY - barH; }
+    else { barH = Math.max(1, (Math.abs(v) / rng) * cH); barY = zeroY; }
+    svg += '<rect x="' + x + '" y="' + barY + '" width="' + barW + '" height="' + barH + '" fill="' + clr + '" rx="2" opacity="0.8"/>';
+    // Label
+    svg += '<text x="' + (x + barW / 2) + '" y="' + (H - 4) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + labels[i] + '</text>';
+  });
+  svg += '</svg>';
+  h += '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px">' + svg + '</div>';
+
+  // ── Data table ──
+  var metricLabel = qfMetric === 'revenue' ? 'Revenue' : qfMetric === 'net_income' ? 'Net Income' :
+    qfMetric === 'eps' ? 'EPS' : qfMetric === 'gross_profit' ? 'Gross Profit' :
+    qfMetric === 'operating_cashflow' ? 'Op. Cash Flow' : 'Free CF';
+
+  h += '<div style="overflow-x:auto;max-height:250px;overflow-y:auto"><table class="bei-tbl" style="width:100%"><thead><tr>';
+  h += '<th class="al">Period</th><th class="ar">Revenue</th><th class="ar">Net Income</th><th class="ar">NPM</th>';
+  h += '<th class="ar">EPS</th><th class="ar">Op. CF</th><th class="ar">Free CF</th>';
+  h += '<th class="ar">Assets</th><th class="ar">Equity</th><th class="ar">Debt</th>';
+  h += '</tr></thead><tbody>';
+
+  sorted.reverse().forEach(function(r) {
+    var npm = r.revenue ? Math.round(r.net_income / r.revenue * 1000) / 10 : 0;
+    var npmCls = npm > 0 ? 'up' : npm < 0 ? 'dn' : '';
+    var niCls = r.net_income > 0 ? 'up' : r.net_income < 0 ? 'dn' : '';
+    var cfCls = r.operating_cashflow > 0 ? 'up' : r.operating_cashflow < 0 ? 'dn' : '';
+    var fcfCls = r.free_cashflow > 0 ? 'up' : r.free_cashflow < 0 ? 'dn' : '';
+
+    h += '<tr>';
+    h += '<td class="al" style="font-family:var(--fm);font-size:10px;white-space:nowrap">' + esc(r.period) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + fmtRp(r.revenue || 0) + '</td>';
+    h += '<td class="ar ' + niCls + '" style="font-family:var(--fm)">' + fmtRp(r.net_income || 0) + '</td>';
+    h += '<td class="ar ' + npmCls + '" style="font-family:var(--fm)">' + npm.toFixed(1) + '%</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + (r.eps ? r.eps.toLocaleString() : '-') + '</td>';
+    h += '<td class="ar ' + cfCls + '" style="font-family:var(--fm)">' + fmtRp(r.operating_cashflow || 0) + '</td>';
+    h += '<td class="ar ' + fcfCls + '" style="font-family:var(--fm)">' + fmtRp(r.free_cashflow || 0) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + fmtRp(r.total_assets || 0) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + fmtRp(r.total_equity || 0) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + fmtRp(r.total_debt || 0) + '</td>';
+    h += '</tr>';
+  });
+
+  h += '</tbody></table></div>';
+  h += '<div style="margin-top:6px;font-size:10px;color:var(--t3)">Source: Yahoo Finance quarterly reports. Upload via <code>python scrape_quarterly.py</code></div>';
+  el.innerHTML = h;
+}

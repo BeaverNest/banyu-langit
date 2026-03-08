@@ -6,7 +6,7 @@ const router = express.Router();
 function calcMA(closes, period) {
   if (closes.length < period) return null;
   const slice = closes.slice(-period);
-  return slice.reduce((s, v) => s + v, 0) / period;
+  return Math.round(slice.reduce((s, v) => s + v, 0) / period);
 }
 
 function calcEMA(data, period) {
@@ -97,7 +97,9 @@ function adjustRow(row, actions) {
 router.post('/run', (req, res) => {
   try {
     const rules = req.body.rules || [];
-    const limit = Math.min(parseInt(req.body.limit) || 50, 200);
+    const ruleLogic = req.body.logic || 'AND'; // AND | OR
+    const limit = Math.min(parseInt(req.body.limit) || 50, 500);
+    const alwaysTech = req.body.always_tech !== false; // default true
     const td = latestIdxDate();
     if (!td) return res.json({ data: [], trade_date: null });
 
@@ -110,92 +112,94 @@ router.post('/run', (req, res) => {
     if (fm) { db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; }); }
     stocks = stocks.map(s => ({ ...s, fund: fundMap[s.code] || null }));
 
-    if (!rules.length) {
+    if (!rules.length && !alwaysTech) {
       stocks.sort((a, b) => Math.abs(b.foreign_net_val) - Math.abs(a.foreign_net_val));
       return res.json({ data: stocks.slice(0, limit), total: stocks.length, trade_date: td });
     }
 
-    const techFields = ['close_vs_ma','ma5','ma10','ma20','ma50','ma100','ma200','macd','stoch','vol_spike'];
-    const needTech = rules.some(r => techFields.some(tf => (r.field || '').includes(tf)));
-
-    // Pre-load all confirmed CAs once (not per-ticker)
-    const caMap = needTech ? loadConfirmedCAs() : {};
+    // Always calculate tech indicators
+    const caMap = loadConfirmedCAs();
 
     const results = [];
     for (const stock of stocks) {
-      let pass = true;
       let tech = {};
 
-      if (needTech) {
-        const hist = db.prepare('SELECT trade_date,close,high,low,volume FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
-        if (hist.length >= 5) {
-          // Apply adjustment if this ticker has confirmed CAs
-          const actions = caMap[stock.code];
-          const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
+      // Always compute tech indicators
+      const hist = db.prepare('SELECT trade_date,close,high,low,volume FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
+      if (hist.length >= 5) {
+        const actions = caMap[stock.code];
+        const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
+        const closes = adjusted.map(h => h.close), highs = adjusted.map(h => h.high || h.close), lows = adjusted.map(h => h.low || h.close), vols = adjusted.map(h => h.volume);
+        tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10); tech.ma20 = calcMA(closes, 20);
+        tech.ma50 = calcMA(closes, 50); tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
+        if (closes.length >= 26) tech.macd = calcMACD(closes);
+        if (closes.length >= 14) tech.stoch = calcStochastic(highs, lows, closes);
+        const avgVol = vols.slice(-20, -1);
+        if (avgVol.length) tech.vol_ratio = Math.round(stock.volume / (avgVol.reduce((s, v) => s + v, 0) / avgVol.length) * 10) / 10;
+        if (actions && actions.length) tech.adjusted = true;
+      }
 
-          const closes = adjusted.map(h => h.close), highs = adjusted.map(h => h.high || h.close), lows = adjusted.map(h => h.low || h.close), vols = adjusted.map(h => h.volume);
-          tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10); tech.ma20 = calcMA(closes, 20);
-          tech.ma50 = calcMA(closes, 50); tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
-          if (closes.length >= 26) tech.macd = calcMACD(closes);
-          if (closes.length >= 14) tech.stoch = calcStochastic(highs, lows, closes);
-          const avgVol = vols.slice(-20, -1);
-          if (avgVol.length) tech.vol_ratio = Math.round(stock.volume / (avgVol.reduce((s, v) => s + v, 0) / avgVol.length) * 10) / 10;
-          // Flag if adjusted
-          if (actions && actions.length) tech.adjusted = true;
+      // Apply rules (AND or OR)
+      if (rules.length) {
+        let pass;
+        if (ruleLogic === 'OR') {
+          pass = rules.some(rule => evalRule(rule, stock, tech));
+        } else {
+          pass = rules.every(rule => evalRule(rule, stock, tech));
         }
+        if (!pass) continue;
       }
 
-      for (const rule of rules) {
-        if (!rule.field) continue;
-        const f = rule.field;
-        const isCompare = f.startsWith('close_vs_') || f === 'macd_signal';
-        const op = rule.op || (isCompare ? 'above' : '>');
-        const val = rule.val;
-        const fund = stock.fund || {};
-
-        if (f === 'close') { if (!applyOp(stock.close, op, val)) pass = false; }
-        else if (f === 'change_pct') { if (!applyOp(stock.change_pct, op, val)) pass = false; }
-        else if (f === 'volume_lot') { if (!applyOp(stock.volume / 100, op, val)) pass = false; }
-        else if (f === 'value') { if (!applyOp(stock.value, op, val)) pass = false; }
-        else if (f === 'frequency') { if (!applyOp(stock.frequency, op, val)) pass = false; }
-        else if (f === 'foreign_net_val') { if (!applyOp(stock.foreign_net_val, op, val)) pass = false; }
-        else if (f === 'vol_spike') { if (!tech.vol_ratio || !applyOp(tech.vol_ratio, op, val)) pass = false; }
-        // Fundamental filters
-        else if (f === 'per') { if (!fund.per || !applyOp(fund.per, op, val)) pass = false; }
-        else if (f === 'pbv') { if (!fund.pbv || !applyOp(fund.pbv, op, val)) pass = false; }
-        else if (f === 'roe') { if (!applyOp(fund.roe || 0, op, val)) pass = false; }
-        else if (f === 'roa') { if (!applyOp(fund.roa || 0, op, val)) pass = false; }
-        else if (f === 'der') { if (!applyOp(fund.der || 0, op, val)) pass = false; }
-        else if (f === 'npm') { if (!applyOp(fund.npm || 0, op, val)) pass = false; }
-        else if (f === 'mkt_cap') { if (!applyOp(fund.mkt_cap || 0, op, val)) pass = false; }
-        else if (f === 'total_rev') { if (!applyOp(fund.total_rev || 0, op, val)) pass = false; }
-        else if (f === 'ytd') { if (!applyOp(fund.ytd || 0, op, val)) pass = false; }
-        // Sector filter
-        else if (f === 'sector') { if (!fund.sector || fund.sector !== val) pass = false; }
-        // Index membership
-        else if (f === 'idx_index') { if (!fund.idx_index || !fund.idx_index.includes(val)) pass = false; }
-        // MA compare
-        else if (f.startsWith('close_vs_ma')) { const p = parseInt(f.replace('close_vs_ma', '')); const ma = tech['ma' + p]; if (!ma) pass = false; else if (op === 'above' && stock.close <= ma) pass = false; else if (op === 'below' && stock.close >= ma) pass = false; }
-        // MACD
-        else if (f === 'macd_hist') { if (!tech.macd || !applyOp(tech.macd.histogram, op, val)) pass = false; }
-        else if (f === 'macd_cross') { if (!tech.macd || tech.macd.cross !== val) pass = false; }
-        else if (f === 'macd_signal') { if (!tech.macd) pass = false; else if (op === 'above' && tech.macd.macd <= tech.macd.signal) pass = false; else if (op === 'below' && tech.macd.macd >= tech.macd.signal) pass = false; }
-        // Stochastic
-        else if (f === 'stoch_k') { if (!tech.stoch || !applyOp(tech.stoch.k, op, val)) pass = false; }
-        else if (f === 'stoch_d') { if (!tech.stoch || !tech.stoch.d || !applyOp(tech.stoch.d, op, val)) pass = false; }
-        else if (f === 'stoch_zone') { if (!tech.stoch || tech.stoch.zone !== val) pass = false; }
-        // Foreign streak
-        else if (f === 'fnet_streak') { const days = Math.abs(parseInt(val) || 3); const dir = (parseFloat(val) || 0) >= 0 ? 'buy' : 'sell'; const recent = db.prepare('SELECT (foreign_buy-foreign_sell) as fn FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(stock.code, days); if (recent.length < days) pass = false; else if (dir === 'buy' && !recent.every(r => r.fn > 0)) pass = false; else if (dir === 'sell' && !recent.every(r => r.fn < 0)) pass = false; }
-
-        if (!pass) break;
-      }
-      if (pass) results.push({ ...stock, tech });
+      results.push({ ...stock, tech });
     }
 
     results.sort((a, b) => Math.abs(b.foreign_net_val || 0) - Math.abs(a.foreign_net_val || 0));
     res.json({ data: results.slice(0, limit), total: results.length, trade_date: td, adjusted: Object.keys(caMap).length > 0 });
   } catch (e) { res.json({ data: [], error: e.message }); }
 });
+
+// ═══ Rule evaluation helper ═══
+function evalRule(rule, stock, tech) {
+  if (!rule.field) return true;
+  const f = rule.field;
+  const isCompare = f.startsWith('close_vs_') || f === 'macd_signal';
+  const op = rule.op || (isCompare ? 'above' : '>');
+  const val = rule.val;
+  const fund = stock.fund || {};
+
+  if (f === 'close') return applyOp(stock.close, op, val);
+  if (f === 'change_pct') return applyOp(stock.change_pct, op, val);
+  if (f === 'volume_lot') return applyOp(stock.volume / 100, op, val);
+  if (f === 'value') return applyOp(stock.value, op, val);
+  if (f === 'frequency') return applyOp(stock.frequency, op, val);
+  if (f === 'foreign_net_val') return applyOp(stock.foreign_net_val, op, val);
+  if (f === 'vol_spike') return tech.vol_ratio ? applyOp(tech.vol_ratio, op, val) : false;
+  // Fundamental
+  if (f === 'per') return fund.per ? applyOp(fund.per, op, val) : false;
+  if (f === 'pbv') return fund.pbv ? applyOp(fund.pbv, op, val) : false;
+  if (f === 'roe') return applyOp(fund.roe || 0, op, val);
+  if (f === 'roa') return applyOp(fund.roa || 0, op, val);
+  if (f === 'der') return applyOp(fund.der || 0, op, val);
+  if (f === 'npm') return applyOp(fund.npm || 0, op, val);
+  if (f === 'mkt_cap') return applyOp(fund.mkt_cap || 0, op, val);
+  if (f === 'total_rev') return applyOp(fund.total_rev || 0, op, val);
+  if (f === 'ytd') return applyOp(fund.ytd || 0, op, val);
+  if (f === 'sector') return fund.sector === val;
+  if (f === 'idx_index') return fund.idx_index && fund.idx_index.includes(val);
+  // MA compare
+  if (f.startsWith('close_vs_ma')) { const p = parseInt(f.replace('close_vs_ma', '')); const ma = tech['ma' + p]; if (!ma) return false; return op === 'above' ? stock.close > ma : stock.close < ma; }
+  // MACD
+  if (f === 'macd_hist') return tech.macd ? applyOp(tech.macd.histogram, op, val) : false;
+  if (f === 'macd_cross') return tech.macd ? tech.macd.cross === val : false;
+  if (f === 'macd_signal') { if (!tech.macd) return false; return op === 'above' ? tech.macd.macd > tech.macd.signal : tech.macd.macd < tech.macd.signal; }
+  // Stochastic
+  if (f === 'stoch_k') return tech.stoch ? applyOp(tech.stoch.k, op, val) : false;
+  if (f === 'stoch_d') return tech.stoch && tech.stoch.d ? applyOp(tech.stoch.d, op, val) : false;
+  if (f === 'stoch_zone') return tech.stoch ? tech.stoch.zone === val : false;
+  // Foreign streak
+  if (f === 'fnet_streak') { const days = Math.abs(parseInt(val) || 3); const dir = (parseFloat(val) || 0) >= 0 ? 'buy' : 'sell'; const recent = db.prepare('SELECT (foreign_buy-foreign_sell) as fn FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(stock.code, days); if (recent.length < days) return false; return dir === 'buy' ? recent.every(r => r.fn > 0) : recent.every(r => r.fn < 0); }
+  return true;
+}
 
 // ═══ Sector Overview — aggregate fundamental + daily data by sector/industry ═══
 router.get('/sectors', (req, res) => {

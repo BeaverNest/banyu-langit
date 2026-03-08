@@ -158,6 +158,30 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_ca_code ON corporate_actions(code);
   CREATE INDEX IF NOT EXISTS idx_ca_date ON corporate_actions(ex_date);
+
+  CREATE TABLE IF NOT EXISTS quarterly_financials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    period TEXT NOT NULL,
+    period_type TEXT DEFAULT 'quarterly',
+    revenue REAL DEFAULT 0,
+    net_income REAL DEFAULT 0,
+    operating_income REAL DEFAULT 0,
+    gross_profit REAL DEFAULT 0,
+    eps REAL DEFAULT 0,
+    total_assets REAL DEFAULT 0,
+    total_equity REAL DEFAULT 0,
+    total_debt REAL DEFAULT 0,
+    total_cash REAL DEFAULT 0,
+    operating_cashflow REAL DEFAULT 0,
+    free_cashflow REAL DEFAULT 0,
+    capex REAL DEFAULT 0,
+    dividend_per_share REAL DEFAULT 0,
+    shares_outstanding REAL DEFAULT 0,
+    UNIQUE(code, period, period_type)
+  );
+  CREATE INDEX IF NOT EXISTS idx_qf_code ON quarterly_financials(code);
+  CREATE INDEX IF NOT EXISTS idx_qf_period ON quarterly_financials(period);
 `);
 
 // ═══ Default header mappings ═══
