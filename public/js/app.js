@@ -1,9 +1,6 @@
 // THEME
 function togTh(){const h=document.documentElement;const n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);$('thbtn').textContent=n==='dark'?'🌙':'☀️';localStorage.setItem('th',n);if(!chartHidden)loadChart();}
 
-
-// ═══ SECTOR — moved to sector-intelligence.js ═══
-
 // ═══ CHART ═══
 function loadChart(){
   const th=document.documentElement.getAttribute('data-theme')||'light';
@@ -16,12 +13,49 @@ function loadChart(){
   f.contentDocument.open();f.contentDocument.write(html);f.contentDocument.close();
 }
 
-// TABS
-function stab(n,b){document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));$('t-'+n).classList.add('on');if(n==='wl'){loadWL();loadAl();}if(n==='mkt')loadMktOverview();if(n==='scr')loadScreener();if(n==='ins')chkIns();}
-function swt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('w-'+n).classList.add('on');}
-function smkt(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('m-'+n).classList.add('on');if(n==='ov')loadMktOverview();if(n==='bei')loadBei();if(n==='nws')lNews('');}
+// ═══ MAIN TAB ROUTING — 5 tabs ═══
+function stab(n,b){
+  document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));
+  if(b)b.classList.add('on');
+  document.querySelectorAll('.tpanel').forEach(p=>p.classList.remove('on'));
+  $('t-'+n).classList.add('on');
+  if(n==='mkt')loadMktOverview();
+  if(n==='idx')loadIdxDaily();
+  if(n==='analysis')loadScreener();
+  if(n==='ins')chkIns();
+}
+
+// Market sub-tabs (Overview / News)
+function smkt(n,b){
+  const panel=b.closest('.tpanel');
+  panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));
+  $('m-'+n).classList.add('on');
+  if(n==='ov')loadMktOverview();
+  if(n==='nws')lNews('');
+}
+
+// ═══ ANALYSIS SUB-TABS — Screener | Sectors | Compare | Correlation ═══
+function anaSubTab(n,b){
+  var panel=b.closest('.tpanel');
+  panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));
+  $('ana-'+n).classList.add('on');
+  if(n==='screener')loadScreener();
+  if(n==='sectors')loadSectorView();
+  if(n==='compare')renderCompare();
+  if(n==='correlation'){
+    // Load correlation from sector-intelligence.js
+    if(typeof loadCorrelationView==='function')loadCorrelationView();
+  }
+}
+
+// Insider sub-tabs (kept for compat)
 function sins(n,b){const panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));b.classList.add('on');panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));$('i-'+n).classList.add('on');}
 
+// ═══ MARKET OVERVIEW ═══
 const mktCache={};
 async function loadMktOverview(){
   var el=$('ml-ov');if(!el)return;
@@ -53,6 +87,16 @@ async function loadMktOverview(){
   }catch{el.innerHTML='<div class="ne">Failed to load</div>';}
 }
 
+// ═══ WATCHLIST DROPDOWN TOGGLE ═══
+function togWL(){
+  var d=$('wldrop');d.classList.toggle('o');
+  if(d.classList.contains('o')){loadWL();loadAl();}
+}
+// Close watchlist dropdown on outside click
+document.addEventListener('click',function(e){
+  if(!$('wlbtn').contains(e.target)&&!$('wldrop').contains(e.target))$('wldrop').classList.remove('o');
+});
+
 // RESIZE + CHART TOGGLE
 let chartHidden=false;
 function togChart(){
@@ -72,17 +116,21 @@ document.addEventListener('keydown',function(e){
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
   if(e.key>='1'&&e.key<='5'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var tabs=document.querySelectorAll('.tabs .tab');var idx=parseInt(e.key)-1;if(tabs[idx]){tabs[idx].click();e.preventDefault();}}
   if(e.key==='c'){var ct=$('cta');if(ct){ct.focus();e.preventDefault();}}
-  if(e.key==='?'){showT('Shortcuts','/ Search · 1-4 Tabs · C Compose · Esc Close');e.preventDefault();}
-  if(e.key==='Escape')closeSettings();
+  if(e.key==='w'){togWL();e.preventDefault();}
+  if(e.key==='?'){showT('Shortcuts','/ Search · 1-5 Tabs · C Compose · W Watchlist · Esc Close');e.preventDefault();}
+  if(e.key==='Escape'){closeSettings();$('wldrop').classList.remove('o');}
 });
-
-
 
 // ═══ INIT: Theme + Chart default ═══
 (function(){
   var saved=localStorage.getItem('th');
   if(saved){document.documentElement.setAttribute('data-theme',saved);$('thbtn').textContent=saved==='dark'?'🌙':'☀️';}
-  // Chart: default hidden unless user set visible
   var chartPref=localStorage.getItem('chartDefault');
   if(chartPref!=='visible'){setTimeout(function(){if(!chartHidden)togChart();},100);}
 })();
+
+// ═══ BACKWARD COMPAT — old functions that other modules might reference ═══
+// Old screener sub-tab routing (now handled by anaSubTab)
+function scrSubTab(n,b){ anaSubTab(n,b); }
+// Old watchlist sub-tab
+function swt(n,b){}

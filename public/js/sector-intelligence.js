@@ -620,3 +620,8 @@ function sectorStockTable(stocks){
   h+='</tbody></table></div>';
   return h;
 }
+// ═══ Standalone Correlation View — for Analysis > Correlation sub-tab ═══
+async function loadCorrelationView(){
+  var el=$('correlation-content');if(!el)return;
+  await loadSecCorrelation(el);
+}

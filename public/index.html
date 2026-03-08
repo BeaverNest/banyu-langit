@@ -22,6 +22,26 @@
     <div class="gs-ac" id="gs-ac"></div>
   </div>
   <div class="topbar-r">
+    <!-- WATCHLIST DROPDOWN (moved from tab) -->
+    <button class="ib" id="wlbtn" onclick="togWL()" title="Watchlist">📋<span class="badge" id="wlbdg" style="display:none">0</span></button>
+    <div class="ndrop" id="wldrop" style="width:360px">
+      <div class="ndrop-h"><span>📋 Watchlist</span><button onclick="event.stopPropagation();togWL()" style="font-size:14px">✕</button></div>
+      <div style="padding:6px 10px;border-bottom:1px solid var(--b1);display:flex;gap:4px">
+        <input id="wli" style="flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:4px 8px;color:var(--t1);font-family:var(--f);font-size:11px;outline:none;text-transform:uppercase" placeholder="Add ticker (BBCA.JK)" onkeydown="if(event.key==='Enter'){addW();event.stopPropagation()}">
+        <button onclick="addW()" style="padding:4px 10px;border-radius:6px;border:none;background:var(--gn);color:#fff;font-weight:700;font-size:11px;cursor:pointer">+</button>
+      </div>
+      <div id="wll" style="max-height:200px;overflow-y:auto"></div>
+      <div style="padding:6px 10px;border-top:1px solid var(--b1);font-size:10px;font-weight:700;color:var(--t3)">🔔 ALERTS</div>
+      <div style="padding:4px 10px;display:flex;gap:3px;border-bottom:1px solid var(--b1)">
+        <input class="a_s" id="as" placeholder="BBCA.JK" style="width:70px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;text-transform:uppercase;outline:none">
+        <select class="a_c" id="ac" style="width:40px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px;color:var(--t1);font-size:10px;outline:none"><option value="above">≥</option><option value="below">≤</option></select>
+        <input class="a_p" id="ap" type="number" step="0.01" placeholder="Price" style="width:65px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none">
+        <input class="a_n" id="an" placeholder="Note" style="flex:1;min-width:40px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-size:10px;outline:none">
+        <button onclick="addAl()" style="padding:3px 8px;border-radius:5px;border:none;background:var(--am);color:#fff;font-weight:700;font-size:10px;cursor:pointer">+</button>
+      </div>
+      <div id="alst" style="max-height:150px;overflow-y:auto"></div>
+    </div>
+
     <button class="ib" id="bell" onclick="togN()">🔔<span class="badge" id="bdg">0</span></button>
     <div class="ndrop" id="ndrop"><div class="ndrop-h"><span>Notifications</span><button onclick="event.stopPropagation();clrN()">Clear all</button></div><div class="ndrop-l" id="nlist"></div></div>
     <button class="ib" id="chtog" onclick="togChart()" title="Toggle Chart">📊</button>
@@ -32,16 +52,35 @@
 
 <div class="layout">
 <div class="pL" id="pL">
+  <!-- ═══ NEW 5-TAB STRUCTURE ═══ -->
   <div class="tabs">
-    <button class="tab on" onclick="stab('diary',this)">📝 Diary</button>
-    <button class="tab" onclick="stab('wl',this)">📊 Watchlist</button>
-    <button class="tab" onclick="stab('mkt',this)">🌐 Market</button>
-    <button class="tab" onclick="stab('scr',this)">🔬 Screener</button>
+    <button class="tab on" onclick="stab('mkt',this)">📈 Market</button>
+    <button class="tab" onclick="stab('idx',this)">📊 IDX Daily</button>
+    <button class="tab" onclick="stab('diary',this)">📝 Diary</button>
+    <button class="tab" onclick="stab('analysis',this)">🔬 Analysis</button>
     <button class="tab" onclick="stab('ins',this)">🔍 Insider</button>
   </div>
 
-  <!-- DIARY -->
-  <div class="tpanel on" id="t-diary">
+  <!-- ═══ TAB 1: MARKET (Global Overview + News) ═══ -->
+  <div class="tpanel on" id="t-mkt">
+    <div class="wt">
+      <button class="wt-b on" onclick="smkt('ov',this)">🌍 Overview</button>
+      <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
+    </div>
+    <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="m-nws">
+      <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
+      <div class="nlist" id="nsl"><div class="ne">Loading market news...</div></div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB 2: IDX DAILY (Unified) ═══ -->
+  <div class="tpanel" id="t-idx">
+    <div id="idx-content"><div class="ne">Loading IDX data...</div></div>
+  </div>
+
+  <!-- ═══ TAB 3: DIARY (Unchanged) ═══ -->
+  <div class="tpanel" id="t-diary">
     <div class="sbar"><div class="sw"><span style="font-size:12px;color:var(--t3)">🔍</span><input class="si" id="sinp" placeholder="Search diary..."><button class="sc" id="sclr" onclick="clrS()">✕</button></div></div>
     <div class="rind" id="rind"><span>↩ Replying to <strong id="rtxt"></strong></span><button class="cx" onclick="cxR()">✕</button></div>
     <div class="cmp"><div class="cmp-row"><div class="av">🧑‍💻</div><div class="cmp-b">
@@ -53,50 +92,21 @@
     <div class="feed" id="feed"></div>
   </div>
 
-  <!-- WATCHLIST -->
-  <div class="tpanel" id="t-wl">
-    <div class="wt"><button class="wt-b on" onclick="swt('stk',this)">📈 Stocks</button><button class="wt-b" onclick="swt('alt',this)">🔔 Alerts</button></div>
-    <div class="wp on" id="w-stk">
-      <div class="wla"><input id="wli" placeholder="Add ticker (BBCA.JK, AAPL)" onkeydown="if(event.key==='Enter')addW()"><button onclick="addW()">+ Add</button></div>
-      <div class="wln">💡 IDX: BBCA.JK, PTBA.JK | US: AAPL, MSFT</div>
-      <div class="wll" id="wll"></div>
-    </div>
-    <div class="wp" id="w-alt">
-      <div class="ala"><input class="a_s" id="as" placeholder="BBCA.JK"><select class="a_c" id="ac"><option value="above">≥</option><option value="below">≤</option></select><input class="a_p" id="ap" type="number" step="0.01" placeholder="Price"><input class="a_n" id="an" placeholder="Note"><button class="a_go" onclick="addAl()">+ Add</button></div>
-      <div class="all" id="alst"></div>
-    </div>
-  </div>
-
-  <!-- MARKET -->
-  <div class="tpanel" id="t-mkt">
+  <!-- ═══ TAB 4: ANALYSIS (Screener + Sectors + Compare + Correlation) ═══ -->
+  <div class="tpanel" id="t-analysis">
     <div class="wt">
-      <button class="wt-b on" onclick="smkt('ov',this)">🌍 Overview</button>
-      <button class="wt-b" onclick="smkt('bei',this)">🇮🇩 IDX Daily</button>
-      <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
+      <button class="wt-b on" onclick="anaSubTab('screener',this)">🔬 Screener</button>
+      <button class="wt-b" onclick="anaSubTab('sectors',this)">📊 Sectors</button>
+      <button class="wt-b" onclick="anaSubTab('compare',this)">📈 Compare</button>
+      <button class="wt-b" onclick="anaSubTab('correlation',this)">🔗 Correlation</button>
     </div>
-    <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="m-bei"><div id="bei-content"><div class="ne">Loading IDX data...</div></div></div>
-    <div class="wp" id="m-nws">
-      <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
-      <div class="nlist" id="nsl"><div class="ne">Loading market news...</div></div>
-    </div>
+    <div class="wp on" id="ana-screener"><div id="scr-content"></div></div>
+    <div class="wp" id="ana-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
   </div>
 
-  <!-- SCREENER -->
-  <div class="tpanel" id="t-scr">
-    <div class="wt">
-      <button class="wt-b on" onclick="scrSubTab('screener',this)">🔬 Screener</button>
-      <button class="wt-b" onclick="scrSubTab('sectors',this)">📊 Sectors</button>
-      <button class="wt-b" onclick="scrSubTab('compare',this)">📈 Compare</button>
-      <button class="wt-b" onclick="scrSubTab('activity',this)">🔥 Activity</button>
-    </div>
-    <div class="wp on" id="scr-screener"><div id="scr-content"></div></div>
-    <div class="wp" id="scr-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="scr-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="scr-activity"><div id="activity-content"><div class="ne">Loading...</div></div></div>
-  </div>
-
-  <!-- INSIDER -->
+  <!-- ═══ TAB 5: INSIDER (Unchanged) ═══ -->
   <div class="tpanel" id="t-ins">
     <div class="ins-topbar" id="ins-topbar">
       <div class="ins-nav">
@@ -160,16 +170,16 @@
 <input type="file" id="idxfi" accept=".xlsx,.xls" style="display:none" multiple>
 <input type="file" id="fundfi" accept=".xlsx,.xls" style="display:none">
 
+<!-- ═══ SCRIPTS — load order matters ═══ -->
 <script src="/js/utils.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/compare.js"></script>
 <script src="/js/tags-editor.js"></script>
 <script src="/js/gsearch.js"></script>
-<script src="/js/idx.js"></script>
+<script src="/js/idx-daily-v2.js"></script>
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
-<script src="/js/activity-spike.js"></script>
 <script src="/js/fund-upload.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>

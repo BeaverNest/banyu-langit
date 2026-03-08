@@ -2,17 +2,7 @@
 // ═══ SCREENER SUBTABS ═══
 let cmpColors=['#0ea5e9','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#14b8a6','#f97316'];
 
-function scrSubTab(n,b){
-  var panel=b.closest('.tpanel');
-  panel.querySelectorAll('.wt-b').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on');
-  panel.querySelectorAll('.wp').forEach(p=>p.classList.remove('on'));
-  $('scr-'+n).classList.add('on');
-  if(n==='screener')loadScreener();
-  if(n==='sectors')loadSectorView();
-  if(n==='compare')renderCompare();
-  if(n==='activity')loadActivitySpike();
-}
+// scrSubTab removed — now handled by anaSubTab in app.js
 
 // ═══ COMPARISON — Mixed mode: freely combine Ticker + Sector + Industry + Konglomerat ═══
 let cmpRange='6m';
