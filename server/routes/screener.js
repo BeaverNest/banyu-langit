@@ -293,6 +293,109 @@ router.post('/configs', (req, res) => { try { const { name, filters } = req.body
 router.put('/configs/:id', (req, res) => { try { const { name, filters } = req.body; db.prepare("UPDATE screener_configs SET name=?,filters=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(filters || {}), req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 router.delete('/configs/:id', (req, res) => { try { db.prepare('DELETE FROM screener_configs WHERE id=?').run(req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 
+// ═══ Activity Spike Detection ═══
+router.get('/activity-spike', (req, res) => {
+  try {
+    const td = latestIdxDate();
+    if (!td) return res.json({ data: [], trade_date: null });
+    const avgDays = parseInt(req.query.avg) || 20;
+    const minFreq = parseInt(req.query.min_freq) || 10; // min avg frequency to avoid penny stocks
+
+    // Get all dates for avg period
+    const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(avgDays + 1).map(r => r.trade_date);
+    if (dates.length < 5) return res.json({ data: [], error: 'Need more data' });
+
+    const today = dates[0];
+    const avgDates = dates.slice(1);
+    const ph = avgDates.map(() => '?').join(',');
+
+    // Today's data
+    const todayData = {};
+    db.prepare('SELECT code,name,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date=? AND close>0').all(today)
+      .forEach(r => { todayData[r.code] = r; });
+
+    // Average over past N days
+    const avgData = {};
+    db.prepare(`SELECT code, AVG(volume) as avg_vol, AVG(value) as avg_val, AVG(frequency) as avg_freq,
+      AVG(ABS((foreign_buy-foreign_sell)*close)) as avg_fnet_abs
+      FROM idx_daily WHERE trade_date IN (${ph}) AND close>0
+      GROUP BY code HAVING AVG(frequency)>=?`).all(...avgDates, minFreq)
+      .forEach(r => { avgData[r.code] = r; });
+
+    // Calculate spikes
+    const results = [];
+    for (const [code, t] of Object.entries(todayData)) {
+      const a = avgData[code];
+      if (!a) continue;
+
+      const valSpike = a.avg_val > 0 ? Math.round(t.value / a.avg_val * 10) / 10 : 0;
+      const freqSpike = a.avg_freq > 0 ? Math.round(t.frequency / a.avg_freq * 10) / 10 : 0;
+      const volSpike = a.avg_vol > 0 ? Math.round(t.volume / a.avg_vol * 10) / 10 : 0;
+      const fnet = (t.foreign_buy - t.foreign_sell) * t.close;
+      const fnetSpike = a.avg_fnet_abs > 0 ? Math.round(Math.abs(fnet) / a.avg_fnet_abs * 10) / 10 : 0;
+
+      // Combined score — weighted
+      const score = Math.round((valSpike * 0.3 + freqSpike * 0.3 + volSpike * 0.2 + fnetSpike * 0.2) * 10) / 10;
+
+      results.push({
+        code, name: t.name, close: t.close,
+        volume: t.volume, value: t.value, frequency: t.frequency,
+        fnet, fnet_val: fnet,
+        avg_vol: Math.round(a.avg_vol), avg_val: Math.round(a.avg_val), avg_freq: Math.round(a.avg_freq),
+        val_spike: valSpike, freq_spike: freqSpike, vol_spike: volSpike, fnet_spike: fnetSpike,
+        score
+      });
+    }
+
+    results.sort((a, b) => b.score - a.score);
+
+    // Sector spike aggregation
+    const { latestFundDate } = require('../db');
+    const fm = latestFundDate();
+    const sectorSpikes = {};
+    if (fm) {
+      const fundMap = {};
+      db.prepare("SELECT code, sector FROM idx_fundamental WHERE snapshot_month=? AND sector!=''").all(fm)
+        .forEach(f => { fundMap[f.code] = f.sector; });
+
+      for (const r of results) {
+        const sec = fundMap[r.code];
+        if (!sec) continue;
+        if (!sectorSpikes[sec]) sectorSpikes[sec] = { sector: sec, total_score: 0, count: 0, top_spike: null };
+        sectorSpikes[sec].total_score += r.score;
+        sectorSpikes[sec].count++;
+        if (!sectorSpikes[sec].top_spike || r.score > sectorSpikes[sec].top_spike.score) {
+          sectorSpikes[sec].top_spike = { code: r.code, score: r.score };
+        }
+      }
+      for (const k of Object.keys(sectorSpikes)) {
+        sectorSpikes[k].avg_score = Math.round(sectorSpikes[k].total_score / sectorSpikes[k].count * 10) / 10;
+      }
+    }
+
+    // Dormant → Active: low avg freq (<30) but today freq spike > 3x
+    const dormant = results.filter(r => r.avg_freq < 30 && r.freq_spike >= 3).sort((a, b) => b.freq_spike - a.freq_spike);
+
+    res.json({
+      data: results,
+      dormant: dormant.slice(0, 30),
+      sector_spikes: Object.values(sectorSpikes).sort((a, b) => b.avg_score - a.avg_score),
+      trade_date: today, avg_days: avgDays, total: results.length
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Activity history for a single ticker (for chart)
+router.get('/activity-history/:code', (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase().trim();
+    const days = parseInt(req.query.days) || 60;
+    const rows = db.prepare('SELECT trade_date,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(code, days);
+    rows.reverse();
+    res.json({ code, data: rows.map(r => ({ ...r, fnet_val: (r.foreign_buy - r.foreign_sell) * r.close })) });
+  } catch (e) { res.json({ code: req.params.code, data: [] }); }
+});
+
 
 // ═══ Sector Intelligence — rotation heatmap, flow timeline, correlation ═══
 

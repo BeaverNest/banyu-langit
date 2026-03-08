@@ -317,27 +317,60 @@ module.exports = function(upload) {
         `).all(prevD, currD);
 
         for (const ch of changes) {
-          const ratio = ch.new_shares / ch.old_shares;
+          const sharesRatio = ch.new_shares / ch.old_shares;
           let actionType = 'unknown', notes = '';
 
-          if (ratio >= 1.5) {
-            const roundRatio = Math.round(ratio);
-            if (Math.abs(ratio - roundRatio) < 0.05) {
-              actionType = 'split';
-              notes = `1:${roundRatio} (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+          // Price change ratio — for true split, price should move inversely
+          const priceRatio = ch.old_close > 0 ? ch.new_close / ch.old_close : 1;
+          // Expected price ratio for a split: 1/sharesRatio (e.g. 2x shares = 0.5x price)
+          const expectedPriceRatio = 1 / sharesRatio;
+          // Tolerance: price should be within 30% of expected
+          const priceTolerance = 0.30;
+          const priceMatchesSplit = Math.abs(priceRatio - expectedPriceRatio) / expectedPriceRatio <= priceTolerance;
+
+          if (sharesRatio >= 1.5) {
+            const roundRatio = Math.round(sharesRatio);
+            const isCleanRatio = Math.abs(sharesRatio - roundRatio) < 0.05; // 2x, 3x, 5x etc
+
+            if (priceMatchesSplit && isCleanRatio) {
+              // Shares doubled/tripled AND price halved/thirded AND clean ratio → split or bonus shares
+              // Both need adjustment — label as split_or_bonus, user confirms which
+              actionType = 'split_or_bonus';
+              notes = `Shares ${roundRatio}x, price ${(priceRatio * 100).toFixed(0)}% → likely Stock Split or Saham Bonus. Needs price adjustment.`;
+            } else if (priceMatchesSplit && !isCleanRatio) {
+              // Price matches but odd ratio → likely bonus shares with non-standard ratio
+              actionType = 'bonus_shares';
+              notes = `Shares ${sharesRatio.toFixed(2)}x, price ${(priceRatio * 100).toFixed(0)}% → likely Saham Bonus. Needs price adjustment.`;
+            } else if (!priceMatchesSplit && priceRatio > 0.8) {
+              // Shares up but price barely moved → right issue / HMETD / tanpa HMETD
+              actionType = 'right_issue';
+              notes = `Shares ${sharesRatio.toFixed(2)}x but price ${(priceRatio * 100).toFixed(0)}% (barely changed) → likely Right Issue/HMETD/PP. NO price adjustment needed.`;
+            } else if (!priceMatchesSplit && priceRatio <= 0.8) {
+              // Shares up AND price down but not proportional → could be rights + dilution
+              actionType = 'dilution';
+              notes = `Shares ${sharesRatio.toFixed(2)}x, price ${(priceRatio * 100).toFixed(0)}% → shares increased with price decline. Review manually.`;
             } else {
-              actionType = 'rights_or_bonus';
-              notes = `ratio ${ratio.toFixed(4)}x (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+              actionType = 'unknown';
+              notes = `Shares ${sharesRatio.toFixed(2)}x, price ${(priceRatio * 100).toFixed(0)}%. Review manually.`;
             }
           } else {
-            const invRatio = Math.round(1 / ratio);
-            actionType = 'reverse';
-            notes = `${invRatio}:1 (shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()})`;
+            // Shares decreased
+            const invRatio = Math.round(1 / sharesRatio);
+            if (priceMatchesSplit) {
+              actionType = 'reverse_split';
+              notes = `${invRatio}:1 reverse split. Shares ${ch.old_shares.toLocaleString()} → ${ch.new_shares.toLocaleString()}, price ${ch.old_close} → ${ch.new_close}. Needs price adjustment.`;
+            } else {
+              actionType = 'shares_reduction';
+              notes = `Shares reduced ${sharesRatio.toFixed(2)}x but price ${(priceRatio * 100).toFixed(0)}%. Review manually — could be buyback/delisting.`;
+            }
           }
 
-          const r = insCA.run(ch.code, currD, actionType, ratio, ch.old_shares, ch.new_shares, ch.old_close, ch.new_close, 'pending', notes);
+          // Only auto-confirm real splits/reverses. Rights issue stays pending.
+          const status = (actionType === 'split' || actionType === 'reverse') ? 'pending' : 'pending';
+
+          const r = insCA.run(ch.code, currD, actionType, sharesRatio, ch.old_shares, ch.new_shares, ch.old_close, ch.new_close, status, notes);
           if (r.changes > 0) {
-            detected.push({ code: ch.code, ex_date: currD, action_type: actionType, ratio: Math.round(ratio * 10000) / 10000, old_shares: ch.old_shares, new_shares: ch.new_shares, notes });
+            detected.push({ code: ch.code, ex_date: currD, action_type: actionType, ratio: Math.round(sharesRatio * 10000) / 10000, old_shares: ch.old_shares, new_shares: ch.new_shares, notes });
           }
         }
       }

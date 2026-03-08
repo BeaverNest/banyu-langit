@@ -11,6 +11,7 @@ function scrSubTab(n,b){
   if(n==='screener')loadScreener();
   if(n==='sectors')loadSectorView();
   if(n==='compare')renderCompare();
+  if(n==='activity')loadActivitySpike();
 }
 
 // ═══ COMPARISON — Mixed mode: freely combine Ticker + Sector + Industry + Konglomerat ═══
