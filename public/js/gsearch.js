@@ -49,6 +49,9 @@ async function gsOpen(code) {
   ov.classList.add('v');
   pg.innerHTML = '<div style="padding:40px;text-align:center">' + skelRows(8) + '</div>';
 
+  // Sync chart panel
+  if (typeof chartSetTicker === 'function') chartSetTicker(code);
+
   try {
     var r = await fetch('/api/ticker/' + encodeURIComponent(code));
     var d = await r.json();
