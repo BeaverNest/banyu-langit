@@ -1,6 +1,6 @@
 # 🌊 Banyu Langit — Feature Backlog
 
-## ✅ Done (42 items)
+## ✅ Done (58 items)
 
 ### Core Features
 - [x] Diary (trade journal, replies, images, tags)
@@ -44,16 +44,35 @@
 - [x] Upload history log viewer (backend)
 - [x] README.md documentation
 
+### Sprint 5 — Full Tab Redesign & Screener V5
+- [x] **5-tab layout**: Market | IDX Daily | Diary | Analysis | Insider
+- [x] **Watchlist → topbar dropdown** (always accessible, like notifications)
+- [x] **IDX Daily V2 unified**: Rankings + Digest + Flow in 1 tab
+- [x] **Digest dashboard**: Top Gainer/Loser, Sector Activity, Most Active/Freq, Foreign Buy/Sell, Volume Spikes, Dormant→Active — all clickable
+- [x] **Column toggle + drag-reorder** on Rankings table headers
+- [x] **Flow table**: draggable columns, sortable, clickable rows, no stock limit
+- [x] **Activity Spike merged** into IDX Daily (was separate tab)
+- [x] **Analysis tab**: Screener + Sectors + Compare + Correlation (4 sub-tabs)
+- [x] **Screener V5**: Rule Groups (AND/OR mixed logic), bigger popup (900px)
+- [x] **Screener config persistence** via localStorage (survives reload/rebuild)
+- [x] **New screener indicators**: Activity Score, Val/Freq/FNet Spike
+- [x] **New screener fields**: EPS, Dividend Yield, Free Float %, Industry
+- [x] **Backend groups logic**: `(Group1 AND) OR (Group2 AND)` evaluation
+- [x] **Backend activity spike** computed in /screener/run endpoint
+- [x] **Unified endpoint** `/api/idx/unified` (rankings + spike + digest + MA + sector)
+- [x] **Keyboard shortcut W** → open watchlist dropdown
+
 ---
 
 ## 📋 Remaining Backlog
 
 ### 🔧 Data Quality
-- [ ] Gap detection: exclude weekends
+- [ ] Gap detection: exclude weekends + holidays
 - [ ] Upload progress indicator (frontend)
+- [ ] Dividend yield data source (BEI/manual upload)
 
 ### 📊 Screener Enhancement
-- [ ] OR logic (selain AND)
+- [x] ~~OR logic (selain AND)~~ → Done: Rule Groups (AND/OR mixed)
 - [ ] Preset templates (Asing Akumulasi, Breakout, Oversold Bounce)
 - [ ] Screener alert — notify saham baru masuk criteria
 - [ ] Foreign flow overlay on comparison chart
@@ -66,8 +85,8 @@
 ### 📱 UX / UI
 - [ ] Morning dashboard (digest, watchlist, alerts, screener matches)
 - [ ] Diary ↔ data integration (tag ticker, auto-embed snapshot)
-- [ ] Watchlist V2 (inline flow, groups, drag reorder)
-- [ ] Notification center
+- [x] ~~Watchlist V2 (inline flow, groups, drag reorder)~~ → Moved to topbar dropdown
+- [ ] Notification center improvements
 
 ### 📥 Export & Reporting
 - [ ] Ticker detail → PDF report
@@ -80,9 +99,10 @@
 - [ ] API V2 + Webhook
 
 ### 🏗 Technical Debt
-- [ ] Split app.js further (968 lines → settings.js, compare.js, tags-editor.js)
-- [ ] Split insider.js (566 lines), idx.js (500+ lines) frontend
-- [ ] `.env` file support
+- [x] ~~Split app.js further~~ → Done: app.js now 136 lines (was 968)
+- [x] ~~Split idx.js frontend~~ → Replaced by idx-daily-v2.js
+- [ ] Split insider.js (566 lines) frontend
+- [ ] `.env` file support (partially done — server reads .env)
 - [ ] Database migration system
 - [ ] Unit tests for indicators
 - [ ] Error handling + structured logging

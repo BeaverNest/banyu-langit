@@ -100,18 +100,222 @@ async function loadScreener() {
   renderScreener();
 }
 
+// ═══ PRESET TEMPLATES ═══
+var SCR_PRESETS = [
+  { name: '🟢 Asing Akumulasi', desc: 'Foreign net buy streak + volume spike',
+    groups: [{rules:[
+      {field:'fnet_streak', op:'>', val:'3'},
+      {field:'vol_spike', op:'>', val:'1.5'}
+    ]}],
+    columns: ['close','change_pct','foreign_net_val','volume','vol_spike','frequency','ma20','ma200']
+  },
+  { name: '🚀 Breakout', desc: 'Above MA20+MA200, MACD bullish, volume spike',
+    groups: [{rules:[
+      {field:'close_vs_ma20', op:'above', val:''},
+      {field:'close_vs_ma200', op:'above', val:''},
+      {field:'macd_signal', op:'above', val:''},
+      {field:'vol_spike', op:'>', val:'1.5'}
+    ]}],
+    columns: ['close','change_pct','volume','vol_spike','foreign_net_val','ma20','ma200','macd_hist','stoch_k']
+  },
+  { name: '💎 Value Picks', desc: 'Low PER, high ROE, low PBV',
+    groups: [{rules:[
+      {field:'per', op:'>', val:'0'},
+      {field:'per', op:'<', val:'15'},
+      {field:'roe', op:'>', val:'10'},
+      {field:'pbv', op:'<', val:'1.5'}
+    ]}],
+    columns: ['close','change_pct','per','pbv','roe','roa','der','npm','foreign_net_val','ytd']
+  },
+  { name: '📉 Oversold Bounce', desc: 'Stoch oversold, below MA20, MACD turning up',
+    groups: [{rules:[
+      {field:'stoch_zone', op:'=', val:'oversold'},
+      {field:'close_vs_ma20', op:'below', val:''},
+      {field:'macd_hist', op:'>', val:'0'}
+    ]}],
+    columns: ['close','change_pct','stoch_k','stoch_d','macd_hist','ma20','volume','foreign_net_val']
+  }
+];
+
+// ═══ SCREENER ALERT — compare results vs previous, show modal report ═══
+var scrAlertLastResults = {};
+try { var _sa = JSON.parse(localStorage.getItem('scrAlertLast')); if (_sa) scrAlertLastResults = _sa; } catch(e){}
+
+async function scrCheckAlerts() {
+  if (!scrConfigs.length) { showT('⚠', 'No saved configs to check'); return; }
+  var btn = $('scr-alert-btn');
+  if (btn) { btn.textContent = '🔔 Checking...'; btn.disabled = true; }
+
+  var report = []; // {name, totalCurrent, newStocks:[], removedStocks:[], allStocks:[{code,name,close,change_pct,fnet}]}
+
+  for (var ci = 0; ci < scrConfigs.length; ci++) {
+    var cfg = scrConfigs[ci];
+    var f = cfg.filters;
+    if (typeof f === 'string') { try { f = JSON.parse(f); } catch(e) { continue; } }
+    if (!f) continue;
+
+    var groups = f.groups || (f.rules ? [f.rules] : null);
+    if (!groups || !groups.some(function(g) { return g && g.length > 0; })) continue;
+
+    try {
+      var r = await fetch('/api/screener/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups: groups, limit: 500, always_tech: true }) });
+      var d = await r.json();
+      var currentStocks = (d.data || []).map(function(s) { return { code: s.code, name: s.name, close: s.close, change_pct: s.change_pct, fnet: s.foreign_net_val }; });
+      var currentCodes = currentStocks.map(function(s) { return s.code; });
+      var prevCodes = scrAlertLastResults[cfg.id] || [];
+
+      var newStocks = currentStocks.filter(function(s) { return prevCodes.indexOf(s.code) < 0; });
+      var removedStocks = prevCodes.filter(function(c) { return currentCodes.indexOf(c) < 0; });
+
+      report.push({
+        id: cfg.id,
+        name: cfg.name,
+        totalCurrent: currentCodes.length,
+        totalPrev: prevCodes.length,
+        newStocks: newStocks,
+        removedStocks: removedStocks,
+        allStocks: currentStocks.slice(0, 20)
+      });
+
+      scrAlertLastResults[cfg.id] = currentCodes;
+    } catch(e) {
+      report.push({ id: cfg.id, name: cfg.name, error: e.message });
+    }
+  }
+
+  localStorage.setItem('scrAlertLast', JSON.stringify(scrAlertLastResults));
+  if (btn) { btn.textContent = '🔔 Check Alerts'; btn.disabled = false; }
+
+  // Show modal report
+  scrShowAlertReport(report);
+}
+
+function scrShowAlertReport(report) {
+  var existing = $('scr-alert-modal'); if (existing) existing.remove();
+  var totalNew = report.reduce(function(s, r) { return s + (r.newStocks ? r.newStocks.length : 0); }, 0);
+  var totalRemoved = report.reduce(function(s, r) { return s + (r.removedStocks ? r.removedStocks.length : 0); }, 0);
+
+  var h = '<div class="epop o" id="scr-alert-modal" onclick="if(event.target===this)this.remove()">';
+  h += '<div class="scr-modal" style="max-width:900px;max-height:85vh">';
+  h += '<div class="scr-modal-h"><span>🔔 Screener Alert Report</span><button onclick="$(\'scr-alert-modal\').remove()">✕</button></div>';
+  h += '<div class="scr-modal-body" style="max-height:calc(85vh - 60px);overflow-y:auto;padding:16px 20px">';
+
+  // Summary
+  h += '<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">';
+  h += '<div class="bd-card"><div class="bd-card-label">Configs Checked</div><div class="bd-card-val">' + report.length + '</div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">New Stocks</div><div class="bd-card-val"><span class="' + (totalNew > 0 ? 'up' : '') + '">' + totalNew + '</span></div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Removed</div><div class="bd-card-val"><span class="' + (totalRemoved > 0 ? 'dn' : '') + '">' + totalRemoved + '</span></div></div>';
+  h += '</div>';
+
+  if (!totalNew && !totalRemoved) {
+    h += '<div style="text-align:center;padding:20px;color:var(--t3)">No changes since last check. All configs returned same stocks.</div>';
+  }
+
+  // Per config
+  report.forEach(function(r) {
+    if (r.error) {
+      h += '<div style="padding:8px 12px;margin-bottom:8px;border:1px solid var(--rd);border-radius:8px;background:var(--rdB)">';
+      h += '<span style="font-weight:700">' + esc(r.name) + '</span> — Error: ' + esc(r.error);
+      h += '</div>';
+      return;
+    }
+
+    var hasChanges = (r.newStocks && r.newStocks.length) || (r.removedStocks && r.removedStocks.length);
+    var borderColor = hasChanges ? 'var(--am)' : 'var(--b2)';
+
+    h += '<div style="border:1px solid ' + borderColor + ';border-radius:10px;margin-bottom:12px;overflow:hidden">';
+    // Header
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bgH);border-bottom:1px solid var(--b1)">';
+    h += '<span style="font-weight:700;font-size:13px">' + esc(r.name) + '</span>';
+    h += '<span style="font-size:10px;color:var(--t3)">' + r.totalCurrent + ' stocks match</span>';
+    if (r.totalPrev) h += '<span style="font-size:10px;color:var(--t3)">(was ' + r.totalPrev + ')</span>';
+    if (r.newStocks.length) h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--gnB);color:var(--gn);font-weight:700">+' + r.newStocks.length + ' new</span>';
+    if (r.removedStocks.length) h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--rdB);color:var(--rd);font-weight:700">-' + r.removedStocks.length + ' out</span>';
+    h += '<span style="flex:1"></span>';
+    h += '<button class="bei-sort-btn" onclick="scrLoadConfig(' + r.id + ');$(\'scr-alert-modal\').remove();scrRun()" style="font-size:10px;padding:3px 8px">🔬 Run</button>';
+    h += '</div>';
+
+    // New stocks table
+    if (r.newStocks.length) {
+      h += '<div style="padding:6px 14px 2px"><span style="font-size:10px;font-weight:700;color:var(--gn)">🟢 NEW — just entered criteria:</span></div>';
+      h += '<table class="bei-tbl" style="width:100%"><thead><tr>';
+      h += '<th class="al" style="min-width:50px">Code</th><th class="al">Name</th><th class="ar">Close</th><th class="ar">Chg%</th><th class="ar">F.Net</th>';
+      h += '</tr></thead><tbody>';
+      r.newStocks.forEach(function(s) {
+        var chgCls = (s.change_pct||0) > 0 ? 'up' : (s.change_pct||0) < 0 ? 'dn' : '';
+        var fCls = (s.fnet||0) > 0 ? 'up' : (s.fnet||0) < 0 ? 'dn' : '';
+        h += '<tr style="background:var(--gnB);cursor:pointer" onclick="gsOpen(\'' + esc(s.code) + '\')">';
+        h += '<td class="code al">' + esc(s.code) + '</td>';
+        h += '<td class="al" style="font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.name||'') + '</td>';
+        h += '<td class="ar" style="font-family:var(--fm)">' + (s.close||0).toLocaleString() + '</td>';
+        h += '<td class="ar ' + chgCls + '" style="font-family:var(--fm)">' + ((s.change_pct||0)>0?'+':'') + (s.change_pct||0).toFixed(2) + '%</td>';
+        h += '<td class="ar ' + fCls + '" style="font-family:var(--fm)">' + fmtRp(s.fnet||0) + '</td>';
+        h += '</tr>';
+      });
+      h += '</tbody></table>';
+    }
+
+    // Removed stocks
+    if (r.removedStocks.length) {
+      h += '<div style="padding:6px 14px 2px"><span style="font-size:10px;font-weight:700;color:var(--rd)">🔴 OUT — no longer match:</span></div>';
+      h += '<div style="padding:2px 14px 8px;display:flex;gap:4px;flex-wrap:wrap">';
+      r.removedStocks.forEach(function(code) {
+        h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--rdB);color:var(--rd);font-family:var(--fm);cursor:pointer" onclick="gsOpen(\'' + esc(code) + '\')">' + esc(code) + '</span>';
+      });
+      h += '</div>';
+    }
+
+    // Current top stocks (collapsed by default if no changes)
+    if (!hasChanges && r.allStocks.length) {
+      h += '<div style="padding:6px 14px 8px"><span style="font-size:10px;color:var(--t3)">Top matches: ';
+      h += r.allStocks.slice(0, 8).map(function(s) {
+        return '<span class="code" style="cursor:pointer" onclick="gsOpen(\'' + esc(s.code) + '\')">' + esc(s.code) + '</span>';
+      }).join(' ');
+      if (r.totalCurrent > 8) h += ' +' + (r.totalCurrent - 8) + ' more';
+      h += '</span></div>';
+    }
+
+    h += '</div>';
+  });
+
+  h += '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', h);
+}
+
+function scrApplyPreset(idx) {
+  var p = SCR_PRESETS[idx];
+  if (!p) return;
+  scrGroups = JSON.parse(JSON.stringify(p.groups));
+  scrColumns = p.columns.slice();
+  scrEditId = null;
+  scrSaveState();
+  // Close preset panel if open, open editor
+  scrOpenEditor();
+}
+
 // ═══ MAIN RENDER ═══
 function renderScreener() {
   var el = $('scr-content'); if (!el) return;
   var h = '';
 
-  // Saved configs
-  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 8px">';
+  // Presets row
+  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 6px;align-items:center">';
+  h += '<span style="font-size:10px;color:var(--t3);font-weight:600">Presets:</span>';
+  SCR_PRESETS.forEach(function(p, i) {
+    h += '<button class="bei-sort-btn" onclick="scrApplyPreset(' + i + ')" style="padding:3px 8px;font-size:10px" title="' + esc(p.desc) + '">' + p.name + '</button>';
+  });
+  h += '</div>';
+
+  // Saved configs + actions
+  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 8px;align-items:center">';
+  h += '<span style="font-size:10px;color:var(--t3);font-weight:600">Saved:</span>';
   scrConfigs.forEach(function(c) {
     h += '<button class="bei-tab' + (scrEditId === c.id ? ' on' : '') + '" onclick="scrLoadConfig(' + c.id + ');scrOpenEditor()">' + esc(c.name) + '</button>';
   });
   h += '<button class="bei-tab" onclick="scrGroups=[{rules:[]}];scrEditId=null;scrColumns=[\'close\',\'change_pct\',\'volume\',\'per\',\'pbv\',\'foreign_net_val\',\'ma20\'];scrOpenEditor()" style="border-style:dashed">+ New</button>';
   h += '<span style="flex:1"></span>';
+  h += '<button class="bei-sort-btn" id="scr-alert-btn" onclick="scrCheckAlerts()" style="padding:4px 10px;font-size:11px;color:var(--am);border-color:var(--am)" title="Check all saved configs for new stocks">🔔 Check Alerts</button>';
   h += '<button class="pbtn" onclick="scrRun()" style="padding:5px 16px;font-size:12px">🔬 Run</button>';
   h += '</div>';
 
@@ -452,12 +656,16 @@ async function scrSaveNew() {
 async function scrSaveExisting() {
   if (!scrEditId) return;
   try {
-    await fetch('/api/screener/configs/' + scrEditId, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filters: { groups: scrGroups, columns: scrColumns } }) });
+    // Get current config name
     var cfg = scrConfigs.find(function(c) { return c.id === scrEditId; });
+    var name = cfg ? cfg.name : 'Untitled';
+    var r = await fetch('/api/screener/configs/' + scrEditId, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, filters: { groups: scrGroups, columns: scrColumns } }) });
+    var d = await r.json();
+    if (d.error) { showT('Error', d.error); return; }
     if (cfg) cfg.filters = { groups: JSON.parse(JSON.stringify(scrGroups)), columns: scrColumns.slice() };
     scrSaveState();
-    showT('✅', 'Updated');
+    showT('✅', 'Saved "' + name + '"');
   } catch (e) { showT('Error', e.message); }
 }
 

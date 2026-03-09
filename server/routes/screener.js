@@ -97,9 +97,10 @@ function adjustRow(row, actions) {
 router.post('/run', (req, res) => {
   try {
     const rules = req.body.rules || [];
-    const ruleLogic = req.body.logic || 'AND'; // AND | OR
-    const limit = Math.min(parseInt(req.body.limit) || 50, 500);
-    const alwaysTech = req.body.always_tech !== false; // default true
+    const groups = req.body.groups || null; // [[rule1,rule2],[rule3]] — groups of AND, connected by OR
+    const ruleLogic = req.body.logic || 'AND';
+    const limit = Math.min(parseInt(req.body.limit) || 50, 9999);
+    const alwaysTech = req.body.always_tech !== false;
     const td = latestIdxDate();
     if (!td) return res.json({ data: [], trade_date: null });
 
@@ -112,20 +113,42 @@ router.post('/run', (req, res) => {
     if (fm) { db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; }); }
     stocks = stocks.map(s => ({ ...s, fund: fundMap[s.code] || null }));
 
-    if (!rules.length && !alwaysTech) {
+    // ── Pre-compute activity spike averages ──
+    const avgDays = 20;
+    const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(avgDays + 1).map(r => r.trade_date);
+    const avgDates = dates.slice(1);
+    const avgMap = {};
+    if (avgDates.length >= 3) {
+      const ph = avgDates.map(() => '?').join(',');
+      db.prepare(`SELECT code, AVG(volume) as avg_vol, AVG(value) as avg_val, AVG(frequency) as avg_freq,
+        AVG(ABS((foreign_buy-foreign_sell)*close)) as avg_fnet_abs
+        FROM idx_daily WHERE trade_date IN (${ph}) AND close>0
+        GROUP BY code`).all(...avgDates)
+        .forEach(r => { avgMap[r.code] = r; });
+    }
+
+    // ── Quarterly data for EPS/dividend ──
+    const qtrMap = {};
+    try {
+      db.prepare('SELECT code, eps, dividend_per_share FROM quarterly_financials WHERE period_type=? ORDER BY period DESC').all('quarterly')
+        .forEach(r => { if (!qtrMap[r.code]) qtrMap[r.code] = r; }); // latest per code
+    } catch(e) {}
+
+    const hasRules = (groups && groups.some(g => g && g.length > 0)) || rules.length > 0;
+
+    if (!hasRules && !alwaysTech) {
       stocks.sort((a, b) => Math.abs(b.foreign_net_val) - Math.abs(a.foreign_net_val));
       return res.json({ data: stocks.slice(0, limit), total: stocks.length, trade_date: td });
     }
 
-    // Always calculate tech indicators
     const caMap = loadConfirmedCAs();
-
     const results = [];
+
     for (const stock of stocks) {
       let tech = {};
 
-      // Always compute tech indicators
-      const hist = db.prepare('SELECT trade_date,close,high,low,volume FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
+      // ── Tech indicators ──
+      const hist = db.prepare('SELECT trade_date,close,high,low,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
       if (hist.length >= 5) {
         const actions = caMap[stock.code];
         const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
@@ -139,8 +162,38 @@ router.post('/run', (req, res) => {
         if (actions && actions.length) tech.adjusted = true;
       }
 
-      // Apply rules (AND or OR)
-      if (rules.length) {
+      // ── Activity spike ──
+      const avg = avgMap[stock.code];
+      if (avg) {
+        tech.val_spike = avg.avg_val > 0 ? Math.round(stock.value / avg.avg_val * 10) / 10 : 0;
+        tech.freq_spike = avg.avg_freq > 0 ? Math.round(stock.frequency / avg.avg_freq * 10) / 10 : 0;
+        tech.fnet_spike = avg.avg_fnet_abs > 0 ? Math.round(Math.abs(stock.foreign_net_val) / avg.avg_fnet_abs * 10) / 10 : 0;
+        tech.activity_score = Math.round(((tech.val_spike || 0) * 0.3 + (tech.freq_spike || 0) * 0.3 + (tech.vol_ratio || 0) * 0.2 + (tech.fnet_spike || 0) * 0.2) * 10) / 10;
+      }
+
+      // ── EPS / Dividend from quarterly ──
+      const qtr = qtrMap[stock.code];
+      if (qtr) {
+        if (!stock.fund) stock.fund = {};
+        if (qtr.eps) stock.fund.eps = qtr.eps;
+        if (qtr.dividend_per_share && stock.close) stock.fund.div_yield = Math.round(qtr.dividend_per_share / stock.close * 10000) / 100;
+      }
+
+      // ── Free float ──
+      if (stock.tradeable_shares && stock.listed_shares) {
+        if (!stock.fund) stock.fund = {};
+        stock.fund.free_float = Math.round(stock.tradeable_shares / stock.listed_shares * 1000) / 10;
+      }
+
+      // ── Apply rules: groups mode or legacy ──
+      if (groups && groups.some(g => g && g.length > 0)) {
+        // Groups: (group1 AND) OR (group2 AND) OR ...
+        const pass = groups.some(group => {
+          if (!group || !group.length) return true;
+          return group.every(rule => evalRule(rule, stock, tech));
+        });
+        if (!pass) continue;
+      } else if (rules.length) {
         let pass;
         if (ruleLogic === 'OR') {
           pass = rules.some(rule => evalRule(rule, stock, tech));
@@ -174,6 +227,10 @@ function evalRule(rule, stock, tech) {
   if (f === 'frequency') return applyOp(stock.frequency, op, val);
   if (f === 'foreign_net_val') return applyOp(stock.foreign_net_val, op, val);
   if (f === 'vol_spike') return tech.vol_ratio ? applyOp(tech.vol_ratio, op, val) : false;
+  if (f === 'val_spike') return tech.val_spike ? applyOp(tech.val_spike, op, val) : false;
+  if (f === 'freq_spike') return tech.freq_spike ? applyOp(tech.freq_spike, op, val) : false;
+  if (f === 'fnet_spike') return tech.fnet_spike ? applyOp(tech.fnet_spike, op, val) : false;
+  if (f === 'activity_score') return tech.activity_score ? applyOp(tech.activity_score, op, val) : false;
   // Fundamental
   if (f === 'per') return fund.per ? applyOp(fund.per, op, val) : false;
   if (f === 'pbv') return fund.pbv ? applyOp(fund.pbv, op, val) : false;
@@ -184,7 +241,11 @@ function evalRule(rule, stock, tech) {
   if (f === 'mkt_cap') return applyOp(fund.mkt_cap || 0, op, val);
   if (f === 'total_rev') return applyOp(fund.total_rev || 0, op, val);
   if (f === 'ytd') return applyOp(fund.ytd || 0, op, val);
+  if (f === 'eps') return fund.eps ? applyOp(fund.eps, op, val) : false;
+  if (f === 'div_yield') return fund.div_yield ? applyOp(fund.div_yield, op, val) : false;
+  if (f === 'free_float') return fund.free_float ? applyOp(fund.free_float, op, val) : false;
   if (f === 'sector') return fund.sector === val;
+  if (f === 'industry') return fund.industry ? fund.industry.toUpperCase().includes((val || '').toUpperCase()) : false;
   if (f === 'idx_index') return fund.idx_index && fund.idx_index.includes(val);
   // MA compare
   if (f.startsWith('close_vs_ma')) { const p = parseInt(f.replace('close_vs_ma', '')); const ma = tech['ma' + p]; if (!ma) return false; return op === 'above' ? stock.close > ma : stock.close < ma; }
@@ -290,7 +351,7 @@ router.get('/sectors', (req, res) => {
 
 router.get('/configs', (req, res) => { try { const c = db.prepare('SELECT * FROM screener_configs ORDER BY updated_at DESC').all(); c.forEach(x => { try { x.filters = JSON.parse(x.filters); } catch { x.filters = {}; } }); res.json(c); } catch { res.json([]); } });
 router.post('/configs', (req, res) => { try { const { name, filters } = req.body; if (!name) return res.status(400).json({ error: 'Name required' }); const r = db.prepare('INSERT INTO screener_configs(name,filters) VALUES(?,?)').run(name, JSON.stringify(filters || {})); res.json({ success: true, id: r.lastInsertRowid }); } catch (e) { res.json({ error: e.message }); } });
-router.put('/configs/:id', (req, res) => { try { const { name, filters } = req.body; db.prepare("UPDATE screener_configs SET name=?,filters=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(filters || {}), req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
+router.put('/configs/:id', (req, res) => { try { const { name, filters } = req.body; if (name) { db.prepare("UPDATE screener_configs SET name=?,filters=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(filters || {}), req.params.id); } else { db.prepare("UPDATE screener_configs SET filters=?,updated_at=datetime('now') WHERE id=?").run(JSON.stringify(filters || {}), req.params.id); } res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 router.delete('/configs/:id', (req, res) => { try { db.prepare('DELETE FROM screener_configs WHERE id=?').run(req.params.id); res.json({ success: true }); } catch (e) { res.json({ error: e.message }); } });
 
 // ═══ Activity Spike Detection ═══

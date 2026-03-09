@@ -1,22 +1,24 @@
 # 🌊 Banyu Langit — Execution Roadmap
 
-## Current State (March 8, 2026)
+## Current State (March 8, 2026 — Evening)
 
 ### Stats
-- **48 files** (was 35), all features working
-- **12 JS frontend files** (was 9, added sector-intelligence.js)
-- **573 lines** screener.js backend (was 292, added sector-intel + correlation + fundamental-lists)
-- **968 lines** app.js (was 1072, extracted sector code)
-- **588 lines** sector-intelligence.js (new)
-- **10 SQLite tables** + auto-migration for schema changes
+- **48 files** total, 11 modified/new this session
+- **14 JS frontend files** (was 12, added idx-daily-v2.js, removed idx.js + activity-spike.js)
+- **739 lines** screener.js backend (was 573, added groups + spike + new fields)
+- **136 lines** app.js (was 968 — massive reduction via redesign)
+- **608 lines** idx-daily-v2.js (new, replaces idx.js 500+ lines + activity-spike.js 200+ lines)
+- **495 lines** screener.js frontend (was 403, V5 with rule groups)
+- **11 SQLite tables** + auto-migration for schema changes
 
-### What's New This Session
-- Sector Intelligence: Rotation Heatmap, Flow Timeline, Correlation (3 modes)
-- Font consistency fix across all 6 CSS files
-- Ticker Page flow table proportional layout
-- Stock table: sortable + column toggle
-- Correlation: ownership-based, industry-based, custom + common owners
-- README.md comprehensive documentation
+### What's New This Session (Sprint 5)
+- **Full tab redesign**: 5 tabs (Market | IDX Daily | Diary | Analysis | Insider)
+- **Watchlist moved to topbar** dropdown (always accessible)
+- **IDX Daily V2**: unified Rankings + Digest + Flow with column toggle + drag-reorder
+- **Digest dashboard**: mockup-style cards (Top Gainer/Loser, Sector Activity, Most Active, Foreign Buy/Sell, Volume Spikes, Dormant→Active)
+- **Screener V5**: Rule Groups (AND/OR mixed), bigger popup, localStorage persistence
+- **New indicators**: Activity Score, Val/Freq/FNet Spike, EPS, Free Float %, Industry
+- **Backend**: groups evaluation, activity spike in /run, unified endpoint /api/idx/unified
 
 ---
 
@@ -25,64 +27,40 @@
 ### 🟢 Solid & Stable
 | Area | Status |
 |------|--------|
-| Diary, Watchlist, Alerts | Production-ready, rarely touched |
-| IDX Daily (rankings, flow, anomaly, digest) | Stable, well-tested |
-| Screener engine | Stable, 292 lines backend |
+| Diary, Watchlist, Alerts | Production-ready, moved to dropdown |
+| Screener V5 engine | Rule groups working, configs persist |
 | Insider Ownership + Tags | Stable, CRUD working |
 | Corporate Action system | Stable, auto-detect reliable |
 | Settings modal (6 tabs) | Stable |
 | Export CSV (4 types) | Stable |
-| Global Search + Ticker Page | Stable |
-| Market Overview | Stable (depends on Yahoo Finance) |
+| Global Search + Ticker Page | Stable, tab refs updated |
+| Market Overview + News | Stable |
+| Comparison (mixed mode) | Stable, moved to Analysis tab |
 
-### 🟡 Working but Needs Polish
+### 🟡 Working but Needs Testing
 | Area | Issue | Risk |
 |------|-------|------|
-| Sector Intelligence (new) | New code, lightly tested | Medium — complex SQL queries |
-| Correlation (new) | Ownership mode can be slow for large datasets | Medium — O(n²) pair comparison |
-| Upload logs/duplicate detect | Backend ready, frontend deploy issue | Low — just deployment |
-| app.js (968 lines) | Still large, mixes settings + compare + misc | Low — works but hard to modify |
+| IDX Daily V2 (new) | New unified code, drag-reorder | Medium — needs user testing |
+| Screener Rule Groups (new) | Backend groups eval new | Medium — test multi-group combos |
+| Watchlist dropdown (new) | Moved from tab to dropdown | Low — simpler UI |
+| Analysis tab routing (new) | 4 sub-tabs, new routing | Low — mostly wiring |
+| Correlation standalone tab | Wrapper function added | Low — existing code |
 
-### 🔴 Technical Debt — Priority
+### 🟢 Technical Debt — Resolved
+| Item | Status |
+|------|--------|
+| **app.js split** | ✅ Done — 136 lines (was 968) |
+| **idx.js frontend split** | ✅ Replaced by idx-daily-v2.js |
+| **activity-spike.js** | ✅ Merged into idx-daily-v2.js |
+| **Screener OR logic** | ✅ Done — Rule Groups (AND/OR mixed) |
+
+### 🔴 Technical Debt — Remaining
 | Item | Impact | Effort |
 |------|--------|--------|
-| **app.js split** | High — 968 lines is hard to maintain | Medium — 2-3 new files |
-| **No `.env` support** | Medium — PORT, DB_PATH hardcoded | Low — 30 min |
+| **insider.js split** | Medium — 566 lines | Medium |
 | **No error boundary** | Medium — unhandled errors crash page | Medium |
-| **No caching** | Medium — screener/run recalculates every time | Medium |
-| **No tests** | Low now, High later — regressions possible | High effort |
-
----
-
-## Recommended Next: Stability Sprint
-
-Before adding new features, I recommend a **stability sprint** to:
-
-### Phase A: Code Organization (reduce maintenance risk)
-1. **Split app.js** → `settings.js` (~300 lines), `compare.js` (~200 lines), `tags-editor.js` (~200 lines), keep `app.js` as router (~250 lines)
-2. **`.env` support** → PORT, DB_PATH, LOG_LEVEL configurable
-3. **Fix deploy pipeline** → ensure all frontend changes actually reach container (the recurring `--no-cache` rebuild issue)
-
-### Phase B: Performance & Resilience
-4. **In-memory cache** for heavy endpoints: `/screener/run`, `/screener/sector-intelligence`, `/screener/correlation`
-5. **Error boundaries** — global try/catch in frontend, structured error responses
-6. **Correlation optimization** — pre-compute common owners map once, not per-pair
-
-### Phase C: Testing & Validation
-7. **Smoke tests** — script that hits every API endpoint and checks 200
-8. **Indicator unit tests** — MA, MACD, Stochastic calculation correctness
-
----
-
-## After Stability: Feature Priorities
-
-| Priority | Feature | Value |
-|----------|---------|-------|
-| 1 | Morning Dashboard | Daily landing page — digest + watchlist + alerts + screener |
-| 2 | Screener Presets | 1-click templates for common strategies |
-| 3 | Insider Activity Alerts | Detect accumulation/distribution between snapshots |
-| 4 | Konglomerat Network V2 | Full-screen D3 visualization |
-| 5 | Telegram Bot | Remote monitoring |
+| **No caching** | Medium — screener/run is heavy (computes all indicators) | Medium |
+| **No tests** | Low now, High later | High effort |
 
 ---
 
@@ -94,10 +72,23 @@ Before adding new features, I recommend a **stability sprint** to:
 | Sprint 2 | Data Engine | ✅ Complete |
 | Sprint 3 | Analysis & UX | ✅ Complete |
 | Sprint 4 | Sector Intelligence & Polish | ✅ Complete |
-| **Sprint 5** | **Stability & Refactor** | **🔜 Recommended next** |
-| Sprint 6 | Morning Dashboard + Presets | Planned |
-| Sprint 7 | Insider Intelligence | Planned |
-| Sprint 8 | Automation (Telegram, cron) | Planned |
+| **Sprint 5** | **Full Tab Redesign + Screener V5** | **✅ Complete** |
+| Sprint 6 | Testing + Stability | 🔜 Recommended next |
+| Sprint 7 | Morning Dashboard + Presets | Planned |
+| Sprint 8 | Insider Intelligence | Planned |
+| Sprint 9 | Automation (Telegram, cron) | Planned |
+
+---
+
+## After Testing: Feature Priorities
+
+| Priority | Feature | Value |
+|----------|---------|-------|
+| 1 | Screener Presets | 1-click templates (Asing Akumulasi, Breakout, Oversold Bounce) |
+| 2 | Morning Dashboard | Daily landing page — digest + watchlist + alerts + screener |
+| 3 | Insider Activity Alerts | Detect accumulation/distribution between snapshots |
+| 4 | Konglomerat Network V2 | Full-screen D3 visualization |
+| 5 | Telegram Bot | Remote monitoring |
 
 ---
 
@@ -111,10 +102,46 @@ Before adding new features, I recommend a **stability sprint** to:
 | 2026-03-07 | Mixed comparison mode | More flexible than per-mode |
 | 2026-03-07 | Tags CRUD in browser | Less friction than Excel |
 | 2026-03-08 | Monthly aggregation for heatmap | Weekly too granular, unreadable |
-| 2026-03-08 | Correlation 3 modes (ownership/industry/custom) | More meaningful than top-N by value |
+| 2026-03-08 | Correlation 3 modes | More meaningful than top-N by value |
 | 2026-03-08 | Extract sector-intelligence.js | app.js was 1072 lines, too large |
-| 2026-03-08 | table-layout:auto over fixed | Fixed widths cause gaps |
-| 2026-03-08 | **Recommend stability sprint before new features** | Code growing fast, need foundation |
+| 2026-03-08 | **5-tab redesign** | Reduce overlap, cleaner UX — Market/IDX/Diary/Analysis/Insider |
+| 2026-03-08 | **Watchlist → topbar dropdown** | Always accessible, saves tab space |
+| 2026-03-08 | **IDX Daily = unified** | Rankings + Activity Spike + Digest + Flow in 1 tab |
+| 2026-03-08 | **Activity Spike merged** | Was standalone sub-tab, now columns in IDX Daily |
+| 2026-03-08 | **Digest as default view** | Dashboard-first, detail second |
+| 2026-03-08 | **Drag-drop column reorder** | More intuitive than dropdown selector |
+| 2026-03-08 | **Rule Groups (AND/OR)** | `(Group1 AND) OR (Group2 AND)` — powerful screening |
+| 2026-03-08 | **Config persist in localStorage** | Survives Docker rebuild — screener state not lost |
+| 2026-03-08 | **Skip Dividend Yield data** | No reliable source yet, field ready when data available |
+
+---
+
+## File Changes — Sprint 5
+
+### New Files
+| File | Lines | Purpose |
+|------|-------|---------|
+| `public/js/idx-daily-v2.js` | 608 | Unified IDX Daily (replaces idx.js + activity-spike.js) |
+
+### Modified Files
+| File | Lines | Changes |
+|------|-------|---------|
+| `public/index.html` | 189 | 5-tab layout + watchlist dropdown |
+| `public/js/app.js` | 136 | New routing, watchlist toggle (was 968!) |
+| `public/js/screener.js` | 495 | V5: rule groups, persistence, new indicators |
+| `public/js/compare.js` | 342 | Sub-tab routing fix |
+| `public/js/gsearch.js` | 517 | Tab reference fixes |
+| `public/js/watchlist.js` | 37 | Dropdown mode |
+| `public/js/sector-intelligence.js` | 627 | Correlation wrapper |
+| `public/js/init.js` | 3 | Updated init calls |
+| `server/routes/idx.js` | 750 | Unified endpoint + no limit |
+| `server/routes/screener.js` | 739 | Groups logic + spike calc + new fields |
+
+### Removed Files
+| File | Reason |
+|------|--------|
+| `public/js/idx.js` | Replaced by idx-daily-v2.js |
+| `public/js/activity-spike.js` | Merged into idx-daily-v2.js |
 
 ---
 

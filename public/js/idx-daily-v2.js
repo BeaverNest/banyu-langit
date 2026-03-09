@@ -77,7 +77,7 @@ function renderIdxDaily() {
     h += idxRenderColPanel();
     h += '</div>';
 
-    h += '<div id="idx-body"></div>';
+    h += '<div id="idx-body" style="flex:1;overflow-y:auto"></div>';
     el.innerHTML = h;
     idxShellRendered = true;
   }

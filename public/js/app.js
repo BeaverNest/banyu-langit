@@ -6,7 +6,7 @@ function loadChart(){
   const th=document.documentElement.getAttribute('data-theme')||'light';
   const bg=th==='dark'?'#0F0F0F':'#ffffff';
   const gr=th==='dark'?'rgba(242,242,242,0.06)':'rgba(0,0,0,0.06)';
-  const cfg=JSON.stringify({"allow_symbol_change":true,"calendar":false,"details":true,"hide_side_toolbar":false,"hide_top_toolbar":false,"hide_legend":false,"hide_volume":false,"hotlist":false,"interval":"D","locale":"en","save_image":true,"style":"1","symbol":"IDX:COMPOSITE","theme":th,"timezone":"Asia/Jakarta","backgroundColor":bg,"gridColor":gr,"watchlist":[],"withdateranges":true,"compareSymbols":[],"studies":[],"autosize":true});
+  const cfg=JSON.stringify({"allow_symbol_change":true,"calendar":false,"details":false,"hide_side_toolbar":false,"hide_top_toolbar":false,"hide_legend":false,"hide_volume":false,"hotlist":false,"interval":"D","locale":"en","save_image":true,"style":"1","symbol":"IDX:COMPOSITE","theme":th,"timezone":"Asia/Jakarta","backgroundColor":bg,"gridColor":gr,"watchlist":[],"withdateranges":false,"range":"YTD","compareSymbols":[],"studies":["STD;SMA@tv-basicstudies-1|{\"length\":20}","STD;SMA@tv-basicstudies-1|{\"length\":200}"],"autosize":true});
   const html=`<!DOCTYPE html><html><head><style>body{margin:0;overflow:hidden;height:100vh}</style></head><body><div class="tradingview-widget-container" style="height:100%;width:100%"><div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div><script src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>${cfg}<\/script></div></body></html>`;
   const f=document.createElement('iframe');f.style.cssText='width:100%;height:100%;border:none';
   $('chart').innerHTML='';$('chart').appendChild(f);
