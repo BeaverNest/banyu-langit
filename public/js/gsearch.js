@@ -88,7 +88,7 @@ function renderTickerPage(d) {
   }
   h += '<div class="tp-actions">';
   h += '<button onclick="addWatchlistFrom(\'' + esc(code) + '\');showT(\'Watchlist\',\'' + esc(code) + '.JK added\')">+ Watchlist</button>';
-  h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[4]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
+  h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[5]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
   h += '<button onclick="gsClose();togWL();setTimeout(function(){$(\'as\').value=\'' + esc(code) + '.JK\';},200)">🔔 Alert</button>';
   h += '</div></div>';
   // Sector & index badges

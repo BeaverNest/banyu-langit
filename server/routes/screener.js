@@ -345,7 +345,9 @@ router.get('/sectors', (req, res) => {
         .map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
     }
 
-    res.json({ trade_date: td, snapshot_month: sm, sectors, industries, stocks: stockList });
+    res.json({ trade_date: td, snapshot_month: sm, sectors, industries, stocks: stockList,
+      ...(req.query.treemap ? { treemap: rows.map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct || 0, mkt_cap: r.mkt_cap || 0, value: r.value || 0, fnet_val: r.fnet_val || 0 })) } : {})
+    });
   } catch (e) { res.json({ error: e.message }); }
 });
 

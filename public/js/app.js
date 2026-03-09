@@ -6,14 +6,14 @@ function loadChart(){
   const th=document.documentElement.getAttribute('data-theme')||'light';
   const bg=th==='dark'?'#0F0F0F':'#ffffff';
   const gr=th==='dark'?'rgba(242,242,242,0.06)':'rgba(0,0,0,0.06)';
-  const cfg=JSON.stringify({"allow_symbol_change":true,"calendar":false,"details":false,"hide_side_toolbar":false,"hide_top_toolbar":false,"hide_legend":false,"hide_volume":false,"hotlist":false,"interval":"D","locale":"en","save_image":true,"style":"1","symbol":"IDX:COMPOSITE","theme":th,"timezone":"Asia/Jakarta","backgroundColor":bg,"gridColor":gr,"watchlist":[],"withdateranges":false,"range":"YTD","compareSymbols":[],"studies":["STD;SMA@tv-basicstudies-1|{\"length\":20}","STD;SMA@tv-basicstudies-1|{\"length\":200}"],"autosize":true});
+  const cfg=JSON.stringify({"allow_symbol_change":true,"calendar":false,"details":false,"hide_side_toolbar":false,"hide_top_toolbar":false,"hide_legend":false,"hide_volume":false,"hotlist":false,"interval":"D","locale":"en","save_image":true,"style":"1","symbol":"IDX:COMPOSITE","theme":th,"timezone":"Asia/Jakarta","backgroundColor":bg,"gridColor":gr,"watchlist":[],"withdateranges":false,"range":"YTD","compareSymbols":[],"studies":["STD;SMA"],"autosize":true});
   const html=`<!DOCTYPE html><html><head><style>body{margin:0;overflow:hidden;height:100vh}</style></head><body><div class="tradingview-widget-container" style="height:100%;width:100%"><div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div><script src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>${cfg}<\/script></div></body></html>`;
   const f=document.createElement('iframe');f.style.cssText='width:100%;height:100%;border:none';
   $('chart').innerHTML='';$('chart').appendChild(f);
   f.contentDocument.open();f.contentDocument.write(html);f.contentDocument.close();
 }
 
-// ═══ MAIN TAB ROUTING — 5 tabs ═══
+// ═══ MAIN TAB ROUTING — 6 tabs ═══
 function stab(n,b){
   document.querySelectorAll('.tabs .tab').forEach(x=>x.classList.remove('on'));
   if(b)b.classList.add('on');
@@ -22,6 +22,7 @@ function stab(n,b){
   if(n==='mkt')loadMktOverview();
   if(n==='idx')loadIdxDaily();
   if(n==='analysis')loadScreener();
+  if(n==='pf')loadPortfolio();
   if(n==='ins')chkIns();
 }
 
@@ -114,10 +115,10 @@ function up(){h.classList.remove('ac');document.body.classList.remove('rz');docu
 document.addEventListener('keydown',function(e){
   var tag=e.target.tagName;if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
-  if(e.key>='1'&&e.key<='5'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var tabs=document.querySelectorAll('.tabs .tab');var idx=parseInt(e.key)-1;if(tabs[idx]){tabs[idx].click();e.preventDefault();}}
+  if(e.key>='1'&&e.key<='6'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var tabs=document.querySelectorAll('.tabs .tab');var idx=parseInt(e.key)-1;if(tabs[idx]){tabs[idx].click();e.preventDefault();}}
   if(e.key==='c'){var ct=$('cta');if(ct){ct.focus();e.preventDefault();}}
   if(e.key==='w'){togWL();e.preventDefault();}
-  if(e.key==='?'){showT('Shortcuts','/ Search · 1-5 Tabs · C Compose · W Watchlist · Esc Close');e.preventDefault();}
+  if(e.key==='?'){showT('Shortcuts','/ Search · 1-6 Tabs · C Compose · W Watchlist · Esc Close');e.preventDefault();}
   if(e.key==='Escape'){closeSettings();$('wldrop').classList.remove('o');}
 });
 

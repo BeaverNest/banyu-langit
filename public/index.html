@@ -58,6 +58,7 @@
     <button class="tab" onclick="stab('idx',this)">📊 IDX Daily</button>
     <button class="tab" onclick="stab('diary',this)">📝 Diary</button>
     <button class="tab" onclick="stab('analysis',this)">🔬 Analysis</button>
+    <button class="tab" onclick="stab('pf',this)">💼 Portfolio</button>
     <button class="tab" onclick="stab('ins',this)">🔍 Insider</button>
   </div>
 
@@ -106,7 +107,12 @@
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
   </div>
 
-  <!-- ═══ TAB 5: INSIDER (Unchanged) ═══ -->
+  <!-- ═══ TAB 5: PORTFOLIO (Tracker + Kelly) ═══ -->
+  <div class="tpanel" id="t-pf">
+    <div id="pf-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading portfolio...</div></div>
+  </div>
+
+  <!-- ═══ TAB 6: INSIDER (Unchanged) ═══ -->
   <div class="tpanel" id="t-ins">
     <div class="ins-topbar" id="ins-topbar">
       <div class="ins-nav">
@@ -183,6 +189,7 @@
 <script src="/js/fund-upload.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
+<script src="/js/portfolio.js"></script>
 <script src="/js/insider.js"></script>
 <script src="/js/init.js"></script>
 </body>

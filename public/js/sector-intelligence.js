@@ -25,79 +25,188 @@ async function loadSectorView(){
   else if(secIntView==='correlation')await loadSecCorrelation(body);
 }
 
-// ═══ 1. OVERVIEW — existing sector cards with drill-down (preserved) ═══
+// ═══ 1. OVERVIEW — Sector Treemap (finviz-style) ═══
 var sectorDrillSector='',sectorDrillIndustry='';
+var tmSize='mkt_cap'; // mkt_cap | value
+var tmColor='chg_pct'; // chg_pct | fnet_val
+var tmCache=null;
 
 async function loadSecOverview(el){
   el.innerHTML='<div style="padding:12px">'+skelRows(6)+'</div>';
   try{
-    var url='/api/screener/sectors';
-    if(sectorDrillSector)url+='?sector='+encodeURIComponent(sectorDrillSector);
-    if(sectorDrillIndustry)url+=(sectorDrillSector?'&':'?')+'industry='+encodeURIComponent(sectorDrillIndustry);
+    var url='/api/screener/sectors?treemap=1';
+    if(sectorDrillSector)url+='&sector='+encodeURIComponent(sectorDrillSector);
+    if(sectorDrillIndustry)url+='&industry='+encodeURIComponent(sectorDrillIndustry);
     var r=await fetch(url);var d=await r.json();
     if(d.error){el.innerHTML='<div class="ne">'+d.error+'</div>';return;}
-    var h='';
-
-    // Breadcrumb
-    h+='<div style="padding:8px 12px;font-size:12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--b1)">';
-    h+='<span class="code" style="cursor:pointer" onclick="sectorDrillSector=\'\';sectorDrillIndustry=\'\';loadSectorView()">All Sectors</span>';
-    if(sectorDrillSector){h+=' <span style="color:var(--t3)">›</span> <span class="code" style="cursor:pointer" onclick="sectorDrillIndustry=\'\';loadSectorView()">'+esc(sectorDrillSector)+'</span>';}
-    if(sectorDrillIndustry){h+=' <span style="color:var(--t3)">›</span> <span style="font-weight:600">'+esc(sectorDrillIndustry)+'</span>';}
-    if(d.snapshot_month)h+='<span style="flex:1"></span><span style="color:var(--t3);font-family:var(--fm);font-size:10px">BEI '+d.snapshot_month+'</span>';
-    h+='</div>';
-
-    if(!sectorDrillSector&&!sectorDrillIndustry){
-      h+='<div style="padding:12px"><div style="font-weight:700;font-size:14px;margin-bottom:10px">Sector Overview</div>';
-      h+='<div class="sector-grid">';
-      (d.sectors||[]).forEach(function(s){
-        var ytdCls=s.avg_ytd>0?'up':s.avg_ytd<0?'dn':'';
-        var fnetCls=s.total_fnet>0?'up':s.total_fnet<0?'dn':'';
-        h+='<div class="sector-card" onclick="sectorDrillSector=\''+esc(s.sector)+'\';loadSectorView()">';
-        h+='<div class="sc-header"><span class="sc-name">'+esc(s.sector)+'</span><span class="sc-count">'+s.count+' stocks</span></div>';
-        h+='<div class="sc-stats">';
-        h+='<div class="sc-stat"><div class="sc-stat-val">'+fmtRp(s.total_mcap)+'</div><div class="sc-stat-lbl">Mkt Cap</div></div>';
-        h+='<div class="sc-stat"><div class="sc-stat-val">'+s.avg_per+'x</div><div class="sc-stat-lbl">Avg PER</div></div>';
-        h+='<div class="sc-stat"><div class="sc-stat-val">'+s.avg_roe+'%</div><div class="sc-stat-lbl">Avg ROE</div></div>';
-        h+='<div class="sc-stat"><div class="sc-stat-val '+ytdCls+'">'+(s.avg_ytd>0?'+':'')+s.avg_ytd+'%</div><div class="sc-stat-lbl">Avg YTD</div></div>';
-        h+='<div class="sc-stat"><div class="sc-stat-val '+fnetCls+'">'+fmtRp(s.total_fnet)+'</div><div class="sc-stat-lbl">F.Net</div></div>';
-        h+='</div></div>';
-      });
-      h+='</div></div>';
-    }else if(sectorDrillSector&&!sectorDrillIndustry){
-      h+='<div style="padding:12px"><div style="font-weight:700;font-size:14px;margin-bottom:10px">'+esc(sectorDrillSector)+' — Industries</div>';
-      if(d.industries&&d.industries.length){
-        h+='<div class="sector-grid">';
-        d.industries.forEach(function(s){
-          var ytdCls=s.avg_ytd>0?'up':s.avg_ytd<0?'dn':'';
-          var fnetCls=s.total_fnet>0?'up':s.total_fnet<0?'dn':'';
-          h+='<div class="sector-card" onclick="sectorDrillIndustry=\''+esc(s.industry)+'\';loadSectorView()">';
-          h+='<div class="sc-header"><span class="sc-name">'+esc(s.industry)+'</span><span class="sc-count">'+s.count+' stocks</span></div>';
-          h+='<div class="sc-stats">';
-          h+='<div class="sc-stat"><div class="sc-stat-val">'+fmtRp(s.total_mcap)+'</div><div class="sc-stat-lbl">Mkt Cap</div></div>';
-          h+='<div class="sc-stat"><div class="sc-stat-val">'+s.avg_per+'x</div><div class="sc-stat-lbl">PER</div></div>';
-          h+='<div class="sc-stat"><div class="sc-stat-val">'+s.avg_roe+'%</div><div class="sc-stat-lbl">ROE</div></div>';
-          h+='<div class="sc-stat"><div class="sc-stat-val '+ytdCls+'">'+(s.avg_ytd>0?'+':'')+s.avg_ytd+'%</div><div class="sc-stat-lbl">YTD</div></div>';
-          h+='<div class="sc-stat"><div class="sc-stat-val '+fnetCls+'">'+fmtRp(s.total_fnet)+'</div><div class="sc-stat-lbl">F.Net</div></div>';
-          h+='</div></div>';
-        });
-        h+='</div>';
-      }
-      if(d.stocks&&d.stocks.length){
-        h+='<div style="font-weight:600;font-size:12px;margin:16px 0 8px;color:var(--t2)">Top Stocks by Market Cap</div>';
-        h+=sectorStockTable(d.stocks);
-      }
-      h+='</div>';
-    }else{
-      h+='<div style="padding:12px"><div style="font-weight:700;font-size:14px;margin-bottom:10px">'+esc(sectorDrillIndustry)+'</div>';
-      if(d.stocks&&d.stocks.length){
-        h+=sectorStockTable(d.stocks);
-      }else{
-        h+='<div class="ne">No stocks in this industry</div>';
-      }
-      h+='</div>';
-    }
-    el.innerHTML=h;
+    tmCache=d;
+    renderTreemapView(el,d);
   }catch(e){el.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
+}
+
+function renderTreemapView(el,d){
+  var h='';
+  // Breadcrumb
+  h+='<div style="padding:8px 12px;font-size:12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--b1)">';
+  h+='<span class="code" style="cursor:pointer" onclick="sectorDrillSector=\'\';sectorDrillIndustry=\'\';loadSectorView()">All Sectors</span>';
+  if(sectorDrillSector){h+=' <span style="color:var(--t3)">›</span> <span class="code" style="cursor:pointer" onclick="sectorDrillIndustry=\'\';loadSectorView()">'+esc(sectorDrillSector)+'</span>';}
+  if(sectorDrillIndustry){h+=' <span style="color:var(--t3)">›</span> <span style="font-weight:600">'+esc(sectorDrillIndustry)+'</span>';}
+  if(d.snapshot_month)h+='<span style="flex:1"></span><span style="color:var(--t3);font-family:var(--fm);font-size:10px">BEI '+d.snapshot_month+'</span>';
+  h+='</div>';
+
+  // Controls
+  h+='<div style="display:flex;gap:6px;padding:8px 12px;align-items:center;flex-wrap:wrap">';
+  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Size:</span>';
+  h+='<button class="bei-sort-btn'+(tmSize==='mkt_cap'?' on':'')+'" onclick="tmSize=\'mkt_cap\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Mkt Cap</button>';
+  h+='<button class="bei-sort-btn'+(tmSize==='value'?' on':'')+'" onclick="tmSize=\'value\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Value</button>';
+  h+='<span style="width:12px"></span>';
+  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Color:</span>';
+  h+='<button class="bei-sort-btn'+(tmColor==='chg_pct'?' on':'')+'" onclick="tmColor=\'chg_pct\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Change %</button>';
+  h+='<button class="bei-sort-btn'+(tmColor==='fnet_val'?' on':'')+'" onclick="tmColor=\'fnet_val\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">F.Net</button>';
+  h+='<span style="flex:1"></span>';
+  // Legend
+  h+='<span style="font-size:9px;color:var(--t3)">';
+  if(tmColor==='chg_pct') h+='<span style="color:#22c55e">■</span> +3%+ <span style="color:#86efac">■</span> +1% <span style="color:var(--t3)">■</span> 0% <span style="color:#fca5a5">■</span> -1% <span style="color:#ef4444">■</span> -3%+';
+  else h+='<span style="color:#22c55e">■</span> Buy <span style="color:var(--t3)">■</span> Neutral <span style="color:#ef4444">■</span> Sell';
+  h+='</span>';
+  h+='</div>';
+
+  // Treemap container
+  h+='<div id="tm-chart" style="padding:4px 12px 12px"></div>';
+
+  // Drill-down: if sector selected, show stock table below
+  if(sectorDrillIndustry && d.stocks && d.stocks.length){
+    h+='<div style="padding:0 12px 12px">'+sectorStockTable(d.stocks)+'</div>';
+  }
+
+  el.innerHTML=h;
+
+  // Build and render treemap
+  var stocks=d.treemap||[];
+  if(!stocks.length){$('tm-chart').innerHTML='<div class="ne">No treemap data available</div>';return;}
+
+  // Filter by drill level
+  if(sectorDrillSector&&!sectorDrillIndustry){
+    stocks=stocks.filter(function(s){return s.sector===sectorDrillSector;});
+  }else if(sectorDrillIndustry){
+    stocks=stocks.filter(function(s){return s.industry===sectorDrillIndustry;});
+  }
+
+  // Filter stocks with valid size
+  stocks=stocks.filter(function(s){return (s[tmSize]||0)>0;});
+  if(!stocks.length){$('tm-chart').innerHTML='<div class="ne">No data for selected filters</div>';return;}
+
+  drawTreemap(stocks);
+}
+
+function tmGetColor(stock){
+  if(tmColor==='chg_pct'){
+    var v=stock.chg_pct||0;
+    if(v>=3) return '#15803d'; // dark green
+    if(v>=1) return '#22c55e'; // green
+    if(v>=0.5) return '#86efac'; // light green
+    if(v>-0.5) return '#6b7280'; // gray
+    if(v>-1) return '#fca5a5'; // light red
+    if(v>-3) return '#ef4444'; // red
+    return '#b91c1c'; // dark red
+  }else{
+    var f=stock.fnet_val||0;
+    if(f>1e10) return '#15803d';
+    if(f>1e9) return '#22c55e';
+    if(f>1e8) return '#86efac';
+    if(f>-1e8) return '#6b7280';
+    if(f>-1e9) return '#fca5a5';
+    if(f>-1e10) return '#ef4444';
+    return '#b91c1c';
+  }
+}
+
+function drawTreemap(stocks){
+  var container=$('tm-chart');if(!container)return;
+  var W=container.offsetWidth||900;
+  var H=Math.max(450,Math.min(650,window.innerHeight-280));
+
+  // Group by sector for hierarchy
+  var sectorMap={};
+  stocks.forEach(function(s){
+    var sec=s.sector||'Other';
+    if(!sectorMap[sec])sectorMap[sec]={name:sec,children:[]};
+    sectorMap[sec].children.push({name:s.code,data:s,value:Math.abs(s[tmSize])||1});
+  });
+
+  var root={name:'IDX',children:Object.values(sectorMap)};
+
+  // Use D3 treemap layout
+  var hierarchy=d3.hierarchy(root).sum(function(d){return d.value||0;}).sort(function(a,b){return b.value-a.value;});
+
+  d3.treemap().size([W,H]).paddingInner(2).paddingOuter(2).paddingTop(sectorDrillSector?0:18)(hierarchy);
+
+  var html='<div style="position:relative;width:'+W+'px;height:'+H+'px;border-radius:8px;overflow:hidden;background:var(--bg0)">';
+
+  // Sector group labels (only at top level)
+  if(!sectorDrillSector){
+    hierarchy.children.forEach(function(sec){
+      var sw=sec.x1-sec.x0, sh=sec.y1-sec.y0;
+      if(sw<40||sh<25)return;
+      html+='<div style="position:absolute;left:'+sec.x0+'px;top:'+sec.y0+'px;width:'+sw+'px;height:16px;';
+      html+='font-size:9px;font-weight:700;color:var(--t3);padding:1px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      html+='background:var(--bgH);border-bottom:1px solid var(--b1);cursor:pointer;z-index:1" ';
+      html+='onclick="sectorDrillSector=\''+esc(sec.data.name)+'\';loadSectorView()" ';
+      html+='title="'+esc(sec.data.name)+'">';
+      html+=esc(sec.data.name.length>sw/6?sec.data.name.substring(0,Math.floor(sw/6))+'…':sec.data.name);
+      html+='</div>';
+    });
+  }
+
+  // Stock rectangles
+  hierarchy.leaves().forEach(function(leaf){
+    var x=leaf.x0,y=leaf.y0,w=leaf.x1-leaf.x0,h=leaf.y1-leaf.y0;
+    if(w<3||h<3)return;
+    var s=leaf.data.data;
+    var bg=tmGetColor(s);
+    var textColor=(bg==='#6b7280'||bg==='#86efac'||bg==='#fca5a5')?'#1f2937':'#fff';
+    var chg=s.chg_pct||0;
+    var fnet=s.fnet_val||0;
+
+    // Determine what text fits
+    var showCode=w>28&&h>16;
+    var showChg=w>40&&h>28;
+    var showClose=w>55&&h>42;
+
+    var tooltip=s.code+' — '+(s.close||0).toLocaleString()+' ('+(chg>0?'+':'')+chg.toFixed(2)+'%) F.Net:'+fmtRp(fnet);
+
+    html+='<div style="position:absolute;left:'+x+'px;top:'+y+'px;width:'+w+'px;height:'+h+'px;';
+    html+='background:'+bg+';overflow:hidden;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    html+='border-radius:2px;transition:filter .15s" ';
+    html+='onclick="gsOpen(\''+esc(s.code)+'\')" ';
+    html+='onmouseenter="this.style.filter=\'brightness(1.2)\'" onmouseleave="this.style.filter=\'none\'" ';
+    html+='title="'+esc(tooltip)+'">';
+
+    if(showCode)html+='<div style="font-size:'+(w>60?'11':'9')+'px;font-weight:700;color:'+textColor+';line-height:1.1">'+s.code+'</div>';
+    if(showChg)html+='<div style="font-size:'+(w>60?'10':'8')+'px;color:'+textColor+';opacity:.9;line-height:1.1">'+(chg>0?'+':'')+chg.toFixed(1)+'%</div>';
+    if(showClose)html+='<div style="font-size:8px;color:'+textColor+';opacity:.7;line-height:1.1">'+(s.close||0).toLocaleString()+'</div>';
+
+    html+='</div>';
+  });
+
+  html+='</div>';
+
+  // Stats row below
+  var totalMcap=stocks.reduce(function(s,r){return s+(r.mkt_cap||0);},0);
+  var totalFnet=stocks.reduce(function(s,r){return s+(r.fnet_val||0);},0);
+  var avgChg=stocks.length?stocks.reduce(function(s,r){return s+(r.chg_pct||0);},0)/stocks.length:0;
+  var up=stocks.filter(function(s){return(s.chg_pct||0)>0;}).length;
+  var dn=stocks.filter(function(s){return(s.chg_pct||0)<0;}).length;
+
+  html+='<div style="display:flex;gap:12px;padding:8px 0;font-size:10px;color:var(--t3);flex-wrap:wrap">';
+  html+='<span>'+stocks.length+' stocks</span>';
+  html+='<span>Mkt Cap: '+fmtRp(totalMcap)+'</span>';
+  html+='<span class="'+(avgChg>0?'up':'dn')+'">Avg Chg: '+(avgChg>0?'+':'')+avgChg.toFixed(2)+'%</span>';
+  html+='<span class="up">▲ '+up+'</span> <span class="dn">▼ '+dn+'</span>';
+  html+='<span class="'+(totalFnet>0?'up':'dn')+'">F.Net: '+fmtRp(totalFnet)+'</span>';
+  html+='</div>';
+
+  container.innerHTML=html;
 }
 
 // ═══ 2. ROTATION HEATMAP ═══

@@ -10,6 +10,8 @@ let cmpRange='6m';
 let cmpList=[];
 let cmpAddType='ticker'; // current add-mode selector
 let cmpGroupCache={}; // { sector: [...], industry: [...], konglo: [...] }
+let cmpShowFlow=false; // toggle foreign flow overlay
+let cmpFlowData={}; // { 'ticker:BBCA': [{trade_date, fnet_val}] }
 
 var CMP_TYPES={
   ticker:{icon:'📊',label:'Ticker',color:'var(--bl)',bg:'var(--blB)',placeholder:'BBCA, TLKM...'},
@@ -63,11 +65,13 @@ function renderCompare(){
     h+='</div>';
   }
 
-  // ── Range buttons ──
-  h+='<div class="cmp-range-bar">';
+  // ── Range buttons + Flow overlay toggle ──
+  h+='<div class="cmp-range-bar" style="align-items:center">';
   [{k:'1m',l:'1M'},{k:'3m',l:'3M'},{k:'6m',l:'6M'},{k:'1y',l:'1Y'},{k:'3y',l:'3Y'},{k:'5y',l:'5Y'},{k:'all',l:'ALL'}].forEach(function(r){
     h+='<button class="bei-sort-btn'+(cmpRange===r.k?' on':'')+'" onclick="cmpRange=\''+r.k+'\';cmpLoadMixed()">'+r.l+'</button>';
   });
+  h+='<span style="flex:1"></span>';
+  h+='<button class="bei-sort-btn'+(cmpShowFlow?' on':'')+'" onclick="cmpShowFlow=!cmpShowFlow;cmpLoadMixed()" style="padding:3px 8px;font-size:10px" title="Toggle Foreign Flow overlay">🌊 F.Net</button>';
   h+='</div>';
 
   // ── Chart + Summary ──
@@ -235,7 +239,8 @@ async function cmpLoadMixed(){
     });
 
     // ── Draw chart ──
-    cmpDrawChart(chartEl,dates,series);
+    var flowSeries = cmpShowFlow ? cmpBuildFlowSeries(allData, dates) : null;
+    cmpDrawChart(chartEl,dates,series,flowSeries);
 
     // ── Summary cards ──
     var sh='<div class="cmp-summary-grid">';
@@ -275,11 +280,14 @@ async function cmpLoadMixed(){
 // ── Unique key for each item ──
 function cmpItemKey(item){return item.type+':'+item.name;}
 
-// ═══ SVG CHART RENDERER ═══
-function cmpDrawChart(chartEl,dates,series){
-  var W=chartEl.offsetWidth||700,H=320;
+// ═══ SVG CHART RENDERER — with optional flow overlay ═══
+function cmpDrawChart(chartEl,dates,series,flowSeries){
+  var hasFlow=cmpShowFlow&&flowSeries&&Object.keys(flowSeries).length>0;
+  var W=chartEl.offsetWidth||700,H=hasFlow?400:320;
+  var chartH=hasFlow?240:H;
+  var flowH=hasFlow?120:0;
   var pad={t:20,r:60,b:30,l:55};
-  var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
+  var cW=W-pad.l-pad.r,cH=chartH-pad.t-pad.b;
 
   var allV=[];
   cmpList.forEach(function(item){
@@ -308,13 +316,14 @@ function cmpDrawChart(chartEl,dates,series){
     svg+='<line x1="'+pad.l+'" y1="'+zy+'" x2="'+(W-pad.r)+'" y2="'+zy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,3"/>';
   }
 
-  // Date labels
+  // Date labels (at bottom of price chart area)
+  var dateLabelY = hasFlow ? chartH - 4 : H - 4;
   var ls=Math.max(1,Math.floor(dates.length/8));
   for(var di=0;di<dates.length;di+=ls){
-    svg+='<text x="'+xS(di)+'" y="'+(H-4)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+dates[di].substring(5)+'</text>';
+    svg+='<text x="'+xS(di)+'" y="'+dateLabelY+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+dates[di].substring(5)+'</text>';
   }
 
-  // Series
+  // Series lines
   cmpList.forEach(function(item,ci){
     var key=cmpItemKey(item);
     var clr=cmpColors[ci%8],pts=[];
@@ -330,8 +339,68 @@ function cmpDrawChart(chartEl,dates,series){
     }
   });
 
+  // ── Flow overlay: cumulative F.Net bars at bottom ──
+  if(hasFlow){
+    var flowTop=chartH+10;
+    var flowBottom=H-20;
+    var flowCH=flowBottom-flowTop;
+    // Separator line
+    svg+='<line x1="'+pad.l+'" y1="'+flowTop+'" x2="'+(W-pad.r)+'" y2="'+flowTop+'" stroke="var(--b2)" stroke-width="1"/>';
+    svg+='<text x="'+pad.l+'" y="'+(flowTop-3)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)">Cumulative F.Net</text>';
+
+    // Find min/max across all flow series
+    var allFV=[];
+    cmpList.forEach(function(item){var key=cmpItemKey(item);(flowSeries[key]||[]).forEach(function(v){allFV.push(v);});});
+    if(allFV.length){
+      var fMin=Math.min.apply(null,allFV),fMax=Math.max.apply(null,allFV);
+      var fRng=fMax-fMin||1;fMin-=fRng*.05;fMax+=fRng*.05;fRng=fMax-fMin;
+      function fyS(v){return flowTop+(1-(v-fMin)/fRng)*flowCH;}
+
+      // Zero line
+      if(fMin<0&&fMax>0){
+        var fzy=fyS(0);
+        svg+='<line x1="'+pad.l+'" y1="'+fzy+'" x2="'+(W-pad.r)+'" y2="'+fzy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="2,2"/>';
+      }
+
+      // Flow lines
+      cmpList.forEach(function(item,ci){
+        var key=cmpItemKey(item);
+        var clr=cmpColors[ci%8],pts=[];
+        (flowSeries[key]||[]).forEach(function(v,i){pts.push(xS(i)+','+fyS(v));});
+        if(pts.length>=2){
+          svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+clr+'" stroke-width="1.5" stroke-linejoin="round" opacity="0.8"/>';
+        }
+      });
+
+      // Y labels for flow
+      for(var fg=0;fg<=2;fg++){
+        var fgy=flowTop+fg/2*flowCH;var fgv=fMax-fg/2*fRng;
+        svg+='<text x="'+(W-pad.r+4)+'" y="'+(fgy+3)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)">'+fmtRp(fgv)+'</text>';
+      }
+    }
+  }
+
   svg+='</svg>';
   chartEl.innerHTML=svg;
+}
+
+// Build flow cumulative series for overlay
+function cmpBuildFlowSeries(allData, dates) {
+  var flowSeries = {};
+  cmpList.forEach(function(item) {
+    var key = cmpItemKey(item);
+    var data = allData[key] || [];
+    if (!data.length) return;
+    var map = {};
+    data.forEach(function(r) { map[r.trade_date] = r.fnet_val || 0; });
+    var cum = 0;
+    flowSeries[key] = dates.map(function(d) {
+      var v = map[d] || 0;
+      cum += v;
+      return cum;
+    });
+  });
+  return flowSeries;
 }
 
 // ═══ Backward compat ═══
@@ -339,4 +408,3 @@ Object.defineProperty(window,'cmpTickers',{
   get:function(){return cmpList.filter(function(x){return x.type==='ticker';}).map(function(x){return x.name;});},
   set:function(v){cmpList=cmpList.filter(function(x){return x.type!=='ticker';});(v||[]).forEach(function(t){cmpList.push({type:'ticker',name:t});});}
 });
-

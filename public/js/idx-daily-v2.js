@@ -370,7 +370,7 @@ function renderIdxRankings(d) {
   h += '<thead style="position:sticky;top:0;background:var(--bg1);z-index:1"><tr>';
   visibleCols.forEach(function(k) {
     var align = (k === 'code' || k === 'name' || k === 'sector') ? 'al' : 'ar';
-    var sortKey = k === 'chg' ? 'change_pct' : k === 'fbuy' ? 'foreign_buy_val' : k === 'fsell' ? 'foreign_sell_val' : k;
+    var sortKey = k === 'chg' ? 'change_pct' : k === 'fbuy' ? 'foreign_buy_val' : k === 'fsell' ? 'foreign_sell_val' : k === 'freq' ? 'frequency' : k === 'vol' ? 'volume' : k === 'fnet' ? 'fnet_val' : k;
     h += '<th class="' + align + '" data-col="' + k + '" draggable="true" ondragstart="idxThDragStart(event)" ondragover="idxThDragOver(event)" ondrop="idxThDrop(event)" style="cursor:pointer;user-select:none" onclick="' + sc(sortKey) + '">' + idxColLabels[k] + sa(sortKey) + '</th>';
   });
   h += '</tr></thead><tbody>';
