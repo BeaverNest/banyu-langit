@@ -90,6 +90,8 @@ function renderTickerPage(d) {
     h += '<span style="font-size:9px;padding:2px 8px;border-radius:4px;background:var(--amB);color:var(--am);font-weight:600" title="' + d.corporate_actions.length + ' corporate action(s)">⚡ ' + d.corporate_actions.length + ' CA</span>';
   }
   h += '<div class="tp-actions">';
+  h += '<button onclick="window.open(\'https://stockbit.com/symbol/' + esc(code) + '/chartbit\',\'_blank\')" style="background:var(--bl);color:#fff;border-color:var(--bl)">📈 Chart</button>';
+  h += '<button onclick="window.open(\'https://www.idx.co.id/id/hasil-pencarian?q=' + esc(code) + '&p=1&sort=1\',\'_blank\')">🏛 IDX</button>';
   h += '<button onclick="addWatchlistFrom(\'' + esc(code) + '\');showT(\'Watchlist\',\'' + esc(code) + '.JK added\')">+ Watchlist</button>';
   h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[5]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
   h += '<button onclick="gsClose();togWL();setTimeout(function(){$(\'as\').value=\'' + esc(code) + '.JK\';},200)">🔔 Alert</button>';

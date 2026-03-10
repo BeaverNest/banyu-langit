@@ -153,4 +153,30 @@
 .cmp-sc-pct.up{color:var(--gn)}.cmp-sc-pct.dn{color:var(--rd)}
 .cmp-sc-detail{font-size:10px;color:var(--t3);margin-top:2px}
 .cmp-sc-detail .up{color:var(--gn)}.cmp-sc-detail .dn{color:var(--rd)}
-.mkt-section-h{padding:8px 12px;font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--b1);background:var(--bgH);display:flex;align-items:center;gap:6px}
+.mkt-section-h{padding:8px 12px;font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--b1);background:var(--bgH);display:flex;align-items:center;gap:6px}/* ═══ AFL Formula Screener ═══ */
+.afl-textarea{width:100%;min-height:70px;max-height:200px;padding:10px 12px;background:var(--bgH);border:1px solid var(--b2);border-radius:8px;color:var(--t1);font-family:var(--fm);font-size:13px;line-height:1.6;resize:vertical;outline:none;transition:border-color .15s}
+.afl-textarea:focus{border-color:var(--bl);box-shadow:0 0 0 3px var(--blB)}
+.afl-textarea::placeholder{color:var(--t3);font-family:var(--f);font-size:12px}
+
+.afl-tpl{padding:3px 10px;border-radius:5px;border:1px solid var(--b2);background:none;color:var(--t2);font-size:11px;font-family:var(--f);cursor:pointer;transition:all .12s;white-space:nowrap}
+.afl-tpl:hover{background:var(--blB);color:var(--bl);border-color:var(--blBo)}
+.afl-tpl-saved{background:var(--blB);color:var(--bl);border-color:var(--blBo);font-weight:600}
+.afl-tpl-saved:hover{background:var(--bl);color:#fff}
+.afl-tpl-add{border-style:dashed;color:var(--t3)}
+.afl-tpl-add:hover{border-color:var(--bl);color:var(--bl)}
+
+.afl-btn{padding:6px 14px;border-radius:7px;border:1px solid var(--b2);font-size:11px;font-weight:600;font-family:var(--f);cursor:pointer;transition:all .12s;white-space:nowrap}
+.afl-btn-run{background:var(--bl);color:#fff;border-color:var(--bl)}
+.afl-btn-run:hover{background:#0284c7}
+.afl-btn-save{background:none;color:var(--t2)}
+.afl-btn-save:hover{background:var(--bgH);color:var(--t1)}
+.afl-btn-clear{background:none;color:var(--t3)}
+.afl-btn-clear:hover{background:var(--bgH);color:var(--t1)}
+
+.afl-ref-toggle{display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0;color:var(--t2);font-weight:600;user-select:none;transition:color .12s}
+.afl-ref-toggle:hover{color:var(--t1)}
+
+.afl-ref-grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px 16px;padding:8px 0;font-size:11px}
+.afl-ref-cat-title{font-size:10px;font-weight:700;color:var(--t3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.3px}
+.afl-ref-var{display:block;color:var(--bl);cursor:pointer;padding:1px 0;font-family:var(--fm);font-size:11px;font-weight:600;transition:opacity .1s}
+.afl-ref-var:hover{opacity:.7;text-decoration:underline}

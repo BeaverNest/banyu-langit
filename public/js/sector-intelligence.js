@@ -25,10 +25,9 @@ async function loadSectorView(){
   else if(secIntView==='correlation')await loadSecCorrelation(body);
 }
 
-// ═══ 1. OVERVIEW — Sector Treemap (finviz-style) ═══
+// ═══ 1. OVERVIEW — Sector Sankey Flow Diagram ═══
 var sectorDrillSector='',sectorDrillIndustry='';
-var tmSize='mkt_cap'; // mkt_cap | value
-var tmColor='chg_pct'; // chg_pct | fnet_val
+var sankeyMode='foreign'; // foreign | transaction
 var tmCache=null;
 
 async function loadSecOverview(el){
@@ -36,177 +35,265 @@ async function loadSecOverview(el){
   try{
     var url='/api/screener/sectors?treemap=1';
     if(sectorDrillSector)url+='&sector='+encodeURIComponent(sectorDrillSector);
-    if(sectorDrillIndustry)url+='&industry='+encodeURIComponent(sectorDrillIndustry);
     var r=await fetch(url);var d=await r.json();
     if(d.error){el.innerHTML='<div class="ne">'+d.error+'</div>';return;}
     tmCache=d;
-    renderTreemapView(el,d);
+    renderSankeyView(el,d);
   }catch(e){el.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
 }
 
-function renderTreemapView(el,d){
+function renderSankeyView(el,d){
   var h='';
   // Breadcrumb
   h+='<div style="padding:8px 12px;font-size:12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--b1)">';
   h+='<span class="code" style="cursor:pointer" onclick="sectorDrillSector=\'\';sectorDrillIndustry=\'\';loadSectorView()">All Sectors</span>';
-  if(sectorDrillSector){h+=' <span style="color:var(--t3)">›</span> <span class="code" style="cursor:pointer" onclick="sectorDrillIndustry=\'\';loadSectorView()">'+esc(sectorDrillSector)+'</span>';}
-  if(sectorDrillIndustry){h+=' <span style="color:var(--t3)">›</span> <span style="font-weight:600">'+esc(sectorDrillIndustry)+'</span>';}
+  if(sectorDrillSector){h+=' <span style="color:var(--t3)">›</span> <span style="font-weight:600">'+esc(sectorDrillSector)+'</span>';}
   if(d.snapshot_month)h+='<span style="flex:1"></span><span style="color:var(--t3);font-family:var(--fm);font-size:10px">BEI '+d.snapshot_month+'</span>';
   h+='</div>';
 
-  // Controls
-  h+='<div style="display:flex;gap:6px;padding:8px 12px;align-items:center;flex-wrap:wrap">';
-  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Size:</span>';
-  h+='<button class="bei-sort-btn'+(tmSize==='mkt_cap'?' on':'')+'" onclick="tmSize=\'mkt_cap\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Mkt Cap</button>';
-  h+='<button class="bei-sort-btn'+(tmSize==='value'?' on':'')+'" onclick="tmSize=\'value\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Value</button>';
-  h+='<span style="width:12px"></span>';
-  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Color:</span>';
-  h+='<button class="bei-sort-btn'+(tmColor==='chg_pct'?' on':'')+'" onclick="tmColor=\'chg_pct\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">Change %</button>';
-  h+='<button class="bei-sort-btn'+(tmColor==='fnet_val'?' on':'')+'" onclick="tmColor=\'fnet_val\';renderTreemapView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">F.Net</button>';
+  // Mode toggle
+  h+='<div style="display:flex;gap:6px;padding:8px 12px;align-items:center;border-bottom:1px solid var(--b1)">';
+  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Mode:</span>';
+  h+='<button class="bei-sort-btn'+(sankeyMode==='foreign'?' on':'')+'" onclick="sankeyMode=\'foreign\';renderSankeyView($(\'sec-int-body\'),tmCache)" style="padding:4px 12px;font-size:11px">🌍 Foreign Flow</button>';
+  h+='<button class="bei-sort-btn'+(sankeyMode==='transaction'?' on':'')+'" onclick="sankeyMode=\'transaction\';renderSankeyView($(\'sec-int-body\'),tmCache)" style="padding:4px 12px;font-size:11px">💰 Transaction</button>';
   h+='<span style="flex:1"></span>';
-  // Legend
-  h+='<span style="font-size:9px;color:var(--t3)">';
-  if(tmColor==='chg_pct') h+='<span style="color:#22c55e">■</span> +3%+ <span style="color:#86efac">■</span> +1% <span style="color:var(--t3)">■</span> 0% <span style="color:#fca5a5">■</span> -1% <span style="color:#ef4444">■</span> -3%+';
-  else h+='<span style="color:#22c55e">■</span> Buy <span style="color:var(--t3)">■</span> Neutral <span style="color:#ef4444">■</span> Sell';
-  h+='</span>';
+  if(sankeyMode==='foreign')h+='<span style="font-size:9px;color:var(--t3)"><span style="color:#22c55e">━</span> Buy flow &nbsp; <span style="color:#ef4444">━</span> Sell flow</span>';
+  else h+='<span style="font-size:9px;color:var(--t3)">Width = trading value proportion</span>';
   h+='</div>';
 
-  // Treemap container
-  h+='<div id="tm-chart" style="padding:4px 12px 12px"></div>';
-
-  // Drill-down: if sector selected, show stock table below
-  if(sectorDrillIndustry && d.stocks && d.stocks.length){
-    h+='<div style="padding:0 12px 12px">'+sectorStockTable(d.stocks)+'</div>';
-  }
-
+  h+='<div id="sankey-chart" style="padding:12px"></div>';
   el.innerHTML=h;
 
-  // Build and render treemap
   var stocks=d.treemap||[];
-  if(!stocks.length){$('tm-chart').innerHTML='<div class="ne">No treemap data available</div>';return;}
+  if(!stocks.length){$('sankey-chart').innerHTML='<div class="ne">No data</div>';return;}
+  if(sectorDrillSector)stocks=stocks.filter(function(s){return s.sector===sectorDrillSector;});
 
-  // Filter by drill level
-  if(sectorDrillSector&&!sectorDrillIndustry){
-    stocks=stocks.filter(function(s){return s.sector===sectorDrillSector;});
-  }else if(sectorDrillIndustry){
-    stocks=stocks.filter(function(s){return s.industry===sectorDrillIndustry;});
-  }
-
-  // Filter stocks with valid size
-  stocks=stocks.filter(function(s){return (s[tmSize]||0)>0;});
-  if(!stocks.length){$('tm-chart').innerHTML='<div class="ne">No data for selected filters</div>';return;}
-
-  drawTreemap(stocks);
+  if(sankeyMode==='foreign')drawForeignSankey(stocks);
+  else drawTransactionSankey(stocks);
 }
 
-function tmGetColor(stock){
-  if(tmColor==='chg_pct'){
-    var v=stock.chg_pct||0;
-    if(v>=3) return '#15803d'; // dark green
-    if(v>=1) return '#22c55e'; // green
-    if(v>=0.5) return '#86efac'; // light green
-    if(v>-0.5) return '#6b7280'; // gray
-    if(v>-1) return '#fca5a5'; // light red
-    if(v>-3) return '#ef4444'; // red
-    return '#b91c1c'; // dark red
-  }else{
-    var f=stock.fnet_val||0;
-    if(f>1e10) return '#15803d';
-    if(f>1e9) return '#22c55e';
-    if(f>1e8) return '#86efac';
-    if(f>-1e8) return '#6b7280';
-    if(f>-1e9) return '#fca5a5';
-    if(f>-1e10) return '#ef4444';
-    return '#b91c1c';
-  }
-}
 
-function drawTreemap(stocks){
-  var container=$('tm-chart');if(!container)return;
-  var W=container.offsetWidth||900;
-  var H=Math.max(450,Math.min(650,window.innerHeight-280));
+// Sort state for sector overview
+var secFlowSort='net',secFlowDir='desc';
 
-  // Group by sector for hierarchy
-  var sectorMap={};
+
+// Sort state
+var secFlowSort='net',secFlowDir='desc';
+
+
+var secFlowSort='net',secFlowDir='desc';
+
+function drawForeignSankey(stocks){
+  var container=$('sankey-chart');if(!container)return;
+  var groupKey=sectorDrillSector?'industry':'sector';
+  var groups={};
   stocks.forEach(function(s){
-    var sec=s.sector||'Other';
-    if(!sectorMap[sec])sectorMap[sec]={name:sec,children:[]};
-    sectorMap[sec].children.push({name:s.code,data:s,value:Math.abs(s[tmSize])||1});
+    var gn=s[groupKey]||'Other';
+    if(!groups[gn])groups[gn]={name:gn,fbuy:0,fsell:0,fnet:0,value:0};
+    groups[gn].fbuy+=s.fbuy_val||0;
+    groups[gn].fsell+=s.fsell_val||0;
+    groups[gn].fnet+=s.fnet_val||0;
+    groups[gn].value+=s.value||0;
   });
+  var gList=Object.values(groups).filter(function(g){return g.fbuy>0||g.fsell>0;});
 
-  var root={name:'IDX',children:Object.values(sectorMap)};
+  // Sort
+  var dir=secFlowDir==='desc'?-1:1;
+  if(secFlowSort==='buy') gList.sort(function(a,b){return dir*(a.fbuy-b.fbuy);});
+  else if(secFlowSort==='sell') gList.sort(function(a,b){return dir*(a.fsell-b.fsell);});
+  else gList.sort(function(a,b){return dir*(a.fnet-b.fnet);});
 
-  // Use D3 treemap layout
-  var hierarchy=d3.hierarchy(root).sum(function(d){return d.value||0;}).sort(function(a,b){return b.value-a.value;});
+  if(!gList.length){container.innerHTML='<div class="ne">No data</div>';return;}
 
-  d3.treemap().size([W,H]).paddingInner(2).paddingOuter(2).paddingTop(sectorDrillSector?0:18)(hierarchy);
+  var totalBuy=gList.reduce(function(s,g){return s+g.fbuy;},0);
+  var totalSell=gList.reduce(function(s,g){return s+g.fsell;},0);
+  var totalNet=totalBuy-totalSell;
+  var maxVal=Math.max.apply(null,gList.map(function(g){return Math.max(g.fbuy,g.fsell);}));
 
-  var html='<div style="position:relative;width:'+W+'px;height:'+H+'px;border-radius:8px;overflow:hidden;background:var(--bg0)">';
+  var h='';
 
-  // Sector group labels (only at top level)
-  if(!sectorDrillSector){
-    hierarchy.children.forEach(function(sec){
-      var sw=sec.x1-sec.x0, sh=sec.y1-sec.y0;
-      if(sw<40||sh<25)return;
-      html+='<div style="position:absolute;left:'+sec.x0+'px;top:'+sec.y0+'px;width:'+sw+'px;height:16px;';
-      html+='font-size:9px;font-weight:700;color:var(--t3);padding:1px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      html+='background:var(--bgH);border-bottom:1px solid var(--b1);cursor:pointer;z-index:1" ';
-      html+='onclick="sectorDrillSector=\''+esc(sec.data.name)+'\';loadSectorView()" ';
-      html+='title="'+esc(sec.data.name)+'">';
-      html+=esc(sec.data.name.length>sw/6?sec.data.name.substring(0,Math.floor(sw/6))+'…':sec.data.name);
-      html+='</div>';
-    });
+  // Summary cards
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+  h+='<div style="flex:1;min-width:100px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:18px;font-weight:800;font-family:var(--fm);color:#22c55e">'+fmtRp(totalBuy)+'</div><div style="font-size:9px;color:var(--t3);margin-top:2px">FOREIGN BUY</div></div>';
+  h+='<div style="flex:1;min-width:100px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:18px;font-weight:800;font-family:var(--fm);color:#ef4444">'+fmtRp(totalSell)+'</div><div style="font-size:9px;color:var(--t3);margin-top:2px">FOREIGN SELL</div></div>';
+  var nc=totalNet>0?'#22c55e':'#ef4444';
+  h+='<div style="flex:1;min-width:100px;background:'+(totalNet>0?'rgba(34,197,94,0.08)':'rgba(239,68,68,0.08)')+';border:1px solid '+(totalNet>0?'rgba(34,197,94,0.2)':'rgba(239,68,68,0.2)')+';border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:18px;font-weight:800;font-family:var(--fm);color:'+nc+'">'+fmtRp(totalNet)+'</div><div style="font-size:9px;color:var(--t3);margin-top:2px">NET FLOW</div></div>';
+  h+='</div>';
+
+  // Sort buttons
+  h+='<div style="display:flex;gap:3px;margin-bottom:6px;align-items:center">';
+  h+='<span style="font-size:10px;color:var(--t3);font-weight:600">Sort:</span>';
+  ['net','buy','sell'].forEach(function(k){
+    var lbl=k==='net'?'Net':k==='buy'?'Buy':'Sell';
+    var arrow=secFlowSort===k?(secFlowDir==='desc'?' \u25BC':' \u25B2'):'';
+    h+='<button class="bei-sort-btn'+(secFlowSort===k?' on':'')+'" onclick="secFlowSort=\''+k+'\';secFlowDir=secFlowSort===\''+k+'\'&&secFlowDir===\'desc\'?\'asc\':\'desc\';renderSankeyView($(\'sec-int-body\'),tmCache)" style="padding:2px 8px;font-size:10px">'+lbl+arrow+'</button>';
+  });
+  h+='</div>';
+
+  // Butterfly chart — buy left ←|→ sell right
+  h+='<div style="margin-bottom:8px">';
+  // Header
+  h+='<div style="display:flex;align-items:center;padding:0 0 4px;border-bottom:1px solid var(--b1)">';
+  h+='<div style="width:130px"></div>';
+  h+='<div style="flex:1;text-align:right;font-size:9px;color:#22c55e;font-weight:600">BUY \u2192</div>';
+  h+='<div style="width:2px"></div>';
+  h+='<div style="flex:1;text-align:left;font-size:9px;color:#ef4444;font-weight:600">\u2190 SELL</div>';
+  h+='<div style="width:75px;text-align:right;font-size:9px;color:var(--t3);font-weight:600">NET</div>';
+  h+='</div>';
+
+  gList.forEach(function(g){
+    var buyPct=maxVal>0?(g.fbuy/maxVal)*100:0;
+    var sellPct=maxVal>0?(g.fsell/maxVal)*100:0;
+    var isNet=g.fnet>0;
+    var drillClick=sectorDrillSector?'':'sectorDrillSector=\''+esc(g.name).replace(/'/g,"\\'")+'\';loadSectorView()';
+
+    h+='<div style="display:flex;align-items:center;padding:3px 0;cursor:'+(drillClick?'pointer':'default')+'" '+(drillClick?'onclick="'+drillClick+'" onmouseenter="this.style.background=\'var(--bgH)\'" onmouseleave="this.style.background=\'none\'"':'')+'>';
+    // Name
+    h+='<div style="width:130px;font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:6px" title="'+esc(g.name)+'">'+esc(g.name)+'</div>';
+    // Buy bar (right-aligned, grows left)
+    h+='<div style="flex:1;display:flex;justify-content:flex-end;height:18px">';
+    h+='<div style="width:'+buyPct+'%;background:rgba(34,197,94,0.3);border-radius:2px 0 0 2px;display:flex;align-items:center;justify-content:flex-start;padding:0 4px;min-width:'+(buyPct>0?'2px':'0')+'">';
+    if(buyPct>20) h+='<span style="font-size:8px;font-family:var(--fm);color:#22c55e;white-space:nowrap">'+fmtRp(g.fbuy)+'</span>';
+    h+='</div></div>';
+    // Center divider
+    h+='<div style="width:2px;height:18px;background:var(--b2);flex-shrink:0"></div>';
+    // Sell bar (left-aligned, grows right)
+    h+='<div style="flex:1;display:flex;justify-content:flex-start;height:18px">';
+    h+='<div style="width:'+sellPct+'%;background:rgba(239,68,68,0.3);border-radius:0 2px 2px 0;display:flex;align-items:center;justify-content:flex-end;padding:0 4px;min-width:'+(sellPct>0?'2px':'0')+'">';
+    if(sellPct>20) h+='<span style="font-size:8px;font-family:var(--fm);color:#ef4444;white-space:nowrap">'+fmtRp(g.fsell)+'</span>';
+    h+='</div></div>';
+    // Net value
+    h+='<div style="width:75px;text-align:right;font-family:var(--fm);font-size:10px;font-weight:600;color:'+(isNet?'#22c55e':'#ef4444')+'">'+fmtRp(g.fnet)+'</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+
+  // Stats
+  h+='<div style="display:flex;gap:12px;padding:4px 0;font-size:10px;color:var(--t3)">';
+  h+='<span>'+stocks.length+' stocks \u00b7 '+gList.length+' '+(sectorDrillSector?'industries':'sectors')+'</span>';
+  h+='</div>';
+
+  h+=buildStockTable(stocks);
+  container.innerHTML=h;
+}
+
+function drawTransactionSankey(stocks){
+  var container=$('sankey-chart');if(!container)return;
+  var groupKey=sectorDrillSector?'industry':'sector';
+  var groups={};
+  stocks.forEach(function(s){
+    var gn=s[groupKey]||'Other';
+    if(!groups[gn])groups[gn]={name:gn,value:0,fnet:0,count:0};
+    groups[gn].value+=s.value||0;
+    groups[gn].fnet+=s.fnet_val||0;
+    groups[gn].count++;
+  });
+  var gList=Object.values(groups).filter(function(g){return g.value>0;}).sort(function(a,b){return b.value-a.value;});
+  if(!gList.length){container.innerHTML='<div class="ne">No data</div>';return;}
+  var totalVal=gList.reduce(function(s,g){return s+g.value;},0);
+  var colors=['#0ea5e9','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#6366f1','#a855f7','#06b6d4','#84cc16','#e11d48','#0d9488'];
+
+  // Donut
+  var size=200,cx=size/2,cyc=size/2,r=80,ri=52;
+  var svgD='<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">';
+  var startAngle=-Math.PI/2;
+  gList.forEach(function(g,i){
+    var pct=g.value/totalVal;var angle=pct*Math.PI*2;if(angle<0.01)return;var endAngle=startAngle+angle;
+    var large=angle>Math.PI?1:0;var color=colors[i%colors.length];
+    var x1=cx+r*Math.cos(startAngle),y1=cyc+r*Math.sin(startAngle);
+    var x2=cx+r*Math.cos(endAngle),y2=cyc+r*Math.sin(endAngle);
+    var ix1=cx+ri*Math.cos(endAngle),iy1=cyc+ri*Math.sin(endAngle);
+    var ix2=cx+ri*Math.cos(startAngle),iy2=cyc+ri*Math.sin(startAngle);
+    var drillAttr=sectorDrillSector?'':'onclick="sectorDrillSector=\''+esc(g.name)+'\';loadSectorView()"';
+    svgD+='<path d="M'+x1+','+y1+' A'+r+','+r+' 0 '+large+',1 '+x2+','+y2+' L'+ix1+','+iy1+' A'+ri+','+ri+' 0 '+large+',0 '+ix2+','+iy2+'Z"';
+    svgD+=' fill="'+color+'" stroke="var(--bg1)" stroke-width="1.5" style="cursor:pointer;transition:opacity .15s" onmouseenter="this.style.opacity=0.8" onmouseleave="this.style.opacity=1" '+drillAttr+'>';
+    svgD+='<title>'+esc(g.name)+': '+fmtRp(g.value)+' ('+Math.round(pct*1000)/10+'%)</title></path>';
+    startAngle=endAngle;
+  });
+  var topPct=gList.length?Math.round(gList[0].value/totalVal*1000)/10:0;
+  svgD+='<text x="'+cx+'" y="'+(cyc-4)+'" text-anchor="middle" font-size="16" font-weight="800" fill="var(--t1)" font-family="var(--fm)">'+topPct+'%</text>';
+  svgD+='<text x="'+cx+'" y="'+(cyc+12)+'" text-anchor="middle" font-size="9" fill="var(--t3)">'+esc(gList[0].name.length>12?gList[0].name.substring(0,11)+'\u2026':gList[0].name)+'</text>';
+  svgD+='</svg>';
+
+  // Legend (clickable)
+  var legendH='<div style="display:flex;flex-direction:column;gap:3px;font-size:11px">';
+  gList.forEach(function(g,i){
+    var pct=Math.round(g.value/totalVal*1000)/10;var color=colors[i%colors.length];
+    var drillAttr=sectorDrillSector?'':'onclick="sectorDrillSector=\''+esc(g.name)+'\';loadSectorView()" style="cursor:pointer"';
+    legendH+='<div style="display:flex;align-items:center;gap:6px;padding:2px 0" '+drillAttr+'>';
+    legendH+='<span style="width:10px;height:10px;border-radius:3px;background:'+color+';flex-shrink:0"></span>';
+    legendH+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">'+esc(g.name)+'</span>';
+    legendH+='<span style="font-family:var(--fm);color:var(--t2);white-space:nowrap">'+fmtRp(g.value)+'</span>';
+    legendH+='<span style="font-family:var(--fm);color:var(--t3);min-width:36px;text-align:right">'+pct+'%</span>';
+    legendH+='</div>';
+  });
+  legendH+='</div>';
+
+  var statsH='<div style="display:flex;gap:12px;padding:6px 0;font-size:10px;color:var(--t3)">';
+  statsH+='<span>'+stocks.length+' stocks \u00b7 '+gList.length+' '+(sectorDrillSector?'industries':'sectors')+'</span>';
+  statsH+='<span>Total: '+fmtRp(totalVal)+'</span></div>';
+
+  var h='<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap"><div>'+svgD+'</div><div style="flex:1;min-width:200px">'+legendH+'</div></div>';
+  h+=statsH+buildStockTable(stocks);
+  container.innerHTML=h;
+}
+
+// ═══ SORTABLE STOCK TABLE ═══
+var secTblSort='value',secTblDir='desc';
+
+function secTblDoSort(key){
+  if(secTblSort===key)secTblDir=secTblDir==='desc'?'asc':'desc';
+  else{secTblSort=key;secTblDir='desc';}
+  // Re-render just the table body
+  if(tmCache)renderSankeyView($('sec-int-body'),tmCache);
+}
+
+function buildStockTable(stocks){
+  var sorted=stocks.slice();
+  var dir=secTblDir==='desc'?-1:1;
+  var sortFns={
+    code:function(a,b){return dir*a.code.localeCompare(b.code);},
+    close:function(a,b){return dir*((b.close||0)-(a.close||0));},
+    chg:function(a,b){return dir*((b.chg_pct||0)-(a.chg_pct||0));},
+    value:function(a,b){return dir*((b.value||0)-(a.value||0));},
+    volume:function(a,b){return dir*((b.volume||0)-(a.volume||0));},
+    freq:function(a,b){return dir*((b.frequency||0)-(a.frequency||0));},
+    fbuy:function(a,b){return dir*(((b.fbuy_val||0))-((a.fbuy_val||0)));},
+    fsell:function(a,b){return dir*(((b.fsell_val||0))-((a.fsell_val||0)));},
+    fnet:function(a,b){return dir*((b.fnet_val||0)-(a.fnet_val||0));}
+  };
+  if(sortFns[secTblSort])sorted.sort(sortFns[secTblSort]);
+  else sorted.sort(sortFns.value);
+
+  function thh(key,label){
+    var arrow=secTblSort===key?(secTblDir==='desc'?' \u25BC':' \u25B2'):'';
+    var style=secTblSort===key?'color:var(--bl);':'';
+    return '<th class="ar" style="cursor:pointer;user-select:none;'+style+'" onclick="secTblDoSort(\''+key+'\')">'+label+arrow+'</th>';
   }
 
-  // Stock rectangles
-  hierarchy.leaves().forEach(function(leaf){
-    var x=leaf.x0,y=leaf.y0,w=leaf.x1-leaf.x0,h=leaf.y1-leaf.y0;
-    if(w<3||h<3)return;
-    var s=leaf.data.data;
-    var bg=tmGetColor(s);
-    var textColor=(bg==='#6b7280'||bg==='#86efac'||bg==='#fca5a5')?'#1f2937':'#fff';
-    var chg=s.chg_pct||0;
-    var fnet=s.fnet_val||0;
-
-    // Determine what text fits
-    var showCode=w>28&&h>16;
-    var showChg=w>40&&h>28;
-    var showClose=w>55&&h>42;
-
-    var tooltip=s.code+' — '+(s.close||0).toLocaleString()+' ('+(chg>0?'+':'')+chg.toFixed(2)+'%) F.Net:'+fmtRp(fnet);
-
-    html+='<div style="position:absolute;left:'+x+'px;top:'+y+'px;width:'+w+'px;height:'+h+'px;';
-    html+='background:'+bg+';overflow:hidden;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;';
-    html+='border-radius:2px;transition:filter .15s" ';
-    html+='onclick="gsOpen(\''+esc(s.code)+'\')" ';
-    html+='onmouseenter="this.style.filter=\'brightness(1.2)\'" onmouseleave="this.style.filter=\'none\'" ';
-    html+='title="'+esc(tooltip)+'">';
-
-    if(showCode)html+='<div style="font-size:'+(w>60?'11':'9')+'px;font-weight:700;color:'+textColor+';line-height:1.1">'+s.code+'</div>';
-    if(showChg)html+='<div style="font-size:'+(w>60?'10':'8')+'px;color:'+textColor+';opacity:.9;line-height:1.1">'+(chg>0?'+':'')+chg.toFixed(1)+'%</div>';
-    if(showClose)html+='<div style="font-size:8px;color:'+textColor+';opacity:.7;line-height:1.1">'+(s.close||0).toLocaleString()+'</div>';
-
-    html+='</div>';
+  var h='<div style="margin-top:8px"><table class="bei-tbl" style="font-size:10px"><thead><tr>';
+  h+='<th class="al" style="cursor:pointer" onclick="secTblDoSort(\'code\')">Code'+(secTblSort==='code'?(secTblDir==='desc'?' \u25BC':' \u25B2'):'')+'</th>';
+  h+='<th class="al">'+(sectorDrillSector?'Industry':'Sector')+'</th>';
+  h+=thh('close','Close');h+=thh('chg','Chg%');h+=thh('value','Value');h+=thh('volume','Volume');h+=thh('freq','Freq');
+  h+=thh('fbuy','F.Buy');h+=thh('fsell','F.Sell');h+=thh('fnet','F.Net');
+  h+='</tr></thead><tbody>';
+  sorted.slice(0,50).forEach(function(s){
+    var chg=s.chg_pct||0;var fn=s.fnet_val||0;
+    h+='<tr>';
+    h+='<td><span class="code" onclick="gsOpen(\''+esc(s.code)+'\')">'+esc(s.code)+'</span></td>';
+    h+='<td class="name" style="font-size:9px">'+esc(sectorDrillSector?(s.industry||''):(s.sector||''))+'</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+(s.close||0).toLocaleString()+'</td>';
+    h+='<td class="ar '+(chg>0?'up':chg<0?'dn':'')+'" style="font-family:var(--fm)">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.value||0)+'</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+fmtNum(s.volume||0)+'</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+(s.frequency||0).toLocaleString()+'</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.fbuy_val||0)+'</td>';
+    h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.fsell_val||0)+'</td>';
+    h+='<td class="ar '+(fn>0?'up':fn<0?'dn':'')+'" style="font-family:var(--fm);font-weight:600">'+fmtRp(fn)+'</td>';
+    h+='</tr>';
   });
-
-  html+='</div>';
-
-  // Stats row below
-  var totalMcap=stocks.reduce(function(s,r){return s+(r.mkt_cap||0);},0);
-  var totalFnet=stocks.reduce(function(s,r){return s+(r.fnet_val||0);},0);
-  var avgChg=stocks.length?stocks.reduce(function(s,r){return s+(r.chg_pct||0);},0)/stocks.length:0;
-  var up=stocks.filter(function(s){return(s.chg_pct||0)>0;}).length;
-  var dn=stocks.filter(function(s){return(s.chg_pct||0)<0;}).length;
-
-  html+='<div style="display:flex;gap:12px;padding:8px 0;font-size:10px;color:var(--t3);flex-wrap:wrap">';
-  html+='<span>'+stocks.length+' stocks</span>';
-  html+='<span>Mkt Cap: '+fmtRp(totalMcap)+'</span>';
-  html+='<span class="'+(avgChg>0?'up':'dn')+'">Avg Chg: '+(avgChg>0?'+':'')+avgChg.toFixed(2)+'%</span>';
-  html+='<span class="up">▲ '+up+'</span> <span class="dn">▼ '+dn+'</span>';
-  html+='<span class="'+(totalFnet>0?'up':'dn')+'">F.Net: '+fmtRp(totalFnet)+'</span>';
-  html+='</div>';
-
-  container.innerHTML=html;
+  h+='</tbody></table></div>';
+  return h;
 }
 
 // ═══ 2. ROTATION HEATMAP ═══
@@ -551,10 +638,13 @@ var corrSector='',corrIndustry='',corrDays=65,corrMin=0.7;
 var corrLists=null; // cached sector/industry lists
 
 async function loadSecCorrelation(el){
+  // Detect if we're in standalone correlation tab or inside sectors
+  var isStandalone=el.id==='correlation-content';
+  window._corrReload=isStandalone?'loadCorrelationView()':'loadSectorView()';
   // Sub-tab bar
   var h='<div style="padding:8px 12px;display:flex;gap:3px;border-bottom:1px solid var(--b1)">';
   [{k:'ownership',l:'👥 By Ownership'},{k:'industry',l:'🏭 By Industry'},{k:'custom',l:'🔧 Custom'}].forEach(function(m){
-    h+='<button class="bei-sort-btn'+(corrMode===m.k?' on':'')+'" onclick="corrMode=\''+m.k+'\';loadSectorView()" style="padding:5px 12px;font-size:11px">'+m.l+'</button>';
+    h+='<button class="bei-sort-btn'+(corrMode===m.k?' on':'')+'" onclick="corrMode=\''+m.k+'\';eval(window._corrReload)" style="padding:5px 12px;font-size:11px">'+m.l+'</button>';
   });
   h+='</div>';
   h+='<div id="corr-ctrl"></div>';
@@ -583,25 +673,26 @@ async function loadSecCorrelation(el){
 
 function renderCorrCtrl(){
   var el=$('corr-ctrl');if(!el)return;
+  var rl='eval(window._corrReload||\"loadCorrelationView()\")';
   var h='<div style="padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--b1)">';
 
   if(corrMode==='custom'){
-    h+='<select id="corr-sector" class="bei-filter-sel" style="min-width:150px;font-size:11px" onchange="corrSector=this.value;corrIndustry=\'\';populateCorrDropdowns();loadSectorView()"><option value="">All Sectors</option></select>';
-    h+='<select id="corr-industry" class="bei-filter-sel" style="min-width:150px;font-size:11px" onchange="corrIndustry=this.value;loadSectorView()"><option value="">All Industries</option></select>';
+    h+='<select id="corr-sector" class="bei-filter-sel" style="min-width:150px;font-size:11px" onchange="corrSector=this.value;corrIndustry=\'\';populateCorrDropdowns();'+rl+'"><option value="">All Sectors</option></select>';
+    h+='<select id="corr-industry" class="bei-filter-sel" style="min-width:150px;font-size:11px" onchange="corrIndustry=this.value;'+rl+'"><option value="">All Industries</option></select>';
     h+='<span style="width:6px"></span>';
   }else{
-    var desc=corrMode==='ownership'?'Pairs yang share pemilik sama (≥1% ownership)':'Pairs di industri yang sama';
+    var desc=corrMode==='ownership'?'Pairs yang share pemilik sama (\u22651% ownership)':'Pairs di industri yang sama';
     h+='<span style="font-size:10px;color:var(--t3)">'+desc+'</span><span style="width:6px"></span>';
   }
 
   h+='<span style="font-size:10px;color:var(--t3)">Period:</span>';
   [{k:65,l:'3M'},{k:130,l:'6M'},{k:260,l:'1Y'},{k:520,l:'2Y'}].forEach(function(d){
-    h+='<button class="bei-sort-btn'+(corrDays===d.k?' on':'')+'" onclick="corrDays='+d.k+';loadSectorView()" style="padding:3px 8px;font-size:10px">'+d.l+'</button>';
+    h+='<button class="bei-sort-btn'+(corrDays===d.k?' on':'')+'" onclick="corrDays='+d.k+';'+rl+'" style="padding:3px 8px;font-size:10px">'+d.l+'</button>';
   });
   h+='<span style="width:6px"></span>';
   h+='<span style="font-size:10px;color:var(--t3)">Min r:</span>';
   [0.5,0.6,0.7,0.8,0.9].forEach(function(m){
-    h+='<button class="bei-sort-btn'+(corrMin===m?' on':'')+'" onclick="corrMin='+m+';loadSectorView()" style="padding:3px 8px;font-size:10px">'+m+'</button>';
+    h+='<button class="bei-sort-btn'+(corrMin===m?' on':'')+'" onclick="corrMin='+m+';'+rl+'" style="padding:3px 8px;font-size:10px">'+m+'</button>';
   });
   h+='</div>';
   el.innerHTML=h;

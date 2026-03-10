@@ -1,7 +1,5 @@
 // THEME
-function togTh(){const h=document.documentElement;const n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);$('thbtn').textContent=n==='dark'?'🌙':'☀️';localStorage.setItem('th',n);if(!chartHidden)loadChart();}
-
-// Chart is now in chart-custom.js (Lightweight Charts)
+function togTh(){const h=document.documentElement;const n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);$('thbtn').textContent=n==='dark'?'🌙':'☀️';localStorage.setItem('th',n);}
 
 // ═══ MAIN TAB ROUTING — 6 tabs ═══
 function stab(n,b){
@@ -88,18 +86,6 @@ document.addEventListener('click',function(e){
   if(!$('wlbtn').contains(e.target)&&!$('wldrop').contains(e.target))$('wldrop').classList.remove('o');
 });
 
-// RESIZE + CHART TOGGLE
-let chartHidden=false;
-function togChart(){
-  var pr=document.querySelector('.pR');var pl=$('pL');var rh=$('rh');var btn=$('chtog');
-  if(chartHidden){pr.style.display='';rh.style.display='';pl.style.width=pl.dataset.prevW||'420px';pl.style.maxWidth='800px';document.querySelector('.layout').classList.remove('ctr');btn.style.background='';chartHidden=false;loadChart();}
-  else{pl.dataset.prevW=pl.offsetWidth+'px';pl.style.width='1220px';pl.style.maxWidth='1220px';document.querySelector('.layout').classList.add('ctr');pr.style.display='none';rh.style.display='none';btn.style.background='var(--blB)';chartHidden=true;}
-}
-(function(){var h=$('rh'),p=$('pL');var sx,sw;
-h.addEventListener('mousedown',function(e){sx=e.clientX;sw=p.offsetWidth;h.classList.add('ac');document.body.classList.add('rz');document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);});
-function mv(e){p.style.width=Math.max(280,Math.min(800,sw+(e.clientX-sx)))+'px';}
-function up(){h.classList.remove('ac');document.body.classList.remove('rz');document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);}
-})();
 
 // ═══ Keyboard Shortcuts ═══
 document.addEventListener('keydown',function(e){
@@ -112,12 +98,10 @@ document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){closeSettings();$('wldrop').classList.remove('o');}
 });
 
-// ═══ INIT: Theme + Chart default ═══
+// ═══ INIT: Theme ═══
 (function(){
   var saved=localStorage.getItem('th');
   if(saved){document.documentElement.setAttribute('data-theme',saved);$('thbtn').textContent=saved==='dark'?'🌙':'☀️';}
-  var chartPref=localStorage.getItem('chartDefault');
-  if(chartPref!=='visible'){setTimeout(function(){if(!chartHidden)togChart();},100);}
 })();
 
 // ═══ BACKWARD COMPAT — old functions that other modules might reference ═══

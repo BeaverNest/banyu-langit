@@ -211,6 +211,331 @@ router.post('/run', (req, res) => {
   } catch (e) { res.json({ data: [], error: e.message }); }
 });
 
+
+// ═══ AFL-STYLE FORMULA SCREENER — OPTIMIZED ═══
+// Key optimization: bulk-load all history in ONE query, then split per code in memory
+
+// In-memory cache for bulk history (cleared on new trade date)
+let _histCache = { td: null, data: null };
+
+function bulkLoadHistory(td) {
+  if (_histCache.td === td && _histCache.data) return _histCache.data;
+  // Single query: load last 210 days of history for ALL tickers
+  const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 210').all().map(r => r.trade_date);
+  if (!allDates.length) return {};
+  const minDate = allDates[allDates.length - 1];
+  const rows = db.prepare('SELECT code,trade_date,close,high,low,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date>=? ORDER BY code,trade_date').all(minDate);
+  
+  // Group by code
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.code]) map[r.code] = [];
+    map[r.code].push(r);
+  }
+  _histCache = { td, data: map };
+  return map;
+}
+
+// Detect which variable categories the formula needs
+function detectNeeds(formula) {
+  const f = formula.toUpperCase();
+  return {
+    ma: /MA\d|DISTMA|UP_MA|SHORTTREND|INTERMEDIATE|LONGTREND/i.test(formula),
+    macd: /MACD|SIGNAL|BULLISH|BEARISH|DEATHCROSS/i.test(formula),
+    stoch: /STOCH|^K\b|^D\b|\bK\s|K\s*[<>=]|D\s*[<>=]/i.test(formula),
+    hhv: /HHV|LLV|ISBASE|ISNEARLOW|ISBREAKOUT|PREVHHV/i.test(formula),
+    foreign: /FOREIGN|F0|F1|F2|F3|F4|FOREIGN_5D|FOREIGNNET|FOREIGNBUY|FOREIGNSELL/i.test(formula),
+    relvol: /RELVOL/i.test(formula),
+  };
+}
+
+router.post('/formula', (req, res) => {
+  const startTime = Date.now();
+  try {
+    const formula = (req.body.formula || '').trim();
+    const limit = Math.min(parseInt(req.body.limit) || 200, 9999);
+    if (!formula) return res.json({ error: 'No formula provided' });
+
+    const td = latestIdxDate();
+    if (!td) return res.json({ data: [], error: 'No data' });
+
+    const tokens = tokenizeFormula(formula);
+    if (tokens.error) return res.json({ error: 'Parse error: ' + tokens.error });
+
+    // Detect what the formula needs
+    const needs = detectNeeds(formula);
+
+    // Get today's stocks
+    let stocks = db.prepare(`SELECT *, (foreign_buy-foreign_sell) as foreign_net, ((foreign_buy-foreign_sell)*close) as foreign_net_val, CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as change_pct FROM idx_daily WHERE trade_date=? AND close>0`).all(td);
+
+    // Fundamental (single query)
+    const { latestFundDate } = require('../db');
+    const fm = latestFundDate();
+    const fundMap = {};
+    if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
+
+    // Bulk load history ONCE (the key optimization)
+    const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol) ? bulkLoadHistory(td) : {};
+    const caMap = (needs.ma || needs.macd || needs.stoch) ? loadConfirmedCAs() : {};
+    
+    const results = [];
+
+    for (const stock of stocks) {
+      const fund = fundMap[stock.code] || {};
+      const hist = histMap[stock.code] || [];
+      let tech = {};
+      let extraCtx = {};
+
+      if (hist.length >= 5) {
+        const actions = caMap[stock.code];
+        const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
+        const closes = adjusted.map(h => h.close);
+        
+        // Only compute what's needed
+        if (needs.ma) {
+          const highs = adjusted.map(h => h.high || h.close);
+          const lows = adjusted.map(h => h.low || h.close);
+          tech.ma3 = calcMA(closes, 3); tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10);
+          tech.ma20 = calcMA(closes, 20); tech.ma30 = calcMA(closes, 30); tech.ma50 = calcMA(closes, 50);
+          tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
+          
+          // Composite trends
+          const c = stock.close;
+          extraCtx.ShortTrend = (c > (tech.ma10||0) && c > (tech.ma20||0)) ? 1 : 0;
+          extraCtx.Intermediate = (c > (tech.ma20||0) && c > (tech.ma50||0)) ? 1 : 0;
+          extraCtx.LongTrend = (c > (tech.ma20||0) && c > (tech.ma50||0) && c > (tech.ma200||0)) ? 1 : 0;
+          extraCtx.Up_MA5 = c > (tech.ma5||0) ? 1 : 0;
+          extraCtx.Up_MA10 = c > (tech.ma10||0) ? 1 : 0;
+          extraCtx.Up_MA20 = c > (tech.ma20||0) ? 1 : 0;
+          extraCtx.Up_MA50 = c > (tech.ma50||0) ? 1 : 0;
+          extraCtx.Up_MA100 = c > (tech.ma100||0) ? 1 : 0;
+          extraCtx.Up_MA200 = c > (tech.ma200||0) ? 1 : 0;
+        }
+        
+        if (needs.macd && closes.length >= 26) {
+          tech.macd = calcMACD(closes);
+          const mv = tech.macd ? tech.macd.macd : 0, sv = tech.macd ? tech.macd.signal : 0, hv = tech.macd ? tech.macd.histogram : 0;
+          extraCtx.Bullish_MACD = (mv > sv && hv > 0) ? 1 : 0;
+          extraCtx.BullishWeak_MACD = (mv > sv && hv < 0) ? 1 : 0;
+          extraCtx.Bearish_MACD = (mv < sv && hv < 0) ? 1 : 0;
+          extraCtx.BearishWeak_MACD = (mv < sv && hv > 0) ? 1 : 0;
+          extraCtx.MACD_Status = extraCtx.Bullish_MACD ? 2 : extraCtx.BullishWeak_MACD ? 1 : extraCtx.Bearish_MACD ? -2 : extraCtx.BearishWeak_MACD ? -1 : 0;
+          extraCtx.MACDCross = tech.macd && tech.macd.cross === 'golden' ? 1 : 0;
+          extraCtx.MACDDeathCross = tech.macd && tech.macd.cross === 'death' ? 1 : 0;
+        }
+        
+        if (needs.stoch && closes.length >= 14) {
+          const highs = adjusted.map(h => h.high || h.close);
+          const lows = adjusted.map(h => h.low || h.close);
+          tech.stoch = calcStochastic(highs, lows, closes);
+          extraCtx.StochCrossUp = (tech.stoch && tech.stoch.k > (tech.stoch.d || 50)) ? 1 : 0;
+          extraCtx.StochTrend = (tech.stoch && tech.stoch.k > (tech.stoch.d || 50)) ? 1 : 0;
+        }
+        
+        if (needs.relvol) {
+          const vols = adjusted.map(h => h.volume);
+          const volMa20 = vols.length >= 20 ? vols.slice(-20).reduce((s,v)=>s+v,0)/20 : 0;
+          extraCtx.RelVol = volMa20 > 0 ? Math.round(stock.volume / volMa20 * 10) / 10 : 0;
+          tech.vol_ratio = extraCtx.RelVol;
+        }
+        
+        if (needs.hhv) {
+          const c20 = closes.slice(-20);
+          const highs20 = adjusted.slice(-20).map(h => h.high || h.close);
+          const lows20 = adjusted.slice(-20).map(h => h.low || h.close);
+          extraCtx.HHV20 = c20.length ? Math.max(...highs20) : 0;
+          extraCtx.LLV20 = c20.length ? Math.min(...lows20) : 0;
+          extraCtx.HHV_C20 = c20.length ? Math.max(...c20) : 0;
+          extraCtx.LLV_C20 = c20.length ? Math.min(...c20) : 0;
+          const c21 = closes.slice(-21, -1);
+          extraCtx.PrevHHV20 = c21.length >= 20 ? Math.max(...c21) : extraCtx.HHV_C20;
+          const range20 = extraCtx.HHV_C20 - extraCtx.LLV_C20;
+          const prevClose20 = closes.length >= 21 ? closes[closes.length - 21] : stock.close;
+          extraCtx.isBase = prevClose20 > 0 ? (range20 / prevClose20 < 0.1 ? 1 : 0) : 0;
+          extraCtx.isNearLow = extraCtx.LLV_C20 > 0 ? (stock.close <= extraCtx.LLV_C20 * 1.1 ? 1 : 0) : 0;
+          extraCtx.isBreakout = stock.close > extraCtx.PrevHHV20 ? 1 : 0;
+        }
+        
+        if (needs.foreign) {
+          const recent5 = hist.slice(-5);
+          extraCtx.Foreign_5D = recent5.reduce((s,r) => s + ((r.foreign_buy||0) - (r.foreign_sell||0)) * (r.close||0), 0);
+          for (let fi = 0; fi < 5; fi++) {
+            const ri = hist.length - 1 - fi;
+            if (ri >= 0) {
+              const fr = hist[ri];
+              extraCtx['F' + fi] = ((fr.foreign_buy||0) - (fr.foreign_sell||0)) * (fr.close||0);
+            } else extraCtx['F' + fi] = 0;
+          }
+        }
+      }
+
+      // Build variable context
+      const distMA = (ma) => ma ? Math.round((stock.close - ma) / ma * 10000) / 100 : 0;
+      const ctx = {
+        C: stock.close, O: stock.open_price, H: stock.high, L: stock.low,
+        Close: stock.close, Open: stock.open_price, High: stock.high, Low: stock.low,
+        Chg: stock.change_pct || 0,
+        V: stock.volume, Volume: stock.volume, Val: stock.value, Value: stock.value,
+        Freq: stock.frequency, DVMil: (stock.value || 0) / 1e6,
+        MA3: tech.ma3||0, MA5: tech.ma5||0, MA10: tech.ma10||0, MA20: tech.ma20||0,
+        MA30: tech.ma30||0, MA50: tech.ma50||0, MA100: tech.ma100||0, MA200: tech.ma200||0,
+        DistMA3: distMA(tech.ma3), DistMA5: distMA(tech.ma5), DistMA10: distMA(tech.ma10),
+        DistMA20: distMA(tech.ma20), DistMA30: distMA(tech.ma30), DistMA50: distMA(tech.ma50),
+        DistMA100: distMA(tech.ma100), DistMA200: distMA(tech.ma200),
+        MACD: tech.macd ? tech.macd.macd : 0, Signal: tech.macd ? tech.macd.signal : 0,
+        MACD_Hist: tech.macd ? tech.macd.histogram : 0,
+        K: tech.stoch ? tech.stoch.k : 50, StochK: tech.stoch ? tech.stoch.k : 50,
+        D: tech.stoch ? (tech.stoch.d||50) : 50, StochD: tech.stoch ? (tech.stoch.d||50) : 50,
+        ForeignNet: stock.foreign_net_val || 0,
+        ForeignBuy: (stock.foreign_buy||0) * stock.close,
+        ForeignSell: (stock.foreign_sell||0) * stock.close,
+        PER: fund.per||0, PBV: fund.pbv||0, ROE: fund.roe||0, ROA: fund.roa||0,
+        DER: fund.der||0, NPM: fund.npm||0, MktCap: fund.mkt_cap||0, YTD: fund.ytd||0,
+        ...extraCtx,
+      };
+
+      try {
+        const pass = evalFormula(tokens, ctx);
+        if (pass) results.push({ ...stock, tech, fund, extra: extraCtx });
+      } catch (e) {
+        return res.json({ error: 'Eval error on ' + stock.code + ': ' + e.message });
+      }
+    }
+
+    results.sort((a, b) => Math.abs(b.foreign_net_val || 0) - Math.abs(a.foreign_net_val || 0));
+    res.json({ data: results.slice(0, limit), total: results.length, trade_date: td, parse_time: Date.now() - startTime });
+  } catch (e) { res.json({ error: e.message }); }
+});
+
+// ═══ FORMULA TOKENIZER ═══
+function tokenizeFormula(formula) {
+  const tokens = [];
+  let i = 0;
+  const s = formula.replace(/\s+/g, ' ').trim();
+
+  while (i < s.length) {
+    // Skip whitespace
+    if (s[i] === ' ') { i++; continue; }
+
+    // Parentheses
+    if (s[i] === '(') { tokens.push({ type: 'LPAREN' }); i++; continue; }
+    if (s[i] === ')') { tokens.push({ type: 'RPAREN' }); i++; continue; }
+
+    // Operators: >=, <=, ==, !=, >, <
+    if (s[i] === '>' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '>=' }); i += 2; continue; }
+    if (s[i] === '<' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '<=' }); i += 2; continue; }
+    if (s[i] === '=' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '==' }); i += 2; continue; }
+    if (s[i] === '!' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '!=' }); i += 2; continue; }
+    if (s[i] === '>') { tokens.push({ type: 'OP', value: '>' }); i++; continue; }
+    if (s[i] === '<') { tokens.push({ type: 'OP', value: '<' }); i++; continue; }
+
+    // Numbers (including negative and scientific notation)
+    if (s[i] === '-' && i + 1 < s.length && (s[i+1] >= '0' && s[i+1] <= '9') && (tokens.length === 0 || tokens[tokens.length-1].type === 'LPAREN' || tokens[tokens.length-1].type === 'LOGIC' || tokens[tokens.length-1].type === 'OP')) {
+      let num = '-'; i++;
+      while (i < s.length && (s[i] >= '0' && s[i] <= '9' || s[i] === '.' || s[i] === 'e' || s[i] === 'E')) { num += s[i]; i++; }
+      tokens.push({ type: 'NUM', value: parseFloat(num) }); continue;
+    }
+    if (s[i] >= '0' && s[i] <= '9') {
+      let num = '';
+      while (i < s.length && (s[i] >= '0' && s[i] <= '9' || s[i] === '.' || s[i] === 'e' || s[i] === 'E')) { num += s[i]; i++; }
+      tokens.push({ type: 'NUM', value: parseFloat(num) }); continue;
+    }
+
+    // Words: AND, OR, variable names
+    if ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') || s[i] === '_') {
+      let word = '';
+      while (i < s.length && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') || s[i] === '_')) { word += s[i]; i++; }
+      if (word.toUpperCase() === 'AND') tokens.push({ type: 'LOGIC', value: 'AND' });
+      else if (word.toUpperCase() === 'OR') tokens.push({ type: 'LOGIC', value: 'OR' });
+      else tokens.push({ type: 'VAR', value: word });
+      continue;
+    }
+
+    return { error: 'Unexpected character: "' + s[i] + '" at position ' + i };
+  }
+  return tokens;
+}
+
+// ═══ FORMULA EVALUATOR (recursive descent parser) ═══
+function evalFormula(tokens, ctx) {
+  let pos = 0;
+
+  function peek() { return pos < tokens.length ? tokens[pos] : null; }
+  function consume() { return tokens[pos++]; }
+  function expect(type) {
+    const t = peek();
+    if (!t || t.type !== type) throw new Error('Expected ' + type + ' but got ' + (t ? t.type + ':' + (t.value||'') : 'EOF'));
+    return consume();
+  }
+
+  // Grammar (left-to-right, AND/OR same priority):
+  // expr     = factor ((AND|OR) factor)*
+  // factor   = atom (OP atom)?
+  // atom     = NUM | VAR | LPAREN expr RPAREN
+
+  function parseExpr() {
+    let result = parseFactor();
+    while (peek() && peek().type === 'LOGIC') {
+      const logic = consume().value;
+      const right = parseFactor();
+      if (logic === 'AND') result = (toNum(result) && toNum(right)) ? 1 : 0;
+      else result = (toNum(result) || toNum(right)) ? 1 : 0;
+    }
+    return result;
+  }
+
+  function parseFactor() {
+    let left = parseAtom();
+    // Check if followed by comparison operator
+    if (peek() && peek().type === 'OP') {
+      const op = consume().value;
+      const right = parseAtom();
+      const l = toNum(left), r = toNum(right);
+      if (op === '>') return l > r ? 1 : 0;
+      if (op === '<') return l < r ? 1 : 0;
+      if (op === '>=') return l >= r ? 1 : 0;
+      if (op === '<=') return l <= r ? 1 : 0;
+      if (op === '==') return l === r ? 1 : 0;
+      if (op === '!=') return l !== r ? 1 : 0;
+    }
+    return left; // standalone var or number — returned as-is
+  }
+
+  function parseAtom() {
+    const t = peek();
+    if (!t) throw new Error('Unexpected end of formula');
+
+    if (t.type === 'NUM') { consume(); return t.value; }
+
+    if (t.type === 'VAR') {
+      consume();
+      if (ctx.hasOwnProperty(t.value)) return ctx[t.value];
+      // Try case-insensitive lookup
+      const lower = t.value.toLowerCase();
+      for (const k of Object.keys(ctx)) { if (k.toLowerCase() === lower) return ctx[k]; }
+      throw new Error('Unknown variable: ' + t.value);
+    }
+
+    if (t.type === 'LPAREN') {
+      consume(); // eat (
+      const result = parseExpr();
+      expect('RPAREN'); // eat )
+      return result;
+    }
+
+    throw new Error('Unexpected: ' + t.type + (t.value ? ':' + t.value : ''));
+  }
+
+  // Convert to number for comparisons (boolean true=1, false=0)
+  function toNum(v) {
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    return v || 0;
+  }
+
+  const result = parseExpr();
+  return !!toNum(result);
+}
+
 // ═══ Rule evaluation helper ═══
 function evalRule(rule, stock, tech) {
   if (!rule.field) return true;
@@ -273,7 +598,7 @@ router.get('/sectors', (req, res) => {
     // Join fundamental with latest daily for foreign flow
     const rows = db.prepare(`
       SELECT f.code, f.sector, f.industry, f.per, f.pbv, f.roe, f.roa, f.der, f.npm, f.mkt_cap, f.ytd,
-             d.close, d.value, d.volume, d.foreign_buy, d.foreign_sell,
+             d.close, d.value, d.volume, d.frequency, d.foreign_buy, d.foreign_sell,
              ((d.foreign_buy - d.foreign_sell) * d.close) as fnet_val,
              CASE WHEN d.prev_close > 0 THEN ROUND(CAST((d.close - d.prev_close) AS REAL) / d.prev_close * 100, 2) ELSE 0 END as chg_pct
       FROM idx_fundamental f
@@ -346,7 +671,7 @@ router.get('/sectors', (req, res) => {
     }
 
     res.json({ trade_date: td, snapshot_month: sm, sectors, industries, stocks: stockList,
-      ...(req.query.treemap ? { treemap: rows.map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct || 0, mkt_cap: r.mkt_cap || 0, value: r.value || 0, fnet_val: r.fnet_val || 0 })) } : {})
+      ...(req.query.treemap ? { treemap: rows.map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct || 0, mkt_cap: r.mkt_cap || 0, value: r.value || 0, volume: r.volume || 0, frequency: r.frequency || 0, fnet_val: r.fnet_val || 0, fbuy_val: (r.foreign_buy || 0) * (r.close || 0), fsell_val: (r.foreign_sell || 0) * (r.close || 0) })) } : {})
     });
   } catch (e) { res.json({ error: e.message }); }
 });

@@ -1,703 +1,340 @@
-// ═══ Screener V5 — Rule Groups (AND/OR mixed), persistent config, larger popup ═══
-var scrGroups = [{rules:[]}]; // Array of groups, each group has AND rules, groups connected by OR
-var scrConfigs = [];
-var scrResults = [];
-var scrColumns = ['close','change_pct','volume','per','pbv','foreign_net_val','ma5','ma20','ma200'];
-var scrEditId = null;
-var scrSortCol = 'foreign_net_val';
-var scrSortDir = 'desc';
-var scrDragCol = null;
+// ═══ AFL FORMULA SCREENER V2 ═══
 
-// ═══ Load saved state from localStorage ═══
-try {
-  var _scr = JSON.parse(localStorage.getItem('scrState'));
-  if (_scr) {
-    if (_scr.groups) scrGroups = _scr.groups;
-    if (_scr.columns) scrColumns = _scr.columns;
-    if (_scr.editId) scrEditId = _scr.editId;
-  }
-} catch(e){}
-
-function scrSaveState() {
-  localStorage.setItem('scrState', JSON.stringify({groups:scrGroups, columns:scrColumns, editId:scrEditId}));
-}
-
-// ═══ Backward compat: convert old flat rules to group format ═══
-function scrMigrateRules(rules, logic) {
-  if (!rules || !rules.length) return [{rules:[]}];
-  if (logic === 'OR') {
-    // Each rule becomes its own group
-    return rules.map(function(r) { return {rules:[r]}; });
-  }
-  // AND: all rules in one group
-  return [{rules: rules}];
-}
-
-// ═══ Field definitions — grouped ═══
-var SCR_FIELDS = [
-  {group:'Price',icon:'💰',items:[
-    {k:'close',l:'Close Price',type:'num'},{k:'change_pct',l:'Change %',type:'num'}]},
-  {group:'Volume & Activity',icon:'📊',items:[
-    {k:'volume_lot',l:'Volume (lot)',type:'num'},{k:'value',l:'Value (IDR)',type:'num'},
-    {k:'frequency',l:'Frequency',type:'num'},{k:'vol_spike',l:'Vol Spike (x avg)',type:'num'},
-    {k:'val_spike',l:'Value Spike (x avg)',type:'num'},{k:'freq_spike',l:'Freq Spike (x avg)',type:'num'},
-    {k:'fnet_spike',l:'F.Net Spike (x avg)',type:'num'},{k:'activity_score',l:'Activity Score',type:'num'}]},
-  {group:'Foreign Flow',icon:'🌍',items:[
-    {k:'foreign_net_val',l:'Foreign Net (IDR)',type:'num'},{k:'fnet_streak',l:'Foreign Streak (days)',type:'num'}]},
-  {group:'Moving Average',icon:'📈',items:[
-    {k:'close_vs_ma5',l:'Close vs MA5',type:'compare'},{k:'close_vs_ma10',l:'Close vs MA10',type:'compare'},
-    {k:'close_vs_ma20',l:'Close vs MA20',type:'compare'},{k:'close_vs_ma50',l:'Close vs MA50',type:'compare'},
-    {k:'close_vs_ma100',l:'Close vs MA100',type:'compare'},{k:'close_vs_ma200',l:'Close vs MA200',type:'compare'}]},
-  {group:'MACD',icon:'📉',items:[
-    {k:'macd_hist',l:'MACD Histogram',type:'num'},
-    {k:'macd_cross',l:'MACD Cross',type:'select',opts:[['golden','Golden Cross'],['death','Death Cross']]},
-    {k:'macd_signal',l:'MACD vs Signal',type:'compare'}]},
-  {group:'Stochastic',icon:'🔄',items:[
-    {k:'stoch_k',l:'Stochastic %K',type:'num'},{k:'stoch_d',l:'Stochastic %D',type:'num'},
-    {k:'stoch_zone',l:'Stoch Zone',type:'select',opts:[['oversold','Oversold (<20)'],['overbought','Overbought (>80)']]}]},
-  {group:'Valuation',icon:'💎',items:[
-    {k:'per',l:'PER',type:'num'},{k:'pbv',l:'PBV',type:'num'},{k:'mkt_cap',l:'Market Cap',type:'num'},
-    {k:'total_rev',l:'Revenue',type:'num'},{k:'eps',l:'EPS',type:'num'},{k:'div_yield',l:'Dividend Yield %',type:'num'}]},
-  {group:'Profitability',icon:'📋',items:[
-    {k:'roe',l:'ROE %',type:'num'},{k:'roa',l:'ROA %',type:'num'},
-    {k:'der',l:'DER',type:'num'},{k:'npm',l:'NPM %',type:'num'},{k:'ytd',l:'YTD %',type:'num'},
-    {k:'free_float',l:'Free Float %',type:'num'}]},
-  {group:'Classification',icon:'🏷',items:[
-    {k:'sector',l:'Sector',type:'select',opts:[['Energy','Energy'],['Financials','Financials'],['Basic Materials','Basic Materials'],['Industrials','Industrials'],['Consumer Cyclicals','Consumer Cyclicals'],['Consumer Non-Cyclicals','Consumer Non-Cyclicals'],['Healthcare','Healthcare'],['Technology','Technology'],['Infrastructures','Infrastructures'],['Transportation & Logistic','Transport & Logistic'],['Properties & Real Estate','Properties & RE']]},
-    {k:'industry',l:'Industry',type:'text_match'},
-    {k:'idx_index',l:'Index Member',type:'select',opts:[['LQ45','LQ45'],['IDX30','IDX30'],['IDX80','IDX80'],['ISSI','ISSI'],['JII','JII'],['JII70','JII70'],['KOMPAS100','KOMPAS100'],['IDX-MES BUMN 17','MES BUMN'],['IDXV30','IDXV30']]}]},
+var AFL_TEMPLATES = [
+  { name: 'Ketat Uptrend', formula: 'C > MA200 AND C > MA50 AND C > MA20 AND MA20 > MA50 AND MA50 > MA200 AND V > 100000' },
+  { name: 'Persiapan Bullish', formula: 'C > MA200 AND C > MA50 AND C < MA20 AND DistMA20 > -5 AND V > 50000' },
+  { name: 'Big Down Reversal', formula: 'C < MA200 AND C > MA20 AND Chg > 3 AND RelVol > 2 AND Freq > 100' },
+  { name: 'Breakout', formula: 'isBreakout AND C > MA50 AND RelVol > 1.5 AND Val > 1000000000' },
+  { name: 'Base Formation', formula: 'isBase AND C > MA200 AND K < 30 AND Val > 500000000' },
+  { name: 'Short Trend + Foreign', formula: 'ShortTrend AND ForeignNet > 0 AND Foreign_5D > 0 AND Val > 1000000000' },
+  { name: 'Long Uptrend', formula: 'LongTrend AND MACD > Signal AND Val > 500000000' },
+  { name: 'Oversold Stoch', formula: 'K < 20 AND D < 20 AND C > MA200 AND Val > 500000000' },
+  { name: 'MACD Golden Cross', formula: 'MACDCross AND C > MA50 AND Val > 1000000000' },
+  { name: 'Foreign 5D Inflow', formula: 'Foreign_5D > 0 AND F0 > 0 AND F1 > 0 AND C > MA20 AND Val > 1000000000' },
 ];
 
-// ═══ Column definitions — grouped ═══
-var SCR_COL_GROUPS = [
-  {group:'Price',icon:'💰',cols:[
-    {k:'close',l:'Close'},{k:'change_pct',l:'Chg%'},{k:'high',l:'High'},{k:'low',l:'Low'},{k:'bid',l:'Bid'},{k:'offer',l:'Offer'}]},
-  {group:'Volume',icon:'📊',cols:[
-    {k:'volume',l:'Vol(lot)'},{k:'value',l:'Value'},{k:'frequency',l:'Freq'},{k:'vol_spike',l:'Vol Spike'},
-    {k:'val_spike',l:'Val Spike'},{k:'freq_spike',l:'Freq Spike'},{k:'fnet_spike',l:'FNet Spike'},{k:'activity_score',l:'Score'}]},
-  {group:'Foreign',icon:'🌍',cols:[
-    {k:'foreign_net_val',l:'F.Net'},{k:'foreign_buy_val',l:'F.Buy'},{k:'foreign_sell_val',l:'F.Sell'}]},
-  {group:'MA',icon:'📈',cols:[
-    {k:'ma5',l:'MA5'},{k:'ma10',l:'MA10'},{k:'ma20',l:'MA20'},{k:'ma50',l:'MA50'},{k:'ma100',l:'MA100'},{k:'ma200',l:'MA200'}]},
-  {group:'MACD & Stoch',icon:'📉',cols:[
-    {k:'macd_hist',l:'MACD'},{k:'macd_cross',l:'MACD X'},{k:'stoch_k',l:'Stoch K'},{k:'stoch_d',l:'Stoch D'}]},
-  {group:'Fundamental',icon:'💎',cols:[
-    {k:'per',l:'PER'},{k:'pbv',l:'PBV'},{k:'roe',l:'ROE%'},{k:'roa',l:'ROA%'},{k:'der',l:'DER'},{k:'npm',l:'NPM%'},
-    {k:'eps',l:'EPS'},{k:'div_yield',l:'Div Yield'},{k:'free_float',l:'Free Float'},
-    {k:'market_cap',l:'Mkt Cap'},{k:'total_rev',l:'Revenue'},{k:'ytd',l:'YTD%'},{k:'sector',l:'Sector'},{k:'industry',l:'Industry'}]},
+var AFL_VARIABLES = {
+  'Price': [{v:'C',d:'Close'},{v:'O',d:'Open'},{v:'H',d:'High'},{v:'L',d:'Low'},{v:'Chg',d:'(%)'}],
+  'MA': [{v:'MA3'},{v:'MA5'},{v:'MA10'},{v:'MA20'},{v:'MA30'},{v:'MA50'},{v:'MA100'},{v:'MA200'}],
+  'Distance %': [{v:'DistMA3'},{v:'DistMA5'},{v:'DistMA10'},{v:'DistMA20'},{v:'DistMA30'},{v:'DistMA50'},{v:'DistMA100'},{v:'DistMA200'}],
+  'Above MA (0/1)': [{v:'Up_MA5'},{v:'Up_MA10'},{v:'Up_MA20'},{v:'Up_MA50'},{v:'Up_MA100'},{v:'Up_MA200'}],
+  'Trend (0/1)': [{v:'ShortTrend'},{v:'Intermediate'},{v:'LongTrend'}],
+  'Pattern (0/1)': [{v:'isBase'},{v:'isNearLow'},{v:'isBreakout'}],
+  'HHV/LLV': [{v:'HHV20'},{v:'LLV20'},{v:'HHV_C20'},{v:'LLV_C20'},{v:'PrevHHV20'}],
+  'MACD': [{v:'MACD'},{v:'Signal'},{v:'MACD_Hist'},{v:'MACD_Status',d:'(-2~2)'}],
+  'MACD Bool (0/1)': [{v:'Bullish_MACD'},{v:'BullishWeak_MACD'},{v:'Bearish_MACD'},{v:'BearishWeak_MACD'},{v:'MACDCross'},{v:'MACDDeathCross'}],
+  'Stoch': [{v:'K',d:'StochK'},{v:'D',d:'StochD'},{v:'StochCrossUp',d:'(0/1)'},{v:'StochTrend',d:'(0/1)'}],
+  'Volume': [{v:'V',d:'Volume'},{v:'Val',d:'Value'},{v:'Freq'},{v:'DVMil'},{v:'RelVol',d:'(x avg)'}],
+  'Foreign': [{v:'ForeignNet'},{v:'ForeignBuy'},{v:'ForeignSell'},{v:'Foreign_5D'},{v:'F0',d:'(today)'},{v:'F1'},{v:'F2'},{v:'F3'},{v:'F4'}],
+  'Fundamental': [{v:'PER'},{v:'PBV'},{v:'ROE'},{v:'ROA'}]
+};
+
+// ═══ HELPERS ═══
+function _t(d,k){return d.tech?d.tech[k]:null;}
+function _f(d,k){return d.fund?d.fund[k]:null;}
+function _x(d,k){return d.extra?d.extra[k]:null;}
+function _pct(v){if(v==null)return'—';return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'%</span>';}
+function _num(v){if(v==null||v===0)return'—';return typeof v==='number'?v.toLocaleString():v;}
+function _bool(v){return v?'<span class="up">✓</span>':'<span style="color:var(--t3)">·</span>';}
+function _dist(d,k){var t=d.tech;if(!t||!t[k]||!d.close)return null;return Math.round((d.close-t[k])/t[k]*10000)/100;}
+function _trend(v){if(v>0)return'<span class="up" style="font-size:9px">▲ Up</span>';if(v<0)return'<span class="dn" style="font-size:9px">▼ Down</span>';return'<span style="color:var(--t3);font-size:9px">— Flat</span>';}
+function _cross(type){if(type==='golden')return'<span class="up" style="font-size:9px;font-weight:600">★ Golden</span>';if(type==='death')return'<span class="dn" style="font-size:9px;font-weight:600">✕ Death</span>';return'<span style="color:var(--t3)">—</span>';}
+function _fval(d,key){var v=_x(d,key);if(v==null||v===0)return'<span style="color:var(--t3)">0</span>';return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+fmtRp(v)+'</span>';}
+
+// ═══ COLUMN GROUPS — for organized toggle panel ═══
+var scrColGroups = [
+  {name:'Base',keys:['code','name','close','open','high','low','chg']},
+  {name:'Volume',keys:['volume','value','freq','dvmil','relvol']},
+  {name:'MA',keys:['ma3','ma5','ma10','ma20','ma30','ma50','ma100','ma200']},
+  {name:'Dist%',keys:['distma3','distma5','distma10','distma20','distma30','distma50','distma100','distma200']},
+  {name:'Above',keys:['up_ma5','up_ma10','up_ma20','up_ma50','up_ma100','up_ma200']},
+  {name:'Trend',keys:['shorttrend','intermediate','longtrend','isbreakout','isbase','isnearlow']},
+  {name:'HHV/LLV',keys:['hhv20','llv20']},
+  {name:'MACD',keys:['macd','signal','macd_hist','macd_trend','macd_cross']},
+  {name:'Stoch',keys:['k','d_stoch','stoch_trend','stoch_cross']},
+  {name:'Foreign',keys:['fnet','fbuy','fsell','f5d','f0','f1','f2','f3','f4']},
+  {name:'Funda',keys:['per','pbv','roe','roa','sector','industry']},
 ];
 
-var SCR_ALL_COLS = {};
-SCR_COL_GROUPS.forEach(function(g){g.cols.forEach(function(c){SCR_ALL_COLS[c.k]=c;});});
+// ═══ ALL COLUMNS ═══
+var scrAllCols = {
+  code:{label:'Code',align:'al',fmt:function(d){return '<span class="code" onclick="gsOpen(\''+esc(d.code)+'\')">'+esc(d.code)+'</span>';}},
+  name:{label:'Name',align:'al',cls:'name',fmt:function(d){return esc(d.name||'');}},
+  close:{label:'Close',align:'ar',mono:1,bold:1,sort:function(d){return d.close||0;},fmt:function(d){return(d.close||0).toLocaleString();}},
+  open:{label:'Open',align:'ar',mono:1,sort:function(d){return d.open_price||0;},fmt:function(d){return _num(d.open_price);}},
+  high:{label:'High',align:'ar',mono:1,sort:function(d){return d.high||0;},fmt:function(d){return _num(d.high);}},
+  low:{label:'Low',align:'ar',mono:1,sort:function(d){return d.low||0;},fmt:function(d){return _num(d.low);}},
+  chg:{label:'Chg%',align:'ar',mono:1,bold:1,sort:function(d){return d.change_pct||0;},fmt:function(d){var v=d.change_pct||0;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+(v>0?'+':'')+v.toFixed(2)+'%</span>';}},
+  volume:{label:'Volume',align:'ar',mono:1,sort:function(d){return d.volume||0;},fmt:function(d){return fmtNum(d.volume);}},
+  value:{label:'Value',align:'ar',mono:1,sort:function(d){return d.value||0;},fmt:function(d){return fmtRp(d.value);}},
+  freq:{label:'Freq',align:'ar',mono:1,sort:function(d){return d.frequency||0;},fmt:function(d){return(d.frequency||0).toLocaleString();}},
+  dvmil:{label:'DVMil',align:'ar',mono:1,sort:function(d){return(d.value||0)/1e6;},fmt:function(d){return d.value?Math.round(d.value/1e6).toLocaleString():'—';}},
+  relvol:{label:'RelVol',align:'ar',mono:1,sort:function(d){return _x(d,'RelVol')||0;},fmt:function(d){var v=_x(d,'RelVol');return v?v.toFixed(1)+'x':'—';}},
+  // MA
+  ma3:{label:'MA3',align:'ar',mono:1,sort:function(d){return _t(d,'ma3')||0;},fmt:function(d){return _num(_t(d,'ma3'));}},
+  ma5:{label:'MA5',align:'ar',mono:1,sort:function(d){return _t(d,'ma5')||0;},fmt:function(d){return _num(_t(d,'ma5'));}},
+  ma10:{label:'MA10',align:'ar',mono:1,sort:function(d){return _t(d,'ma10')||0;},fmt:function(d){return _num(_t(d,'ma10'));}},
+  ma20:{label:'MA20',align:'ar',mono:1,sort:function(d){return _t(d,'ma20')||0;},fmt:function(d){return _num(_t(d,'ma20'));}},
+  ma30:{label:'MA30',align:'ar',mono:1,sort:function(d){return _t(d,'ma30')||0;},fmt:function(d){return _num(_t(d,'ma30'));}},
+  ma50:{label:'MA50',align:'ar',mono:1,sort:function(d){return _t(d,'ma50')||0;},fmt:function(d){return _num(_t(d,'ma50'));}},
+  ma100:{label:'MA100',align:'ar',mono:1,sort:function(d){return _t(d,'ma100')||0;},fmt:function(d){return _num(_t(d,'ma100'));}},
+  ma200:{label:'MA200',align:'ar',mono:1,sort:function(d){return _t(d,'ma200')||0;},fmt:function(d){return _num(_t(d,'ma200'));}},
+  // Dist%
+  distma3:{label:'D.3%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma3')||0;},fmt:function(d){return _pct(_dist(d,'ma3'));}},
+  distma5:{label:'D.5%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma5')||0;},fmt:function(d){return _pct(_dist(d,'ma5'));}},
+  distma10:{label:'D.10%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma10')||0;},fmt:function(d){return _pct(_dist(d,'ma10'));}},
+  distma20:{label:'D.20%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma20')||0;},fmt:function(d){return _pct(_dist(d,'ma20'));}},
+  distma30:{label:'D.30%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma30')||0;},fmt:function(d){return _pct(_dist(d,'ma30'));}},
+  distma50:{label:'D.50%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma50')||0;},fmt:function(d){return _pct(_dist(d,'ma50'));}},
+  distma100:{label:'D.100%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma100')||0;},fmt:function(d){return _pct(_dist(d,'ma100'));}},
+  distma200:{label:'D.200%',align:'ar',mono:1,sort:function(d){return _dist(d,'ma200')||0;},fmt:function(d){return _pct(_dist(d,'ma200'));}},
+  // Above MA
+  up_ma5:{label:'↑5',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma5');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma5');return(c&&m)?_bool(c>m):'—';}},
+  up_ma10:{label:'↑10',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma10');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma10');return(c&&m)?_bool(c>m):'—';}},
+  up_ma20:{label:'↑20',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma20');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma20');return(c&&m)?_bool(c>m):'—';}},
+  up_ma50:{label:'↑50',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma50');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma50');return(c&&m)?_bool(c>m):'—';}},
+  up_ma100:{label:'↑100',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma100');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma100');return(c&&m)?_bool(c>m):'—';}},
+  up_ma200:{label:'↑200',align:'ar',sort:function(d){var c=d.close,m=_t(d,'ma200');return(c&&m&&c>m)?1:0;},fmt:function(d){var c=d.close,m=_t(d,'ma200');return(c&&m)?_bool(c>m):'—';}},
+  // Trend/Pattern
+  shorttrend:{label:'ShortTr',align:'ar',sort:function(d){return _x(d,'ShortTrend')||0;},fmt:function(d){return _bool(_x(d,'ShortTrend'));}},
+  intermediate:{label:'IntTr',align:'ar',sort:function(d){return _x(d,'Intermediate')||0;},fmt:function(d){return _bool(_x(d,'Intermediate'));}},
+  longtrend:{label:'LongTr',align:'ar',sort:function(d){return _x(d,'LongTrend')||0;},fmt:function(d){return _bool(_x(d,'LongTrend'));}},
+  isbreakout:{label:'Brkout',align:'ar',sort:function(d){return _x(d,'isBreakout')||0;},fmt:function(d){return _bool(_x(d,'isBreakout'));}},
+  isbase:{label:'Base',align:'ar',sort:function(d){return _x(d,'isBase')||0;},fmt:function(d){return _bool(_x(d,'isBase'));}},
+  isnearlow:{label:'NrLow',align:'ar',sort:function(d){return _x(d,'isNearLow')||0;},fmt:function(d){return _bool(_x(d,'isNearLow'));}},
+  // HHV/LLV
+  hhv20:{label:'HHV20',align:'ar',mono:1,sort:function(d){return _x(d,'HHV20')||0;},fmt:function(d){return _num(_x(d,'HHV20'));}},
+  llv20:{label:'LLV20',align:'ar',mono:1,sort:function(d){return _x(d,'LLV20')||0;},fmt:function(d){return _num(_x(d,'LLV20'));}},
+  // MACD
+  macd:{label:'MACD',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.macd:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.macd;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'</span>';}},
+  signal:{label:'Signal',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.signal:0;},fmt:function(d){var m=_t(d,'macd');return m?m.signal.toFixed(1):'—';}},
+  macd_hist:{label:'MACD_H',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.histogram:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.histogram;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'</span>';}},
+  macd_trend:{label:'MACD Tr',align:'ar',sort:function(d){return _x(d,'MACD_Status')||0;},fmt:function(d){var v=_x(d,'MACD_Status');return _trend(v);}},
+  macd_cross:{label:'MACD×',align:'ar',sort:function(d){return _x(d,'MACDCross')?1:_x(d,'MACDDeathCross')?-1:0;},fmt:function(d){if(_x(d,'MACDCross'))return _cross('golden');if(_x(d,'MACDDeathCross'))return _cross('death');return '<span style="color:var(--t3)">—</span>';}},
+  // Stoch
+  k:{label:'K',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?s.k:0;},fmt:function(d){var s=_t(d,'stoch');if(!s)return'—';var v=s.k;var c=v>80?'dn':v<20?'up':'';return '<span class="'+c+'">'+v.toFixed(1)+'</span>';}},
+  d_stoch:{label:'D',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?(s.d||0):0;},fmt:function(d){var s=_t(d,'stoch');return s&&s.d?s.d.toFixed(1):'—';}},
+  stoch_trend:{label:'Stoch Tr',align:'ar',sort:function(d){return _x(d,'StochTrend')||0;},fmt:function(d){var v=_x(d,'StochTrend');return v?'<span class="up" style="font-size:9px">▲ Up</span>':'<span class="dn" style="font-size:9px">▼ Down</span>';}},
+  stoch_cross:{label:'Stoch×',align:'ar',sort:function(d){return _x(d,'StochCrossUp')||0;},fmt:function(d){return _x(d,'StochCrossUp')?_cross('golden'):'<span style="color:var(--t3)">—</span>';}},
+  // Foreign
+  fnet:{label:'FNet',align:'ar',mono:1,bold:1,sort:function(d){return d.foreign_net_val||0;},fmt:function(d){var v=d.foreign_net_val||0;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+fmtRp(v)+'</span>';}},
+  fbuy:{label:'F.Buy',align:'ar',mono:1,sort:function(d){return(d.foreign_buy||0)*d.close;},fmt:function(d){return fmtRp((d.foreign_buy||0)*d.close);}},
+  fsell:{label:'F.Sell',align:'ar',mono:1,sort:function(d){return(d.foreign_sell||0)*d.close;},fmt:function(d){return fmtRp((d.foreign_sell||0)*d.close);}},
+  f5d:{label:'F.5D',align:'ar',mono:1,sort:function(d){return _x(d,'Foreign_5D')||0;},fmt:function(d){return _fval(d,'Foreign_5D');}},
+  f0:{label:'F0',align:'ar',mono:1,sort:function(d){return _x(d,'F0')||0;},fmt:function(d){return _fval(d,'F0');}},
+  f1:{label:'F1',align:'ar',mono:1,sort:function(d){return _x(d,'F1')||0;},fmt:function(d){return _fval(d,'F1');}},
+  f2:{label:'F2',align:'ar',mono:1,sort:function(d){return _x(d,'F2')||0;},fmt:function(d){return _fval(d,'F2');}},
+  f3:{label:'F3',align:'ar',mono:1,sort:function(d){return _x(d,'F3')||0;},fmt:function(d){return _fval(d,'F3');}},
+  f4:{label:'F4',align:'ar',mono:1,sort:function(d){return _x(d,'F4')||0;},fmt:function(d){return _fval(d,'F4');}},
+  // Fundamental
+  per:{label:'PER',align:'ar',mono:1,sort:function(d){return _f(d,'per')||0;},fmt:function(d){var v=_f(d,'per');return v?v.toFixed(1):'—';}},
+  pbv:{label:'PBV',align:'ar',mono:1,sort:function(d){return _f(d,'pbv')||0;},fmt:function(d){var v=_f(d,'pbv');return v?v.toFixed(1):'—';}},
+  roe:{label:'ROE',align:'ar',mono:1,sort:function(d){return _f(d,'roe')||0;},fmt:function(d){var v=_f(d,'roe');return v?v.toFixed(1)+'%':'—';}},
+  roa:{label:'ROA',align:'ar',mono:1,sort:function(d){return _f(d,'roa')||0;},fmt:function(d){var v=_f(d,'roa');return v?v.toFixed(1)+'%':'—';}},
+  sector:{label:'Sector',align:'al',sort:function(d){return _f(d,'sector')||'';},fmt:function(d){var v=_f(d,'sector');return v?'<span style="font-size:9px">'+esc(v)+'</span>':'—';}},
+  industry:{label:'Industry',align:'al',sort:function(d){return _f(d,'industry')||'';},fmt:function(d){var v=_f(d,'industry');return v?'<span style="font-size:9px">'+esc(v)+'</span>':'—';}},
+};
+
+// ═══ State ═══
+var scrDefaultColOrder=Object.keys(scrAllCols);
+var scrDefaultColVis={};(function(){for(var k in scrAllCols)scrDefaultColVis[k]=false;})();
+['code','name','close','chg','volume','value','freq','fnet','ma20','ma50','ma200','k','macd_hist','per','pbv'].forEach(function(k){scrDefaultColVis[k]=true;});
+
+var scrColOrder=scrDefaultColOrder.slice(),scrColVis=Object.assign({},scrDefaultColVis);
+try{var _sc=JSON.parse(localStorage.getItem('scrCols4'));if(_sc){scrColVis=_sc.vis;scrColOrder=_sc.ord;}}catch(e){}
+function saveScrCols(){localStorage.setItem('scrCols4',JSON.stringify({vis:scrColVis,ord:scrColOrder}));}
+
+var scrFormulaText=localStorage.getItem('afl_formula')||'';
+var scrSavedConfigs=[],scrResults=[],scrRefOpen=false,scrColToggleOpen=false;
+var scrSortKey='fnet',scrSortDir='desc',scrDragCol=null;
+var scrEditorOpen=true;
+
+// Var → col mapping
+var scrVarToCol={
+  C:'close',Close:'close',O:'open',Open:'open',H:'high',High:'high',L:'low',Low:'low',Chg:'chg',
+  V:'volume',Volume:'volume',Val:'value',Value:'value',Freq:'freq',DVMil:'dvmil',RelVol:'relvol',
+  MA3:'ma3',MA5:'ma5',MA10:'ma10',MA20:'ma20',MA30:'ma30',MA50:'ma50',MA100:'ma100',MA200:'ma200',
+  DistMA3:'distma3',DistMA5:'distma5',DistMA10:'distma10',DistMA20:'distma20',DistMA30:'distma30',DistMA50:'distma50',DistMA100:'distma100',DistMA200:'distma200',
+  Up_MA5:'up_ma5',Up_MA10:'up_ma10',Up_MA20:'up_ma20',Up_MA50:'up_ma50',Up_MA100:'up_ma100',Up_MA200:'up_ma200',
+  ShortTrend:'shorttrend',Intermediate:'intermediate',LongTrend:'longtrend',
+  isBase:'isbase',isNearLow:'isnearlow',isBreakout:'isbreakout',
+  HHV20:'hhv20',LLV20:'llv20',HHV_C20:'hhv20',LLV_C20:'llv20',PrevHHV20:'hhv20',
+  MACD:'macd',Signal:'signal',MACD_Hist:'macd_hist',MACD_Status:'macd_trend',
+  Bullish_MACD:'macd_trend',BullishWeak_MACD:'macd_trend',Bearish_MACD:'macd_trend',BearishWeak_MACD:'macd_trend',
+  MACDCross:'macd_cross',MACDDeathCross:'macd_cross',
+  K:'k',D:'d_stoch',StochK:'k',StochD:'d_stoch',StochCrossUp:'stoch_cross',StochTrend:'stoch_trend',
+  ForeignNet:'fnet',ForeignBuy:'fbuy',ForeignSell:'fsell',Foreign_5D:'f5d',F0:'f0',F1:'f1',F2:'f2',F3:'f3',F4:'f4',
+  PER:'per',PBV:'pbv',ROE:'roe',ROA:'roa'
+};
+
+function scrAutoColumns(formula){
+  var base={code:1,name:1,close:1,chg:1,fnet:1};var extra={};
+  formula.replace(/[()]/g,' ').split(/[\s]+/).forEach(function(w){w=w.trim();if(scrVarToCol[w])extra[scrVarToCol[w]]=1;});
+  for(var k in scrColVis)scrColVis[k]=!!(base[k]||extra[k]);
+  saveScrCols();var p=$('scr-col-toggle');if(p&&scrColToggleOpen)p.innerHTML=scrRenderColPanel();
+}
 
 // ═══ LOAD ═══
-async function loadScreener() {
-  try { var r = await fetch('/api/screener/configs'); scrConfigs = await r.json(); } catch { scrConfigs = []; }
-  // Auto-load last used config
-  if (scrEditId && !scrGroups[0].rules.length) {
-    scrLoadConfig(scrEditId);
-  }
-  renderScreener();
+async function loadScreener(){
+  var el=$('scr-content');if(!el)return;
+  try{var r=await fetch('/api/screener/configs');scrSavedConfigs=await r.json();}catch(e){scrSavedConfigs=[];}
+  renderScreenerUI();
 }
 
-// ═══ PRESET TEMPLATES ═══
-var SCR_PRESETS = [
-  { name: '🟢 Asing Akumulasi', desc: 'Foreign net buy streak + volume spike',
-    groups: [{rules:[
-      {field:'fnet_streak', op:'>', val:'3'},
-      {field:'vol_spike', op:'>', val:'1.5'}
-    ]}],
-    columns: ['close','change_pct','foreign_net_val','volume','vol_spike','frequency','ma20','ma200']
-  },
-  { name: '🚀 Breakout', desc: 'Above MA20+MA200, MACD bullish, volume spike',
-    groups: [{rules:[
-      {field:'close_vs_ma20', op:'above', val:''},
-      {field:'close_vs_ma200', op:'above', val:''},
-      {field:'macd_signal', op:'above', val:''},
-      {field:'vol_spike', op:'>', val:'1.5'}
-    ]}],
-    columns: ['close','change_pct','volume','vol_spike','foreign_net_val','ma20','ma200','macd_hist','stoch_k']
-  },
-  { name: '💎 Value Picks', desc: 'Low PER, high ROE, low PBV',
-    groups: [{rules:[
-      {field:'per', op:'>', val:'0'},
-      {field:'per', op:'<', val:'15'},
-      {field:'roe', op:'>', val:'10'},
-      {field:'pbv', op:'<', val:'1.5'}
-    ]}],
-    columns: ['close','change_pct','per','pbv','roe','roa','der','npm','foreign_net_val','ytd']
-  },
-  { name: '📉 Oversold Bounce', desc: 'Stoch oversold, below MA20, MACD turning up',
-    groups: [{rules:[
-      {field:'stoch_zone', op:'=', val:'oversold'},
-      {field:'close_vs_ma20', op:'below', val:''},
-      {field:'macd_hist', op:'>', val:'0'}
-    ]}],
-    columns: ['close','change_pct','stoch_k','stoch_d','macd_hist','ma20','volume','foreign_net_val']
-  }
-];
-
-// ═══ SCREENER ALERT — compare results vs previous, show modal report ═══
-var scrAlertLastResults = {};
-try { var _sa = JSON.parse(localStorage.getItem('scrAlertLast')); if (_sa) scrAlertLastResults = _sa; } catch(e){}
-
-async function scrCheckAlerts() {
-  if (!scrConfigs.length) { showT('⚠', 'No saved configs to check'); return; }
-  var btn = $('scr-alert-btn');
-  if (btn) { btn.textContent = '🔔 Checking...'; btn.disabled = true; }
-
-  var report = []; // {name, totalCurrent, newStocks:[], removedStocks:[], allStocks:[{code,name,close,change_pct,fnet}]}
-
-  for (var ci = 0; ci < scrConfigs.length; ci++) {
-    var cfg = scrConfigs[ci];
-    var f = cfg.filters;
-    if (typeof f === 'string') { try { f = JSON.parse(f); } catch(e) { continue; } }
-    if (!f) continue;
-
-    var groups = f.groups || (f.rules ? [f.rules] : null);
-    if (!groups || !groups.some(function(g) { return g && g.length > 0; })) continue;
-
-    try {
-      var r = await fetch('/api/screener/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groups: groups, limit: 500, always_tech: true }) });
-      var d = await r.json();
-      var currentStocks = (d.data || []).map(function(s) { return { code: s.code, name: s.name, close: s.close, change_pct: s.change_pct, fnet: s.foreign_net_val }; });
-      var currentCodes = currentStocks.map(function(s) { return s.code; });
-      var prevCodes = scrAlertLastResults[cfg.id] || [];
-
-      var newStocks = currentStocks.filter(function(s) { return prevCodes.indexOf(s.code) < 0; });
-      var removedStocks = prevCodes.filter(function(c) { return currentCodes.indexOf(c) < 0; });
-
-      report.push({
-        id: cfg.id,
-        name: cfg.name,
-        totalCurrent: currentCodes.length,
-        totalPrev: prevCodes.length,
-        newStocks: newStocks,
-        removedStocks: removedStocks,
-        allStocks: currentStocks.slice(0, 20)
-      });
-
-      scrAlertLastResults[cfg.id] = currentCodes;
-    } catch(e) {
-      report.push({ id: cfg.id, name: cfg.name, error: e.message });
-    }
-  }
-
-  localStorage.setItem('scrAlertLast', JSON.stringify(scrAlertLastResults));
-  if (btn) { btn.textContent = '🔔 Check Alerts'; btn.disabled = false; }
-
-  // Show modal report
-  scrShowAlertReport(report);
+// ═══ UI ═══
+function scrToggleEditor(){
+  scrEditorOpen=!scrEditorOpen;
+  var ed=$('scr-editor');if(ed)ed.style.display=scrEditorOpen?'flex':'none';
+  var sum=$('scr-summary');if(sum)sum.style.display=scrEditorOpen?'none':'flex';
+  var arrow=$('scr-tog-arrow');if(arrow)arrow.textContent=scrEditorOpen?'▲ Hide':'▼ Show';
 }
 
-function scrShowAlertReport(report) {
-  var existing = $('scr-alert-modal'); if (existing) existing.remove();
-  var totalNew = report.reduce(function(s, r) { return s + (r.newStocks ? r.newStocks.length : 0); }, 0);
-  var totalRemoved = report.reduce(function(s, r) { return s + (r.removedStocks ? r.removedStocks.length : 0); }, 0);
+function renderScreenerUI(){
+  var el=$('scr-content');if(!el)return;
+  var h='<div style="padding:0;display:flex;flex-direction:column;height:100%;overflow:hidden">';
 
-  var h = '<div class="epop o" id="scr-alert-modal" onclick="if(event.target===this)this.remove()">';
-  h += '<div class="scr-modal" style="max-width:900px;max-height:85vh">';
-  h += '<div class="scr-modal-h"><span>🔔 Screener Alert Report</span><button onclick="$(\'scr-alert-modal\').remove()">✕</button></div>';
-  h += '<div class="scr-modal-body" style="max-height:calc(85vh - 60px);overflow-y:auto;padding:16px 20px">';
+  // Compact summary bar (visible when editor hidden)
+  var shortFormula=scrFormulaText.length>80?scrFormulaText.substring(0,77)+'…':scrFormulaText;
+  h+='<div id="scr-summary" style="display:'+(scrEditorOpen?'none':'flex')+';align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--b1);flex-shrink:0;cursor:pointer" onclick="scrToggleEditor()">';
+  h+='<span style="font-size:10px;color:var(--t3)">Formula:</span>';
+  h+='<span style="font-family:var(--fm);font-size:11px;color:var(--bl);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(shortFormula||'(none)')+'</span>';
+  h+='<button class="afl-btn afl-btn-run" onclick="event.stopPropagation();aflRun()" style="padding:4px 12px;font-size:10px">🚀 Run</button>';
+  h+='<span id="scr-tog-arrow" style="font-size:10px;color:var(--t3)">▼ Show</span>';
+  h+='</div>';
 
-  // Summary
-  h += '<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">';
-  h += '<div class="bd-card"><div class="bd-card-label">Configs Checked</div><div class="bd-card-val">' + report.length + '</div></div>';
-  h += '<div class="bd-card"><div class="bd-card-label">New Stocks</div><div class="bd-card-val"><span class="' + (totalNew > 0 ? 'up' : '') + '">' + totalNew + '</span></div></div>';
-  h += '<div class="bd-card"><div class="bd-card-label">Removed</div><div class="bd-card-val"><span class="' + (totalRemoved > 0 ? 'dn' : '') + '">' + totalRemoved + '</span></div></div>';
-  h += '</div>';
+  // Editor section (collapsible)
+  h+='<div id="scr-editor" style="display:'+(scrEditorOpen?'flex':'none')+';flex-direction:column;gap:8px;padding:10px 12px;flex-shrink:0;border-bottom:1px solid var(--b1)">';
+  // Toggle hide button
+  h+='<div style="display:flex;align-items:center;justify-content:space-between">';
+  h+='<span style="font-size:11px;color:var(--t3);font-weight:600">Templates:</span>';
+  h+='<button onclick="scrToggleEditor()" style="background:none;border:none;font-size:10px;color:var(--t3);cursor:pointer;padding:2px 6px" id="scr-tog-arrow">▲ Hide</button>';
+  h+='</div>';
+  // Template buttons
+  h+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+  AFL_TEMPLATES.forEach(function(t,i){h+='<button class="afl-tpl" onclick="aflLoadTemplate('+i+')" title="'+esc(t.formula)+'">'+esc(t.name)+'</button>';});
+  h+='</div>';
+  // Saved
+  h+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-size:11px;color:var(--t3);font-weight:600">Saved:</span><span id="afl-saved">'+renderSavedConfigs()+'</span>';
+  h+='<button class="afl-tpl afl-tpl-add" onclick="aflSaveConfig()">+ New</button></div>';
+  // Formula + buttons
+  h+='<div style="display:flex;gap:8px;align-items:flex-start"><div style="flex:1"><textarea id="afl-input" class="afl-textarea" placeholder="C > MA20 AND K < 20 AND Val > 1000000000&#10;Operators: AND OR > < >= <= == != ( )" rows="3" oninput="aflOnInput()">'+esc(scrFormulaText)+'</textarea></div>';
+  h+='<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0"><button class="afl-btn afl-btn-run" onclick="aflRun()">🚀 Run Formula</button><button class="afl-btn afl-btn-save" onclick="aflSaveConfig()">💾 Save as Config</button><button class="afl-btn afl-btn-clear" onclick="aflClear()">↺ Clear</button></div></div>';
+  // Ref
+  h+='<div><div class="afl-ref-toggle" onclick="aflToggleRef()"><span>'+(scrRefOpen?'▼':'▶')+'</span> <span style="font-size:11px">📋 Available Variables & Operators</span></div>';
+  h+='<div id="afl-ref" style="display:'+(scrRefOpen?'grid':'none')+'" class="afl-ref-grid">';
+  for(var cat in AFL_VARIABLES){h+='<div class="afl-ref-cat"><div class="afl-ref-cat-title">'+esc(cat)+'</div>';AFL_VARIABLES[cat].forEach(function(v){h+='<span class="afl-ref-var" onclick="aflInsertVar(\''+v.v+'\')">'+v.v+(v.d?' <span style="color:var(--t3);font-weight:400">/ '+esc(v.d)+'</span>':'')+'</span>';});h+='</div>';}
+  h+='</div></div>';
+  h+='</div>'; // end editor
 
-  if (!totalNew && !totalRemoved) {
-    h += '<div style="text-align:center;padding:20px;color:var(--t3)">No changes since last check. All configs returned same stocks.</div>';
-  }
-
-  // Per config
-  report.forEach(function(r) {
-    if (r.error) {
-      h += '<div style="padding:8px 12px;margin-bottom:8px;border:1px solid var(--rd);border-radius:8px;background:var(--rdB)">';
-      h += '<span style="font-weight:700">' + esc(r.name) + '</span> — Error: ' + esc(r.error);
-      h += '</div>';
-      return;
-    }
-
-    var hasChanges = (r.newStocks && r.newStocks.length) || (r.removedStocks && r.removedStocks.length);
-    var borderColor = hasChanges ? 'var(--am)' : 'var(--b2)';
-
-    h += '<div style="border:1px solid ' + borderColor + ';border-radius:10px;margin-bottom:12px;overflow:hidden">';
-    // Header
-    h += '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bgH);border-bottom:1px solid var(--b1)">';
-    h += '<span style="font-weight:700;font-size:13px">' + esc(r.name) + '</span>';
-    h += '<span style="font-size:10px;color:var(--t3)">' + r.totalCurrent + ' stocks match</span>';
-    if (r.totalPrev) h += '<span style="font-size:10px;color:var(--t3)">(was ' + r.totalPrev + ')</span>';
-    if (r.newStocks.length) h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--gnB);color:var(--gn);font-weight:700">+' + r.newStocks.length + ' new</span>';
-    if (r.removedStocks.length) h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--rdB);color:var(--rd);font-weight:700">-' + r.removedStocks.length + ' out</span>';
-    h += '<span style="flex:1"></span>';
-    h += '<button class="bei-sort-btn" onclick="scrLoadConfig(' + r.id + ');$(\'scr-alert-modal\').remove();scrRun()" style="font-size:10px;padding:3px 8px">🔬 Run</button>';
-    h += '</div>';
-
-    // New stocks table
-    if (r.newStocks.length) {
-      h += '<div style="padding:6px 14px 2px"><span style="font-size:10px;font-weight:700;color:var(--gn)">🟢 NEW — just entered criteria:</span></div>';
-      h += '<table class="bei-tbl" style="width:100%"><thead><tr>';
-      h += '<th class="al" style="min-width:50px">Code</th><th class="al">Name</th><th class="ar">Close</th><th class="ar">Chg%</th><th class="ar">F.Net</th>';
-      h += '</tr></thead><tbody>';
-      r.newStocks.forEach(function(s) {
-        var chgCls = (s.change_pct||0) > 0 ? 'up' : (s.change_pct||0) < 0 ? 'dn' : '';
-        var fCls = (s.fnet||0) > 0 ? 'up' : (s.fnet||0) < 0 ? 'dn' : '';
-        h += '<tr style="background:var(--gnB);cursor:pointer" onclick="gsOpen(\'' + esc(s.code) + '\')">';
-        h += '<td class="code al">' + esc(s.code) + '</td>';
-        h += '<td class="al" style="font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.name||'') + '</td>';
-        h += '<td class="ar" style="font-family:var(--fm)">' + (s.close||0).toLocaleString() + '</td>';
-        h += '<td class="ar ' + chgCls + '" style="font-family:var(--fm)">' + ((s.change_pct||0)>0?'+':'') + (s.change_pct||0).toFixed(2) + '%</td>';
-        h += '<td class="ar ' + fCls + '" style="font-family:var(--fm)">' + fmtRp(s.fnet||0) + '</td>';
-        h += '</tr>';
-      });
-      h += '</tbody></table>';
-    }
-
-    // Removed stocks
-    if (r.removedStocks.length) {
-      h += '<div style="padding:6px 14px 2px"><span style="font-size:10px;font-weight:700;color:var(--rd)">🔴 OUT — no longer match:</span></div>';
-      h += '<div style="padding:2px 14px 8px;display:flex;gap:4px;flex-wrap:wrap">';
-      r.removedStocks.forEach(function(code) {
-        h += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--rdB);color:var(--rd);font-family:var(--fm);cursor:pointer" onclick="gsOpen(\'' + esc(code) + '\')">' + esc(code) + '</span>';
-      });
-      h += '</div>';
-    }
-
-    // Current top stocks (collapsed by default if no changes)
-    if (!hasChanges && r.allStocks.length) {
-      h += '<div style="padding:6px 14px 8px"><span style="font-size:10px;color:var(--t3)">Top matches: ';
-      h += r.allStocks.slice(0, 8).map(function(s) {
-        return '<span class="code" style="cursor:pointer" onclick="gsOpen(\'' + esc(s.code) + '\')">' + esc(s.code) + '</span>';
-      }).join(' ');
-      if (r.totalCurrent > 8) h += ' +' + (r.totalCurrent - 8) + ' more';
-      h += '</span></div>';
-    }
-
-    h += '</div>';
-  });
-
-  h += '</div></div></div>';
-  document.body.insertAdjacentHTML('beforeend', h);
+  // Status + cols
+  h+='<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding:4px 12px"><span id="afl-status" style="font-size:11px;color:var(--t3);flex:1;min-height:16px"></span><button id="scr-cols-btn" class="bei-sort-btn" style="font-size:9px;padding:2px 8px;display:none" onclick="scrShowColToggle()">⚙ Columns</button></div>';
+  // Col toggle
+  h+='<div id="scr-col-toggle" style="display:none;flex-shrink:0;padding:6px 12px;border-bottom:1px solid var(--b1)">'+scrRenderColPanel()+'</div>';
+  h+='<div id="afl-results" style="flex:1;overflow:auto"></div></div>';
+  el.innerHTML=h;
 }
 
-function scrApplyPreset(idx) {
-  var p = SCR_PRESETS[idx];
-  if (!p) return;
-  scrGroups = JSON.parse(JSON.stringify(p.groups));
-  scrColumns = p.columns.slice();
-  scrEditId = null;
-  scrSaveState();
-  // Close preset panel if open, open editor
-  scrOpenEditor();
-}
-
-// ═══ MAIN RENDER ═══
-function renderScreener() {
-  var el = $('scr-content'); if (!el) return;
-  var h = '';
-
-  // Presets row
-  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 6px;align-items:center">';
-  h += '<span style="font-size:10px;color:var(--t3);font-weight:600">Presets:</span>';
-  SCR_PRESETS.forEach(function(p, i) {
-    h += '<button class="bei-sort-btn" onclick="scrApplyPreset(' + i + ')" style="padding:3px 8px;font-size:10px" title="' + esc(p.desc) + '">' + p.name + '</button>';
-  });
-  h += '</div>';
-
-  // Saved configs + actions
-  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 8px;align-items:center">';
-  h += '<span style="font-size:10px;color:var(--t3);font-weight:600">Saved:</span>';
-  scrConfigs.forEach(function(c) {
-    h += '<button class="bei-tab' + (scrEditId === c.id ? ' on' : '') + '" onclick="scrLoadConfig(' + c.id + ');scrOpenEditor()">' + esc(c.name) + '</button>';
-  });
-  h += '<button class="bei-tab" onclick="scrGroups=[{rules:[]}];scrEditId=null;scrColumns=[\'close\',\'change_pct\',\'volume\',\'per\',\'pbv\',\'foreign_net_val\',\'ma20\'];scrOpenEditor()" style="border-style:dashed">+ New</button>';
-  h += '<span style="flex:1"></span>';
-  h += '<button class="bei-sort-btn" id="scr-alert-btn" onclick="scrCheckAlerts()" style="padding:4px 10px;font-size:11px;color:var(--am);border-color:var(--am)" title="Check all saved configs for new stocks">🔔 Check Alerts</button>';
-  h += '<button class="pbtn" onclick="scrRun()" style="padding:5px 16px;font-size:12px">🔬 Run</button>';
-  h += '</div>';
-
-  // Active filters display
-  var allRules = scrGetAllRules();
-  if (allRules.length) {
-    h += '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:2px 0 6px;font-size:10px">';
-    h += '<span style="color:var(--t3)">Filters:</span>';
-    scrGroups.forEach(function(g, gi) {
-      if (!g.rules.length) return;
-      if (gi > 0) h += '<span style="color:var(--am);font-weight:700;padding:0 4px">OR</span>';
-      g.rules.forEach(function(r, ri) {
-        if (!r.field) return;
-        var fDef = scrFindField(r.field);
-        var label = fDef ? fDef.l : r.field;
-        var display = label + ' ' + (r.op || '>') + ' ' + (r.val || '');
-        h += '<span style="padding:2px 6px;border-radius:4px;background:var(--blB);color:var(--bl);font-weight:600">' + esc(display) + '</span>';
-        if (ri < g.rules.length - 1) h += '<span style="color:var(--t3);font-weight:700;font-size:9px">AND</span>';
-      });
+// ═══ GROUPED COL PANEL ═══
+function scrRenderColPanel(){
+  var h='<div style="display:flex;flex-direction:column;gap:4px">';
+  scrColGroups.forEach(function(g){
+    h+='<div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap">';
+    h+='<span style="font-size:9px;font-weight:700;color:var(--t3);min-width:42px">'+g.name+'</span>';
+    g.keys.forEach(function(k){
+      if(!scrAllCols[k])return;
+      h+='<span class="scr-col'+(scrColVis[k]?' on':'')+'" draggable="true" data-col="'+k+'" onclick="scrToggleCol(\''+k+'\')" ondragstart="scrColDragStart(event)" ondragover="scrColDragOver(event)" ondrop="scrColDrop(event)" style="font-size:9px;padding:2px 5px;cursor:grab;user-select:none">'+scrAllCols[k].label+'</span>';
     });
-    h += '</div>';
-  }
-
-  if (scrResults.length) h += '<div style="font-size:11px;color:var(--t2);padding:2px 0">' + scrResults.length + ' results</div>';
-  h += '<div id="scr-results">';
-  if (scrResults.length) h += scrRenderResults();
-  h += '</div>';
-  el.innerHTML = h;
-}
-
-function scrFindField(k) {
-  var found = null;
-  SCR_FIELDS.forEach(function(g) { g.items.forEach(function(f) { if (f.k === k) found = f; }); });
-  return found;
-}
-
-function scrGetAllRules() {
-  var all = [];
-  scrGroups.forEach(function(g) { g.rules.forEach(function(r) { if (r.field) all.push(r); }); });
-  return all;
-}
-
-// ═══ RESULTS TABLE ═══
-function scrRenderResults() {
-  var h = '<div style="overflow:auto;max-height:calc(100vh - 220px)"><table class="bei-tbl" style="width:100%"><thead style="position:sticky;top:0;z-index:1;background:var(--bg1)"><tr>';
-  h += '<th class="al" style="cursor:pointer;user-select:none;min-width:55px" onclick="scrSort(\'code\')">Code' + (scrSortCol === 'code' ? (scrSortDir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
-  h += '<th class="al" style="min-width:120px">Name</th>';
-  scrColumns.forEach(function(k) {
-    var c = SCR_ALL_COLS[k] || {k:k, l:k};
-    var arrow = scrSortCol === k ? (scrSortDir === 'asc' ? ' ▲' : ' ▼') : '';
-    h += '<th class="ar" style="cursor:pointer;user-select:none;white-space:nowrap" ';
-    h += 'draggable="true" ondragstart="scrDragCol=\'' + k + '\'" ondragover="event.preventDefault()" ondrop="scrDropCol(\'' + k + '\')" ';
-    h += 'onclick="scrSort(\'' + k + '\')">' + c.l + arrow + '</th>';
+    h+='</div>';
   });
-  h += '</tr></thead><tbody>';
-  scrResults.forEach(function(r) {
-    h += '<tr><td class="code al" onclick="gsOpen(\'' + esc(r.code) + '\')">' + esc(r.code) + '</td>';
-    h += '<td class="name al" style="font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name || '') + '</td>';
-    scrColumns.forEach(function(k) {
-      h += '<td class="ar ' + scrGetCellClass(r, k) + '" style="font-family:var(--fm)">' + scrGetCellValue(r, k) + '</td>';
-    });
-    h += '</tr>';
-  });
-  h += '</tbody></table></div>';
-  return h;
+  h+='<div style="margin-top:2px"><button class="bei-sort-btn" onclick="scrResetCols()" style="font-size:9px;padding:2px 6px">↺ Reset</button></div>';
+  h+='</div>';return h;
+}
+function scrShowColToggle(){scrColToggleOpen=!scrColToggleOpen;var el=$('scr-col-toggle');if(el){el.style.display=scrColToggleOpen?'block':'none';el.innerHTML=scrRenderColPanel();}}
+function scrToggleCol(k){scrColVis[k]=!scrColVis[k];saveScrCols();var p=$('scr-col-toggle');if(p)p.innerHTML=scrRenderColPanel();scrRenderResults();}
+function scrResetCols(){scrColOrder=scrDefaultColOrder.slice();scrColVis=Object.assign({},scrDefaultColVis);saveScrCols();var p=$('scr-col-toggle');if(p)p.innerHTML=scrRenderColPanel();scrRenderResults();}
+
+// ═══ DRAG ═══
+function scrColDragStart(e){scrDragCol=e.target.getAttribute('data-col');e.target.style.opacity='0.4';e.dataTransfer.effectAllowed='move';}
+function scrColDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('#scr-col-toggle [data-col]').forEach(function(el){el.style.borderLeft='';});var t=e.target.closest('[data-col]');if(t&&t.getAttribute('data-col')!==scrDragCol)t.style.borderLeft='2px solid var(--bl)';}
+function scrColDrop(e){e.preventDefault();document.querySelectorAll('#scr-col-toggle [data-col]').forEach(function(el){el.style.opacity='1';el.style.borderLeft='';});var t=e.target.closest('[data-col]');if(!t||!scrDragCol)return;var dc=t.getAttribute('data-col');if(scrDragCol===dc)return;var a=scrColOrder.slice(),f=a.indexOf(scrDragCol),to=a.indexOf(dc);if(f<0||to<0)return;a.splice(f,1);a.splice(to,0,scrDragCol);scrColOrder=a;scrDragCol=null;saveScrCols();scrRenderResults();}
+function scrThDragStart(e){scrDragCol=e.target.getAttribute('data-col');e.target.style.opacity='0.4';e.dataTransfer.effectAllowed='move';}
+function scrThDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';}
+function scrThDrop(e){e.preventDefault();document.querySelectorAll('#afl-results th[data-col]').forEach(function(el){el.style.opacity='1';});var t=e.target.closest('[data-col]');if(!t||!scrDragCol)return;var dc=t.getAttribute('data-col');if(scrDragCol===dc)return;var a=scrColOrder.slice(),f=a.indexOf(scrDragCol),to=a.indexOf(dc);if(f<0||to<0)return;a.splice(f,1);a.splice(to,0,scrDragCol);scrColOrder=a;scrDragCol=null;saveScrCols();var p=$('scr-col-toggle');if(p&&scrColToggleOpen)p.innerHTML=scrRenderColPanel();scrRenderResults();}
+
+// ═══ SORT ═══
+function scrDoSort(key){if(scrSortKey===key)scrSortDir=scrSortDir==='desc'?'asc':'desc';else{scrSortKey=key;scrSortDir='desc';}scrRenderResults();}
+function scrSortData(data){var col=scrAllCols[scrSortKey];var dir=scrSortDir==='desc'?-1:1;if(!col||!col.sort)return data.slice().sort(function(a,b){return dir*((Math.abs(b.foreign_net_val||0))-(Math.abs(a.foreign_net_val||0)));});var fn=col.sort;return data.slice().sort(function(a,b){var va=fn(a),vb=fn(b);if(typeof va==='string')return dir*va.localeCompare(vb);return dir*((vb||0)-(va||0));});}
+
+// ═══ SAVED ═══
+function renderSavedConfigs(){
+  if(!scrSavedConfigs.length)return '<span style="font-size:10px;color:var(--t3)">No saved configs</span>';
+  return scrSavedConfigs.map(function(c){
+    var formula='';try{var f=typeof c.filters==='string'?JSON.parse(c.filters):c.filters;formula=f.formula||'';}catch(e){}
+    return '<span style="display:inline-flex;align-items:center;gap:0;margin-right:2px"><button class="afl-tpl afl-tpl-saved" onclick="aflLoadConfig('+c.id+')" title="'+esc(formula)+'" style="border-radius:5px 0 0 5px">'+esc(c.name)+'</button><button class="afl-tpl" onclick="aflDeleteConfig('+c.id+',\''+esc(c.name).replace(/'/g,"\\'")+'\');" title="Delete" style="border-radius:0 5px 5px 0;border-left:none;padding:3px 5px;color:var(--rd);font-size:10px">✕</button></span>';
+  }).join('');
 }
 
-function scrGetCellValue(r, k) {
-  var t = r.tech || {}; var f = r.fund || {};
-  if (k === 'close') return (r.close || 0).toLocaleString();
-  if (k === 'change_pct') return (r.change_pct > 0 ? '+' : '') + (r.change_pct || 0).toFixed(2) + '%';
-  if (k === 'volume') return fmtNum(Math.round((r.volume || 0) / 100));
-  if (k === 'value') return fmtRp(r.value || 0);
-  if (k === 'frequency') return fmtNum(r.frequency || 0);
-  if (k === 'foreign_net_val') return fmtRp(r.foreign_net_val || 0);
-  if (k === 'foreign_buy_val') return fmtRp((r.foreign_buy || 0) * r.close);
-  if (k === 'foreign_sell_val') return fmtRp((r.foreign_sell || 0) * r.close);
-  if (k === 'high') return (r.high || 0).toLocaleString();
-  if (k === 'low') return (r.low || 0).toLocaleString();
-  if (k === 'bid') return (r.bid || 0).toLocaleString();
-  if (k === 'offer') return (r.offer || 0).toLocaleString();
-  if (k === 'vol_spike') return t.vol_ratio ? t.vol_ratio + 'x' : '-';
-  if (k === 'val_spike') return t.val_spike ? t.val_spike + 'x' : '-';
-  if (k === 'freq_spike') return t.freq_spike ? t.freq_spike + 'x' : '-';
-  if (k === 'fnet_spike') return t.fnet_spike ? t.fnet_spike + 'x' : '-';
-  if (k === 'activity_score') return t.activity_score ? t.activity_score + 'x' : '-';
-  if (k.match(/^ma\d+$/)) { var v = t[k]; return v ? v.toLocaleString() : '-'; }
-  if (k === 'macd_hist') return t.macd ? t.macd.histogram.toFixed(1) : '-';
-  if (k === 'macd_cross') return t.macd && t.macd.cross ? t.macd.cross : '-';
-  if (k === 'stoch_k') return t.stoch ? t.stoch.k.toFixed(1) : '-';
-  if (k === 'stoch_d') return t.stoch && t.stoch.d ? t.stoch.d.toFixed(1) : '-';
-  if (k === 'per') return f.per || '-';
-  if (k === 'pbv') return f.pbv || '-';
-  if (k === 'roe') return f.roe ? f.roe + '%' : '-';
-  if (k === 'roa') return f.roa ? f.roa + '%' : '-';
-  if (k === 'der') return f.der || '-';
-  if (k === 'npm') return f.npm ? f.npm + '%' : '-';
-  if (k === 'eps') return f.eps ? f.eps.toLocaleString() : '-';
-  if (k === 'div_yield') return f.div_yield ? f.div_yield.toFixed(2) + '%' : '-';
-  if (k === 'free_float') { var ff = r.tradeable_shares && r.listed_shares ? Math.round(r.tradeable_shares / r.listed_shares * 1000) / 10 : (f.free_float || 0); return ff ? ff.toFixed(1) + '%' : '-'; }
-  if (k === 'market_cap') return f.mkt_cap ? fmtRp(f.mkt_cap) : '-';
-  if (k === 'total_rev') return f.total_rev ? fmtRp(f.total_rev) : '-';
-  if (k === 'ytd') return f.ytd ? (f.ytd > 0 ? '+' : '') + f.ytd.toFixed(1) + '%' : '-';
-  if (k === 'sector') return f.sector || '-';
-  if (k === 'industry') return f.industry || '-';
-  return '-';
+// ═══ ACTIONS ═══
+function aflLoadTemplate(idx){var t=AFL_TEMPLATES[idx];if(!t)return;var inp=$('afl-input');if(inp){inp.value=t.formula;scrFormulaText=t.formula;localStorage.setItem('afl_formula',t.formula);}}
+function aflLoadConfig(id){
+  var c=null;for(var i=0;i<scrSavedConfigs.length;i++){if(scrSavedConfigs[i].id===id){c=scrSavedConfigs[i];break;}}if(!c)return;
+  try{var f=typeof c.filters==='string'?JSON.parse(c.filters):c.filters;var formula=f.formula||'';
+  var inp=$('afl-input');if(inp){inp.value=formula;scrFormulaText=formula;localStorage.setItem('afl_formula',formula);}
+  if(f.colVis){scrColVis=Object.assign({},scrDefaultColVis,f.colVis);}
+  if(f.colOrder&&f.colOrder.length){scrColOrder=f.colOrder;}
+  saveScrCols();var p=$('scr-col-toggle');if(p&&scrColToggleOpen)p.innerHTML=scrRenderColPanel();
+  if(scrResults.length)scrRenderResults();}catch(e){}
+}
+async function aflSaveConfig(){
+  var formula='';var inp=$('afl-input');if(inp)formula=inp.value.trim();
+  if(!formula){showT('⚠️','Write a formula first');return;}
+  var name=prompt('Config name:');if(!name)return;
+  try{await fetch('/api/screener/configs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,filters:{formula:formula,colVis:scrColVis,colOrder:scrColOrder}})});
+  var r=await fetch('/api/screener/configs');scrSavedConfigs=await r.json();
+  var el=$('afl-saved');if(el)el.innerHTML=renderSavedConfigs();showT('💾 Saved',name);}catch(e){}
+}
+async function aflDeleteConfig(id,name){
+  if(!confirm('Delete "'+name+'"?'))return;
+  try{await fetch('/api/screener/configs/'+id,{method:'DELETE'});var r=await fetch('/api/screener/configs');scrSavedConfigs=await r.json();var el=$('afl-saved');if(el)el.innerHTML=renderSavedConfigs();}catch(e){}
+}
+function aflClear(){var inp=$('afl-input');if(inp)inp.value='';scrFormulaText='';localStorage.setItem('afl_formula','');scrResults=[];var r=$('afl-results');if(r)r.innerHTML='';var s=$('afl-status');if(s)s.textContent='';var cb=$('scr-cols-btn');if(cb)cb.style.display='none';scrColToggleOpen=false;var ct=$('scr-col-toggle');if(ct)ct.style.display='none';}
+function aflOnInput(){var inp=$('afl-input');if(inp){scrFormulaText=inp.value;localStorage.setItem('afl_formula',inp.value);}}
+function aflToggleRef(){scrRefOpen=!scrRefOpen;var el=$('afl-ref');if(el)el.style.display=scrRefOpen?'grid':'none';var t=document.querySelector('.afl-ref-toggle span:first-child');if(t)t.textContent=scrRefOpen?'▼':'▶';}
+function aflInsertVar(v){var inp=$('afl-input');if(!inp)return;var s=inp.selectionStart,e=inp.selectionEnd,txt=inp.value,bef=txt.substring(0,s),aft=txt.substring(e);var sp=bef.length>0&&bef[bef.length-1]!==' '&&bef[bef.length-1]!=='(';inp.value=bef+(sp?' ':'')+v+aft;inp.focus();var np=s+(sp?1:0)+v.length;inp.setSelectionRange(np,np);scrFormulaText=inp.value;localStorage.setItem('afl_formula',inp.value);}
+
+// ═══ RUN ═══
+async function aflRun(){
+  var formula='';var inp=$('afl-input');if(inp)formula=inp.value.trim();
+  if(!formula){showT('⚠️','Write a formula first');return;}
+  var st=$('afl-status'),re=$('afl-results');
+  if(st)st.innerHTML='<span style="color:var(--am)">⏳ Running...</span>';
+  if(re)re.innerHTML=skelRows(8);
+  try{
+    var r=await fetch('/api/screener/formula',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula:formula,limit:500})});
+    var data=await r.json();
+    if(data.error){if(st)st.innerHTML='<span style="color:var(--rd)">❌ '+esc(data.error)+'</span>';if(re)re.innerHTML='';return;}
+    scrResults=data.data||[];
+    if(st)st.innerHTML='<span style="color:var(--gn)">✅ '+(data.total||0)+' matches</span> · <span style="color:var(--t3)">'+(data.trade_date||'')+' · '+(data.parse_time||0)+'ms</span>';
+    scrAutoColumns(formula);
+    var cb=$('scr-cols-btn');if(cb)cb.style.display=scrResults.length?'inline-block':'none';
+    // Auto-hide editor after successful run
+    if(scrResults.length&&scrEditorOpen){scrEditorOpen=false;var ed=$('scr-editor');if(ed)ed.style.display='none';var sum=$('scr-summary');if(sum){sum.style.display='flex';var sf=sum.querySelector('span:nth-child(2)');if(sf)sf.textContent=formula.length>80?formula.substring(0,77)+'…':formula;}}
+    scrRenderResults();
+  }catch(e){if(st)st.innerHTML='<span style="color:var(--rd)">❌ Network error</span>';if(re)re.innerHTML='';}
 }
 
-function scrGetCellClass(r, k) {
-  if (k === 'change_pct') return (r.change_pct || 0) > 0 ? 'up' : (r.change_pct || 0) < 0 ? 'dn' : '';
-  if (k === 'foreign_net_val') return (r.foreign_net_val || 0) > 0 ? 'up' : (r.foreign_net_val || 0) < 0 ? 'dn' : '';
-  if (k === 'ytd') { var f = r.fund || {}; return (f.ytd || 0) > 0 ? 'up' : (f.ytd || 0) < 0 ? 'dn' : ''; }
-  if (k === 'macd_hist') { var t = r.tech || {}; return t.macd ? (t.macd.histogram > 0 ? 'up' : 'dn') : ''; }
-  if (k === 'activity_score') { var t2 = r.tech || {}; return (t2.activity_score || 0) >= 3 ? 'up' : (t2.activity_score || 0) >= 2 ? '' : ''; }
-  return '';
+// ═══ RENDER TABLE ═══
+function scrRenderResults(){
+  var el=$('afl-results');if(!el)return;
+  if(!scrResults||!scrResults.length){el.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3);font-size:12px">No results. Write a formula and click Run.</div>';return;}
+  var visCols=scrColOrder.filter(function(k){return scrColVis[k]&&scrAllCols[k];});
+  var sorted=scrSortData(scrResults);
+  var h='<table class="bei-tbl" style="font-size:10px"><thead><tr><th class="ar" style="width:28px">#</th>';
+  visCols.forEach(function(k){var c=scrAllCols[k];var ar=scrSortKey===k?(scrSortDir==='desc'?' ▼':' ▲'):'';var ss=scrSortKey===k?'color:var(--bl);':'';h+='<th class="'+c.align+'" style="cursor:pointer;user-select:none;'+ss+'" draggable="true" data-col="'+k+'" onclick="scrDoSort(\''+k+'\')" ondragstart="scrThDragStart(event)" ondragover="scrThDragOver(event)" ondrop="scrThDrop(event)">'+c.label+ar+'</th>';});
+  h+='</tr></thead><tbody>';
+  sorted.forEach(function(d,i){
+    h+='<tr><td class="ar" style="color:var(--t3)">'+(i+1)+'</td>';
+    visCols.forEach(function(k){var c=scrAllCols[k];var s='';if(c.mono)s+='font-family:var(--fm);';if(c.bold)s+='font-weight:600;';h+='<td class="'+c.align+(c.cls?' '+c.cls:'')+'"'+(s?' style="'+s+'"':'')+'>'+c.fmt(d)+'</td>';});
+    h+='</tr>';});
+  h+='</tbody></table>';el.innerHTML=h;
 }
-
-function scrSortValue(r, k) {
-  var t = r.tech || {}; var f = r.fund || {};
-  if (k === 'code') return r.code || '';
-  if (k === 'close') return r.close || 0;
-  if (k === 'change_pct') return r.change_pct || 0;
-  if (k === 'volume') return r.volume || 0;
-  if (k === 'value') return r.value || 0;
-  if (k === 'frequency') return r.frequency || 0;
-  if (k === 'foreign_net_val') return r.foreign_net_val || 0;
-  if (k === 'foreign_buy_val') return (r.foreign_buy || 0) * r.close;
-  if (k === 'foreign_sell_val') return (r.foreign_sell || 0) * r.close;
-  if (k === 'high') return r.high || 0;
-  if (k === 'low') return r.low || 0;
-  if (k.match(/^ma\d+$/)) return t[k] || 0;
-  if (k === 'macd_hist') return t.macd ? t.macd.histogram : 0;
-  if (k === 'stoch_k') return t.stoch ? t.stoch.k : 0;
-  if (k === 'stoch_d') return t.stoch ? (t.stoch.d || 0) : 0;
-  if (k === 'vol_spike') return t.vol_ratio || 0;
-  if (k === 'val_spike') return t.val_spike || 0;
-  if (k === 'freq_spike') return t.freq_spike || 0;
-  if (k === 'fnet_spike') return t.fnet_spike || 0;
-  if (k === 'activity_score') return t.activity_score || 0;
-  if (k === 'per') return f.per || 0;
-  if (k === 'pbv') return f.pbv || 0;
-  if (k === 'roe') return f.roe || 0;
-  if (k === 'roa') return f.roa || 0;
-  if (k === 'der') return f.der || 0;
-  if (k === 'npm') return f.npm || 0;
-  if (k === 'eps') return f.eps || 0;
-  if (k === 'div_yield') return f.div_yield || 0;
-  if (k === 'free_float') return r.tradeable_shares && r.listed_shares ? r.tradeable_shares / r.listed_shares * 100 : (f.free_float || 0);
-  if (k === 'market_cap') return f.mkt_cap || 0;
-  if (k === 'total_rev') return f.total_rev || 0;
-  if (k === 'ytd') return f.ytd || 0;
-  if (k === 'sector') return f.sector || '';
-  if (k === 'industry') return f.industry || '';
-  return 0;
-}
-
-function scrSort(k) {
-  if (scrSortCol === k) scrSortDir = scrSortDir === 'desc' ? 'asc' : 'desc';
-  else { scrSortCol = k; scrSortDir = 'desc'; }
-  scrResults.sort(function(a, b) {
-    var va = scrSortValue(a, k), vb = scrSortValue(b, k);
-    if (typeof va === 'string') return scrSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-    return scrSortDir === 'asc' ? va - vb : vb - va;
-  });
-  var el = $('scr-results'); if (el) el.innerHTML = scrRenderResults();
-}
-
-function scrDropCol(targetK) {
-  if (!scrDragCol || scrDragCol === targetK) return;
-  var fi = scrColumns.indexOf(scrDragCol), ti = scrColumns.indexOf(targetK);
-  if (fi < 0 || ti < 0) return;
-  scrColumns.splice(fi, 1); scrColumns.splice(ti, 0, scrDragCol);
-  scrDragCol = null;
-  var el = $('scr-results'); if (el) el.innerHTML = scrRenderResults();
-}
-
-function scrTogCol(k) {
-  var i = scrColumns.indexOf(k);
-  if (i >= 0) scrColumns.splice(i, 1); else scrColumns.push(k);
-  scrRenderEditor();
-}
-
-function scrFieldChanged(gi, ri) {
-  var fDef = scrFindField(scrGroups[gi].rules[ri].field);
-  if (fDef) {
-    if (fDef.type === 'compare') scrGroups[gi].rules[ri].op = 'above';
-    else if (fDef.type === 'select') scrGroups[gi].rules[ri].op = '=';
-    else scrGroups[gi].rules[ri].op = '>';
-    scrGroups[gi].rules[ri].val = '';
-  }
-}
-
-// ═══ EDITOR POPUP — larger, with rule groups ═══
-function scrOpenEditor() {
-  var existing = $('scr-editor'); if (existing) existing.remove();
-  var h = '<div class="epop o" id="scr-editor" onclick="if(event.target===this)scrCloseEditor()">';
-  h += '<div class="scr-modal" style="max-width:900px;max-height:85vh">';
-  h += '<div class="scr-modal-h"><span>⚙️ Screener Rules</span><button onclick="scrCloseEditor()">✕</button></div>';
-  h += '<div class="scr-modal-body" id="scr-editor-body" style="max-height:calc(85vh - 100px);overflow-y:auto;padding:16px 20px"></div>';
-  h += '<div class="scr-modal-foot">';
-  h += '<button class="bei-tab on" onclick="scrCloseEditor();scrRun()">🔬 Run</button>';
-  if (scrEditId) {
-    h += '<button class="bei-tab" onclick="scrSaveExisting()">💾 Save</button>';
-    h += '<button class="bei-tab" onclick="scrSaveNew()">💾 Save As</button>';
-    h += '<button class="bei-tab" style="color:var(--rd);border-color:var(--rd)" onclick="scrDelCfg(' + scrEditId + ')">🗑 Delete</button>';
-  } else {
-    h += '<button class="bei-tab" onclick="scrSaveNew()">💾 Save</button>';
-  }
-  h += '<button class="bei-tab" onclick="scrGroups=[{rules:[]}];scrRenderEditor()">↻ Reset</button>';
-  h += '</div></div></div>';
-  document.body.insertAdjacentHTML('beforeend', h);
-  scrRenderEditor();
-}
-
-// ═══ EDITOR BODY — Rule Groups ═══
-function scrRenderEditor() {
-  var el = $('scr-editor-body'); if (!el) return;
-  var h = '';
-
-  // ── Rule Groups ──
-  h += '<div style="font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Rule Groups</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-bottom:10px">Each group uses AND logic. Groups are connected with OR. Stock matches if ANY group passes.</div>';
-
-  scrGroups.forEach(function(group, gi) {
-    h += '<div style="border:1px solid var(--b2);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--bgH)">';
-    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
-    h += '<span style="font-size:11px;font-weight:700;color:var(--bl)">Group ' + (gi + 1) + '</span>';
-    h += '<span style="font-size:9px;color:var(--t3);background:var(--blB);padding:1px 6px;border-radius:3px">AND</span>';
-    h += '<span style="flex:1"></span>';
-    if (scrGroups.length > 1) h += '<button style="background:none;border:none;color:var(--rd);cursor:pointer;font-size:12px" onclick="scrGroups.splice(' + gi + ',1);scrRenderEditor()" title="Remove group">✕</button>';
-    h += '</div>';
-
-    // Rules in this group
-    group.rules.forEach(function(rule, ri) {
-      h += '<div style="display:flex;gap:5px;align-items:center;margin-bottom:5px">';
-      // Field selector
-      h += '<select class="scr-sel" style="min-width:140px" onchange="scrGroups[' + gi + '].rules[' + ri + '].field=this.value;scrFieldChanged(' + gi + ',' + ri + ');scrRenderEditor()">';
-      h += '<option value="">Select field...</option>';
-      SCR_FIELDS.forEach(function(g) {
-        h += '<optgroup label="' + g.icon + ' ' + g.group + '">';
-        g.items.forEach(function(f) { h += '<option value="' + f.k + '"' + (rule.field === f.k ? ' selected' : '') + '>' + f.l + '</option>'; });
-        h += '</optgroup>';
-      });
-      h += '</select>';
-
-      var fDef = scrFindField(rule.field);
-      if (fDef) {
-        if (fDef.type === 'num') {
-          h += '<select class="scr-sel scr-sm" onchange="scrGroups[' + gi + '].rules[' + ri + '].op=this.value">';
-          [['>','>'],['>=','≥'],['<','<'],['<=','≤']].forEach(function(o) { h += '<option value="' + o[0] + '"' + (rule.op === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; });
-          h += '</select><input class="scr-inp" type="number" step="any" value="' + (rule.val || '') + '" onchange="scrGroups[' + gi + '].rules[' + ri + '].val=this.value" placeholder="Value">';
-        } else if (fDef.type === 'compare') {
-          h += '<select class="scr-sel scr-sm" onchange="scrGroups[' + gi + '].rules[' + ri + '].op=this.value">';
-          [['above','↑ Above'],['below','↓ Below']].forEach(function(o) { h += '<option value="' + o[0] + '"' + (rule.op === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; });
-          h += '</select>';
-        } else if (fDef.type === 'select') {
-          h += '<select class="scr-sel" onchange="scrGroups[' + gi + '].rules[' + ri + '].val=this.value"><option value="">Select...</option>';
-          (fDef.opts || []).forEach(function(o) { h += '<option value="' + o[0] + '"' + (rule.val === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; });
-          h += '</select>';
-        } else if (fDef.type === 'text_match') {
-          h += '<input class="scr-inp" style="min-width:160px" type="text" value="' + esc(rule.val || '') + '" onchange="scrGroups[' + gi + '].rules[' + ri + '].val=this.value" placeholder="Contains...">';
-        }
-      }
-      h += '<button style="background:none;border:none;color:var(--rd);cursor:pointer;font-size:14px;padding:2px 4px" onclick="scrGroups[' + gi + '].rules.splice(' + ri + ',1);scrRenderEditor()">✕</button>';
-      h += '</div>';
-    });
-
-    h += '<button class="bei-tab" onclick="scrGroups[' + gi + '].rules.push({field:\'\',op:\'>\',val:\'\'});scrRenderEditor()" style="border-style:dashed;font-size:10px;padding:3px 10px">+ Add Rule</button>';
-    h += '</div>';
-
-    // OR separator between groups
-    if (gi < scrGroups.length - 1) {
-      h += '<div style="text-align:center;padding:4px 0;font-size:12px;font-weight:700;color:var(--am)">— OR —</div>';
-    }
-  });
-
-  h += '<button class="bei-tab" onclick="scrGroups.push({rules:[]});scrRenderEditor()" style="border-style:dashed;margin-bottom:16px;color:var(--am);border-color:var(--am)">+ Add Group (OR)</button>';
-
-  // ── Column selector ──
-  h += '<div style="font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Table Columns</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">Click to toggle. Drag column headers in table to reorder.</div>';
-  SCR_COL_GROUPS.forEach(function(g) {
-    h += '<div style="margin-bottom:6px"><span style="font-size:9px;color:var(--t3);font-weight:600">' + g.icon + ' ' + g.group + '</span> ';
-    g.cols.forEach(function(c) {
-      var on = scrColumns.indexOf(c.k) >= 0;
-      h += '<button class="scr-col' + (on ? ' on' : '') + '" onclick="scrTogCol(\'' + c.k + '\')" style="margin:1px">' + c.l + '</button>';
-    });
-    h += '</div>';
-  });
-
-  el.innerHTML = h;
-}
-
-function scrCloseEditor() { var p = $('scr-editor'); if (p) p.remove(); scrSaveState(); renderScreener(); }
-
-// ═══ RUN — sends groups to backend ═══
-async function scrRun() {
-  scrSaveState();
-  var el = $('scr-results'); if (el) el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--t3)">Running screener...</div>';
-  try {
-    // Convert groups to backend format
-    // Backend supports: rules[] + logic (AND|OR)
-    // For group support: send as groups[] array, backend evaluates OR between groups, AND within
-    var allRules = [];
-    var hasMultiGroup = scrGroups.length > 1;
-
-    if (hasMultiGroup) {
-      // Send groups format — backend needs update for this
-      // Fallback: flatten with OR logic for now, backend treats as OR
-      scrGroups.forEach(function(g) { g.rules.forEach(function(r) { if (r.field) allRules.push(r); }); });
-      var r = await fetch('/api/screener/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groups: scrGroups.map(function(g){return g.rules.filter(function(r){return r.field;});}), rules: allRules, logic: 'OR', limit: 500, always_tech: true }) });
-      var d = await r.json();
-      scrResults = d.data || [];
-    } else {
-      // Single group — send as AND
-      var rules = scrGroups[0] ? scrGroups[0].rules.filter(function(r){return r.field;}) : [];
-      var r = await fetch('/api/screener/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rules: rules, logic: 'AND', limit: 500, always_tech: true }) });
-      var d = await r.json();
-      scrResults = d.data || [];
-    }
-    renderScreener();
-  } catch (e) { if (el) el.innerHTML = '<div class="ne">Error: ' + e.message + '</div>'; }
-}
-
-// ═══ CONFIG MANAGEMENT ═══
-async function scrSaveNew() {
-  var name = prompt('Config name:'); if (!name) return;
-  try {
-    var r = await fetch('/api/screener/configs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, filters: { groups: scrGroups, columns: scrColumns } }) });
-    var d = await r.json();
-    if (d.id) { scrEditId = d.id; scrSaveState(); scrCloseEditor(); loadScreener(); showT('✅', 'Saved "' + name + '"'); }
-  } catch (e) { showT('Error', e.message); }
-}
-
-async function scrSaveExisting() {
-  if (!scrEditId) return;
-  try {
-    // Get current config name
-    var cfg = scrConfigs.find(function(c) { return c.id === scrEditId; });
-    var name = cfg ? cfg.name : 'Untitled';
-    var r = await fetch('/api/screener/configs/' + scrEditId, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, filters: { groups: scrGroups, columns: scrColumns } }) });
-    var d = await r.json();
-    if (d.error) { showT('Error', d.error); return; }
-    if (cfg) cfg.filters = { groups: JSON.parse(JSON.stringify(scrGroups)), columns: scrColumns.slice() };
-    scrSaveState();
-    showT('✅', 'Saved "' + name + '"');
-  } catch (e) { showT('Error', e.message); }
-}
-
-function scrLoadConfig(id) {
-  var cfg = scrConfigs.find(function(c) { return c.id === id; });
-  if (!cfg) return;
-  scrEditId = id;
-  var f = cfg.filters;
-  if (typeof f === 'string') { try { f = JSON.parse(f); } catch(e) { f = {}; } }
-  if (!f) f = {};
-
-  // Support old format (flat rules + logic) and new format (groups)
-  if (f.groups) {
-    scrGroups = JSON.parse(JSON.stringify(f.groups));
-  } else if (f.rules) {
-    scrGroups = scrMigrateRules(f.rules, f.logic || 'AND');
-  } else {
-    scrGroups = [{rules:[]}];
-  }
-  scrColumns = f.columns ? f.columns.slice() : ['close','change_pct','volume','per','pbv','foreign_net_val','ma20'];
-  scrSaveState();
-}
-
-async function scrDelCfg(id) {
-  if (!confirm('Delete this config?')) return;
-  try {
-    await fetch('/api/screener/configs/' + id, { method: 'DELETE' });
-    scrEditId = null; scrGroups = [{rules:[]}]; scrSaveState();
-    scrCloseEditor(); loadScreener(); showT('✅', 'Deleted');
-  } catch (e) { showT('Error', e.message); }
-}
-
-// ═══ Backward compat ═══
-var scrRules = []; // kept for any external references
-var scrLogic = 'AND';
