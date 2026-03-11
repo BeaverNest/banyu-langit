@@ -39,6 +39,9 @@ function anaSubTab(n,b){
     // Load correlation from sector-intelligence.js
     if(typeof loadCorrelationView==='function')loadCorrelationView();
   }
+  if(n==='backtest'){
+    if(typeof loadBacktest==='function')loadBacktest();
+  }
 }
 
 // Insider sub-tabs (kept for compat)

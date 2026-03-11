@@ -1,6 +1,7 @@
 const express = require('express');
 const { yq } = require('../utils/yahoo');
 const { gNews } = require('../utils/news');
+const { db, latestIdxDate } = require('../db');
 
 const router = express.Router();
 
@@ -37,6 +38,60 @@ const MKT = {
   ]
 };
 
+// ═══ COMMODITY → IDX STOCK MAPPING ═══
+const COMMODITY_MAP = [
+  {
+    id: 'coal', label: 'COAL', tv: 'ICEEUR:NCF1!', desc: 'Newcastle Coal',
+    icon: '⛏', color: '#64748b',
+    tickers: ['ADRO','ITMG','PTBA','BUMI','BYAN','DSSA','GEMS','HRUM','MBAP','TOBA','ADMR','BSSR','GTBO','SMMT','AADI']
+  },
+  {
+    id: 'cpo', label: 'CPO', tv: 'MYX:FCPO1!', desc: 'Crude Palm Oil',
+    icon: '🌴', color: '#22c55e',
+    tickers: ['AALI','LSIP','DSNG','SIMP','TBLA','SGRO','SSMS','TAPG','CSRA','SMAR','ANJT','JARR']
+  },
+  {
+    id: 'nickel', label: 'NICKEL', tv: 'SHFE:NI1!', desc: 'Nickel Futures',
+    icon: '🔩', color: '#0ea5e9',
+    tickers: ['ANTM','INCO','NCKL','MBMA','MDKA','IFSH','PURE','HPAL']
+  },
+  {
+    id: 'tin', label: 'TIN', tv: 'SHFE:SN1!', desc: 'Tin Futures',
+    icon: '🥫', color: '#8b5cf6',
+    tickers: ['TINS','NIKL']
+  },
+  {
+    id: 'gold', label: 'GOLD', tv: 'COMEX:GC1!', desc: 'Gold Futures',
+    icon: '🥇', color: '#f59e0b',
+    tickers: ['ANTM','MDKA','ARCI','BRMS','EMAS','PSAB']
+  },
+  {
+    id: 'oil', label: 'OIL', tv: 'NYMEX:BZ1!', desc: 'Brent Crude Oil',
+    icon: '🛢', color: '#ef4444',
+    tickers: ['MEDC','ELSA','ENRG','RATU','ESSA','PTRO','BIPI','DEWA']
+  },
+  {
+    id: 'gas', label: 'GAS', tv: 'NYMEX:NG1!', desc: 'Natural Gas',
+    icon: '🔥', color: '#f97316',
+    tickers: ['PGAS','RAJA','TPMA']
+  },
+  {
+    id: 'copper', label: 'COPPER', tv: 'COMEX:HG1!', desc: 'Copper Futures',
+    icon: '🔶', color: '#dc6b20',
+    tickers: ['BRMS','CITA']
+  },
+  {
+    id: 'rubber', label: 'RUBBER', tv: 'TOCOM:JRU1!', desc: 'Rubber TSR20',
+    icon: '🌳', color: '#14b8a6',
+    tickers: ['GJTL']
+  },
+  {
+    id: 'steel', label: 'STEEL', tv: 'SHFE:RB1!', desc: 'Steel Rebar',
+    icon: '🏗', color: '#6366f1',
+    tickers: ['ISSP','KRAS','GDST','BTON','INAI']
+  }
+];
+
 // Single quote
 router.get('/quote', async (req, res) => {
   const q = await yq(req.query.symbol || '');
@@ -63,6 +118,48 @@ router.get('/market', async (req, res) => {
     change: q[i.symbol]?.change || 0,
     currency: q[i.symbol]?.currency || ''
   })));
+});
+
+// ═══ COMMODITY MAPPING ENDPOINT — no Yahoo fetch, pure SQLite ═══
+router.get('/commodities', (req, res) => {
+  try {
+    let td = null;
+    const stockData = {};
+    try {
+      td = latestIdxDate();
+      if (td) {
+        const allTickers = [...new Set(COMMODITY_MAP.flatMap(c => c.tickers))];
+        if (allTickers.length) {
+          const ph = allTickers.map(() => '?').join(',');
+          db.prepare(`SELECT code, name, close, prev_close, volume, value, frequency, foreign_buy, foreign_sell,
+            CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as chg_pct
+            FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(td, ...allTickers)
+            .forEach(r => {
+              r.fnet_val = ((r.foreign_buy||0) - (r.foreign_sell||0)) * (r.close||0);
+              stockData[r.code] = r;
+            });
+        }
+      }
+    } catch(dbErr) { /* continue without stock data */ }
+
+    const result = COMMODITY_MAP.map(c => {
+      const stocks = c.tickers.map(t => stockData[t]).filter(Boolean)
+        .sort((a, b) => (b.value || 0) - (a.value || 0));
+      return {
+        id: c.id, label: c.label, tv: c.tv, desc: c.desc, icon: c.icon, color: c.color,
+        tickers: c.tickers,
+        stocks,
+        total_value: stocks.reduce((s, r) => s + (r.value || 0), 0),
+        total_fnet: stocks.reduce((s, r) => s + (r.fnet_val || 0), 0),
+        avg_chg: stocks.length ? Math.round(stocks.reduce((s, r) => s + (r.chg_pct || 0), 0) / stocks.length * 100) / 100 : 0,
+      };
+    });
+
+    res.json({ commodities: result, trade_date: td });
+  } catch (e) {
+    console.error('Commodities error:', e.message);
+    res.json({ commodities: [], error: e.message });
+  }
 });
 
 // News

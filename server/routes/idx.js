@@ -747,5 +747,128 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ═══ INDEX SUMMARY (BEI Index Data) ═══
+  router.post('/indices/upload', upload.array('file', 500), (req, res) => {
+    try {
+      const files = req.files || [];
+      if (!files.length) return res.status(400).json({ error: 'No files' });
+
+      const ins = db.prepare(`INSERT INTO idx_indices(trade_date,index_code,previous,highest,lowest,close,change_val,num_stocks,volume,value,frequency,market_cap)
+        VALUES(@trade_date,@index_code,@previous,@highest,@lowest,@close,@change_val,@num_stocks,@volume,@value,@frequency,@market_cap)
+        ON CONFLICT(trade_date,index_code) DO UPDATE SET previous=excluded.previous,highest=excluded.highest,lowest=excluded.lowest,close=excluded.close,change_val=excluded.change_val,num_stocks=excluded.num_stocks,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,market_cap=excluded.market_cap`);
+
+      const chk = db.prepare('SELECT id FROM idx_indices WHERE trade_date=? AND index_code=?');
+
+      let totalNew = 0, totalUpdated = 0, totalIndices = new Set(), fileDates = [];
+
+      db.transaction(() => {
+        for (const file of files) {
+          const wb = XLSX.readFile(file.path);
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+          // Detect trade_date from filename: Index_Summary-YYYYMMDD.xlsx
+          let fileDate = '';
+          const m = (file.originalname || '').match(/(\d{4})(\d{2})(\d{2})/);
+          if (m) fileDate = m[1] + '-' + m[2] + '-' + m[3];
+          // Fallback: manual date from request body
+          if (!fileDate) fileDate = req.body.trade_date || '';
+          // Fallback: today
+          if (!fileDate) fileDate = new Date().toISOString().split('T')[0];
+
+          if (fileDate && !fileDates.includes(fileDate)) fileDates.push(fileDate);
+
+          for (const r of rows) {
+            const indexCode = String(r['Index Code'] || '').trim();
+            if (!indexCode) continue;
+
+            const existing = chk.get(fileDate, indexCode);
+
+            ins.run({
+              trade_date: fileDate,
+              index_code: indexCode,
+              previous: parseFloat(r['Previous']) || 0,
+              highest: parseFloat(r['Highest']) || 0,
+              lowest: parseFloat(r['Lowest']) || 0,
+              close: parseFloat(r['Close']) || 0,
+              change_val: parseFloat(r['Change']) || 0,
+              num_stocks: parseInt(r['# Stock']) || 0,
+              volume: parseInt(r['Volume']) || 0,
+              value: parseInt(r['Value']) || 0,
+              frequency: parseInt(r['Frequency']) || 0,
+              market_cap: parseFloat(r['Market Capitalization*'] || r['Market Capitalization'] || 0) || 0
+            });
+
+            totalIndices.add(indexCode);
+            if (existing) totalUpdated++; else totalNew++;
+          }
+          fs.unlinkSync(file.path);
+        }
+      })();
+
+      // Log upload
+      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,rows_updated,tickers,upload_type)VALUES(?,?,?,?,?,?,?)')
+        .run(files.map(f => f.originalname).join(', '), fileDates.join(', '), totalNew + totalUpdated, totalNew, totalUpdated, totalIndices.size, 'idx_indices');
+
+      res.json({
+        success: true,
+        imported: totalNew + totalUpdated,
+        new_rows: totalNew,
+        updated_rows: totalUpdated,
+        indices: totalIndices.size,
+        dates: fileDates.length,
+        files: files.length
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Index summary stats
+  router.get('/indices/stats', (req, res) => {
+    try {
+      const total = db.prepare('SELECT COUNT(*)as c FROM idx_indices').get().c;
+      const indices = db.prepare('SELECT COUNT(DISTINCT index_code)as c FROM idx_indices').get().c;
+      const dates = db.prepare('SELECT COUNT(DISTINCT trade_date)as c FROM idx_indices').get().c;
+      const latest = db.prepare('SELECT MAX(trade_date)as d FROM idx_indices').get()?.d || '';
+      const oldest = db.prepare('SELECT MIN(trade_date)as d FROM idx_indices').get()?.d || '';
+      res.json({ total, indices, dates, latest, oldest });
+    } catch { res.json({ total: 0 }); }
+  });
+
+  // Latest index data (all indices for latest date)
+  router.get('/indices/latest', (req, res) => {
+    try {
+      const { latestIndexDate } = require('../db');
+      const td = req.query.date || latestIndexDate();
+      if (!td) return res.json({ data: [], trade_date: '' });
+      const rows = db.prepare('SELECT * FROM idx_indices WHERE trade_date=? ORDER BY index_code').all(td);
+      res.json({ data: rows, trade_date: td });
+    } catch (e) { res.json({ data: [], error: e.message }); }
+  });
+
+  // Index history (single index over time — for backtesting benchmark)
+  router.get('/indices/history', (req, res) => {
+    try {
+      const code = (req.query.code || 'COMPOSITE').toUpperCase().trim();
+      const days = Math.min(parseInt(req.query.days) || 500, 5000);
+      const rows = db.prepare('SELECT trade_date,index_code,previous,highest,lowest,close,change_val,volume,value,frequency,market_cap FROM idx_indices WHERE index_code=? ORDER BY trade_date DESC LIMIT ?').all(code, days);
+      rows.reverse();
+      // Calculate change_pct
+      rows.forEach(r => {
+        r.change_pct = r.previous > 0 ? Math.round((r.close - r.previous) / r.previous * 10000) / 100 : 0;
+      });
+      res.json({ code, data: rows, total: rows.length });
+    } catch (e) { res.json({ code: req.query.code, data: [], error: e.message }); }
+  });
+
+  // List available indices
+  router.get('/indices/list', (req, res) => {
+    try {
+      const rows = db.prepare(`SELECT index_code, COUNT(*)as days, MIN(trade_date)as first_date, MAX(trade_date)as last_date,
+        (SELECT close FROM idx_indices i2 WHERE i2.index_code=idx_indices.index_code ORDER BY i2.trade_date DESC LIMIT 1) as last_close
+        FROM idx_indices GROUP BY index_code ORDER BY index_code`).all();
+      res.json({ indices: rows });
+    } catch (e) { res.json({ indices: [], error: e.message }); }
+  });
+
   return router;
 };

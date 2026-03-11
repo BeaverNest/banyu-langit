@@ -65,6 +65,7 @@ app.use('/api', marketRoutes);
 app.use('/api/insider', insiderRoutes);
 app.use('/api/idx', idxRoutes);
 app.use('/api/screener', screenerRoutes);
+app.use('/api/backtest', require('./routes/backtest'));
 app.use('/api/portfolio', require('./routes/portfolio'));
 
 // ═══ Global Search — Unified Ticker ═══

@@ -68,12 +68,14 @@
     <div class="wt">
       <button class="wt-b on" onclick="smkt('ov',this)">🌍 Overview</button>
       <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
+      <button class="wt-b" onclick="smkt('cmd',this)">🛢 Commodities</button>
     </div>
     <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading market news...</div></div>
     </div>
+    <div class="wp" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
   <!-- ═══ TAB 2: IDX DAILY (Unified) ═══ -->
@@ -101,11 +103,13 @@
       <button class="wt-b" onclick="anaSubTab('sectors',this)">📊 Sectors</button>
       <button class="wt-b" onclick="anaSubTab('compare',this)">📈 Compare</button>
       <button class="wt-b" onclick="anaSubTab('correlation',this)">🔗 Correlation</button>
+      <button class="wt-b" onclick="anaSubTab('backtest',this)">🧪 Backtest</button>
     </div>
     <div class="wp on" id="ana-screener"><div id="scr-content"></div></div>
     <div class="wp" id="ana-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure and run backtest</div></div></div>
   </div>
 
   <!-- ═══ TAB 5: PORTFOLIO (Tracker + Kelly) ═══ -->
@@ -159,6 +163,7 @@
         <div class="smod-nav-item" onclick="setTab('ca',this)"><span class="sni-icon">⚡</span><span class="sni-label">Corp Actions</span><span class="sni-badge" id="smod-ca-badge" style="display:none">0</span></div>
         <div class="smod-nav-item" onclick="setTab('tags',this)"><span class="sni-icon">🏷</span><span class="sni-label">Investor Tags</span></div>
         <div class="smod-nav-item" onclick="setTab('export',this)"><span class="sni-icon">📥</span><span class="sni-label">Export Data</span></div>
+        <div class="smod-nav-item" onclick="setTab('idxdl',this)"><span class="sni-icon">⬇️</span><span class="sni-label">IDX Download</span></div>
         <div class="smod-nav-item" onclick="setTab('prefs',this)"><span class="sni-icon">🎨</span><span class="sni-label">Preferences</span></div>
       </div>
     </div>
@@ -185,10 +190,12 @@
 <script src="/js/idx-daily-v2.js"></script>
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
+<script src="/js/backtest.js"></script>
 <script src="/js/fund-upload.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
 <script src="/js/portfolio.js"></script>
+<script src="/js/commodities.js"></script>
 <script src="/js/insider.js"></script>
 <script src="/js/init.js"></script>
 </body>

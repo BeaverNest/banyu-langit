@@ -18,7 +18,7 @@ function setTab(tab,el){
   setActiveTab=tab;
   document.querySelectorAll('.smod-nav-item').forEach(x=>x.classList.remove('on'));
   if(el)el.classList.add('on');
-  var titles={upload:'📊 Data Upload',dbstats:'🗄 Database',ca:'⚡ Corporate Actions',tags:'🏷 Investor Tags',export:'📥 Export Data',prefs:'🎨 Preferences'};
+  var titles={upload:'📊 Data Upload',dbstats:'🗄 Database',ca:'⚡ Corporate Actions',tags:'🏷 Investor Tags',export:'📥 Export Data',idxdl:'⬇️ IDX Download',prefs:'🎨 Preferences'};
   $('smod-title').innerHTML='<span class="sbh-icon">'+titles[tab].split(' ')[0]+'</span> '+titles[tab].split(' ').slice(1).join(' ');
   var c=$('smod-content');
   c.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3)">Loading...</div>';
@@ -27,6 +27,7 @@ function setTab(tab,el){
   else if(tab==='ca')renderSetCA(c);
   else if(tab==='tags')renderSetTags(c);
   else if(tab==='export')renderSetExport(c);
+  else if(tab==='idxdl')renderSetIdxDownload(c);
   else if(tab==='prefs')renderSetPrefs(c);
 }
 
@@ -39,6 +40,7 @@ function renderSetUpload(c){
   h+='<div class="s-row"><div class="s-row-icon">📊</div><div class="s-row-info"><div class="s-row-title">IDX Daily (Ringkasan Saham)</div><div class="s-row-desc">Daily OHLCV + foreign flow. Supports bulk (500 files)</div></div><div class="s-row-action"><label class="s-upload-btn">Choose Files<input type="file" accept=".xlsx,.xls" multiple onchange="setUploadIdx(this)"></label></div></div>';
   h+='<div class="s-row"><div class="s-row-icon">📈</div><div class="s-row-info"><div class="s-row-title">Fundamental (BEI Screener)</div><div class="s-row-desc">PER, PBV, ROE, ROA, DER, NPM, Sector, Industry</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx,.xls" onchange="setUploadFund(this)"></label></div></div>';
   h+='<div class="s-row"><div class="s-row-icon">📋</div><div class="s-row-info"><div class="s-row-title">Quarterly Financials (Yahoo)</div><div class="s-row-desc">Revenue, Net Income, EPS, Cash Flow per quarter</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx,.xls" onchange="setUploadQuarterly(this)"></label></div></div>';
+  h+='<div class="s-row"><div class="s-row-icon">📉</div><div class="s-row-info"><div class="s-row-title">Index Summary (BEI)</div><div class="s-row-desc">IHSG, LQ45, IDX30, sectoral indices. Supports bulk upload.</div></div><div class="s-row-action"><label class="s-upload-btn">Choose Files<input type="file" accept=".xlsx,.xls" multiple onchange="setUploadIndices(this)"></label></div></div>';
   h+='</div>';
   h+='<div class="s-info" id="set-upload-info"></div>';
   h+='<div class="s-section"><div class="s-section-title">Current Data</div><div id="set-tag-stats" style="font-size:12px;color:var(--t2);line-height:1.8">Loading...</div></div>';
@@ -49,8 +51,9 @@ function renderSetUpload(c){
     fetch('/api/insider/stats').then(r=>r.json()),
     fetch('/api/idx/stats').then(r=>r.json()),
     fetch('/api/idx/fundamental/stats').then(r=>r.json()),
-    fetch('/api/quarterly/stats').then(r=>r.json()).catch(function(){return{total:0};})
-  ]).then(function([tags,ins,idx,fund,qtr]){
+    fetch('/api/quarterly/stats').then(r=>r.json()).catch(function(){return{total:0};}),
+    fetch('/api/idx/indices/stats').then(r=>r.json()).catch(function(){return{total:0};})
+  ]).then(function([tags,ins,idx,fund,qtr,idxIdx]){
     var el=$('set-tag-stats');if(!el)return;
     var h='<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px">';
     h+='<span>🏷 Groups: <b>'+tags.groups+'</b></span><span>📋 Rules: <b>'+tags.rules+'</b></span>';
@@ -59,6 +62,7 @@ function renderSetUpload(c){
     if(idx.total){h+='<div style="margin-top:6px">📊 IDX: <b>'+idx.total.toLocaleString()+'</b> records · <b>'+idx.tickers+'</b> tickers · <b>'+idx.dates+'</b> days'+(idx.latest?' · Latest: <b>'+idx.latest+'</b>':'')+'</div>';}
     if(fund.total){h+='<div style="margin-top:6px">📈 Fundamental: <b>'+fund.total+'</b> stocks'+(fund.snapshot_month?' · Month: <b>'+fund.snapshot_month+'</b>':'')+'</div>';}
     if(qtr.total){h+='<div style="margin-top:6px">📋 Quarterly: <b>'+qtr.total+'</b> records · <b>'+qtr.tickers+'</b> tickers · <b>'+qtr.periods+'</b> periods'+(qtr.latest?' · Latest: <b>'+qtr.latest+'</b>':'')+'</div>';}
+    if(idxIdx.total){h+='<div style="margin-top:6px">📉 Indices: <b>'+idxIdx.total+'</b> records · <b>'+idxIdx.indices+'</b> indices · <b>'+idxIdx.dates+'</b> days'+(idxIdx.latest?' · Latest: <b>'+idxIdx.latest+'</b>':'')+'</div>';}
     el.innerHTML=h;
   }).catch(function(){var el=$('set-tag-stats');if(el)el.textContent='Error loading stats';});
   renderUploadLogs();
@@ -71,7 +75,7 @@ async function renderUploadLogs(){
     if(!logs.length){el.innerHTML='<div style="color:var(--t3)">No upload history yet</div>';return;}
     var h='<div style="overflow-y:auto;max-height:200px"><table class="s-ca-tbl"><thead><tr><th>Time</th><th>Type</th><th>File</th><th>Date</th><th class="ar">New</th><th class="ar">Updated</th><th class="ar">Total</th></tr></thead><tbody>';
     logs.slice(0,20).forEach(function(l){
-      var typeLabel=l.upload_type==='idx_daily'?'📊 IDX':l.upload_type==='insider'?'📋 Insider':l.upload_type==='fundamental'?'📈 Fund':'📄 Other';
+      var typeLabel=l.upload_type==='idx_daily'?'📊 IDX':l.upload_type==='insider'?'📋 Insider':l.upload_type==='fundamental'?'📈 Fund':l.upload_type==='idx_indices'?'📉 Index':l.upload_type==='quarterly'?'📋 Qtr':'📄 Other';
       var time=l.uploaded_at?new Date(l.uploaded_at+'Z').toLocaleString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
       h+='<tr><td style="font-size:10px;color:var(--t3);white-space:nowrap">'+time+'</td>';
       h+='<td style="font-size:10px">'+typeLabel+'</td>';
@@ -146,6 +150,19 @@ async function setUploadQuarterly(input){
   try{var r=await fetch('/api/quarterly/upload',{method:'POST',body:fd});var d=await r.json();
     if(d.success){info.textContent='✅ Quarterly: '+d.count+' records, '+d.tickers+' tickers';showT('Quarterly',d.count+' records loaded');renderUploadLogs();}
     else{info.textContent='❌ '+(d.error||'unknown');info.className='s-info error';}
+  }catch(e){info.textContent='❌ '+e.message;info.className='s-info error';}input.value='';
+}
+async function setUploadIndices(input){
+  if(!input.files.length)return;var fd=new FormData();
+  for(var i=0;i<input.files.length;i++)fd.append('file',input.files[i]);
+  var info=$('set-upload-info');info.textContent='Uploading '+input.files.length+' index file(s)...';info.className='s-info';
+  try{var r=await fetch('/api/idx/indices/upload',{method:'POST',body:fd});var d=await r.json();
+    if(d.success){
+      var msg='✅ Indices: '+d.imported+' records ('+d.new_rows+' new, '+d.updated_rows+' updated), '+d.indices+' indices, '+d.dates+' dates';
+      info.textContent=msg;
+      showT('Index Summary',d.new_rows+' new records imported');
+      renderUploadLogs();
+    }else{info.textContent='❌ '+(d.error||'unknown');info.className='s-info error';}
   }catch(e){info.textContent='❌ '+e.message;info.className='s-info error';}input.value='';
 }
 
@@ -281,3 +298,186 @@ function renderSetPrefs(c){
 }
 function prefTogTheme(){togTh();renderSetPrefs($('smod-content'));}
 function prefTogChart(el){if(el)el.classList.toggle('on');var show=el&&el.classList.contains('on');localStorage.setItem('chartDefault',show?'visible':'hidden');}
+// ═══ IDX DOWNLOAD SCRIPT GENERATOR ═══
+function renderSetIdxDownload(el){
+  // Default dates
+  var today=new Date().toISOString().split('T')[0];
+  var h='<div class="s-section"><div class="s-section-title">⬇️ IDX Daily Auto-Download</div>';
+  h+='<div style="font-size:11px;color:var(--t2);margin-bottom:12px">Generate Python script untuk download data Ringkasan Saham dari idx.co.id. Script jalan di Windows (butuh Chrome + Python).</div>';
+
+  // Date range
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">';
+  h+='<div><div style="font-size:9px;color:var(--t3);font-weight:600;margin-bottom:2px">START DATE</div>';
+  h+='<input id="idx-dl-start" type="date" value="'+today+'" style="padding:5px 8px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;font-size:12px;color:var(--t1);outline:none"></div>';
+  h+='<div><div style="font-size:9px;color:var(--t3);font-weight:600;margin-bottom:2px">END DATE</div>';
+  h+='<input id="idx-dl-end" type="date" value="'+today+'" style="padding:5px 8px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;font-size:12px;color:var(--t1);outline:none"></div>';
+  h+='</div>';
+
+  // Mode selection
+  h+='<div style="margin-bottom:10px"><div style="font-size:9px;color:var(--t3);font-weight:600;margin-bottom:4px">MODE</div>';
+  h+='<div style="display:flex;gap:6px">';
+  h+='<label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer"><input type="radio" name="idx-dl-mode" value="download_upload" checked> Download + Auto Upload ke Banyu Langit</label>';
+  h+='<label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer"><input type="radio" name="idx-dl-mode" value="download_only"> Download saja (simpan ke folder)</label>';
+  h+='</div></div>';
+
+  // Save folder
+  h+='<div style="margin-bottom:10px"><div style="font-size:9px;color:var(--t3);font-weight:600;margin-bottom:2px">SAVE FOLDER (opsional, untuk download_only)</div>';
+  h+='<input id="idx-dl-folder" type="text" value="C:\\Users\\ASUS TUF\\OneDrive\\Documents\\Datafeed\\RAW" style="width:100%;padding:5px 8px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;font-family:var(--fm);font-size:11px;color:var(--t1);outline:none"></div>';
+
+  // Banyu Langit URL
+  h+='<div style="margin-bottom:12px"><div style="font-size:9px;color:var(--t3);font-weight:600;margin-bottom:2px">BANYU LANGIT URL</div>';
+  h+='<input id="idx-dl-url" type="text" value="http://localhost:3003" style="width:100%;padding:5px 8px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;font-family:var(--fm);font-size:11px;color:var(--t1);outline:none"></div>';
+
+  // Generate buttons
+  h+='<div style="display:flex;gap:8px;margin-bottom:16px">';
+  h+='<button onclick="idxDlGenerate(\'py\')" style="padding:8px 20px;border-radius:8px;border:none;background:var(--bl);color:#fff;font-weight:700;cursor:pointer;font-size:12px">🐍 Generate Python Script</button>';
+  h+='<button onclick="idxDlGenerate(\'bat\')" style="padding:8px 20px;border-radius:8px;border:none;background:#22c55e;color:#fff;font-weight:700;cursor:pointer;font-size:12px">📋 Generate .bat Runner</button>';
+  h+='</div>';
+
+  // Output area
+  h+='<div id="idx-dl-output"></div>';
+
+  // Requirements
+  h+='<div style="margin-top:16px;padding:10px 12px;background:var(--bgH);border-radius:8px;font-size:10px;color:var(--t2);line-height:1.8">';
+  h+='<div style="font-weight:700;margin-bottom:4px">📋 Requirements</div>';
+  h+='<code>pip install selenium webdriver-manager requests</code><br>';
+  h+='Chrome browser harus terinstall<br>';
+  h+='Script jalan di <b>Windows</b> (bukan Docker)<br>';
+  h+='Mode "Auto Upload" otomatis upload XLSX ke Banyu Langit setelah download';
+  h+='</div>';
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+function idxDlGenerate(type){
+  var startDate=document.getElementById('idx-dl-start').value;
+  var endDate=document.getElementById('idx-dl-end').value;
+  var mode=document.querySelector('input[name="idx-dl-mode"]:checked').value;
+  var folder=document.getElementById('idx-dl-folder').value.replace(/\\/g,'\\\\');
+  var blUrl=document.getElementById('idx-dl-url').value;
+
+  if(!startDate||!endDate){showT('⚠️','Set date range');return;}
+
+  var autoUpload=mode==='download_upload';
+
+  if(type==='py'){
+    var py='';
+    py+='# ═══ IDX Daily Auto-Download — Generated by Banyu Langit ═══\\n';
+    py+='# Run: python download_idx.py\\n';
+    py+='# Requirements: pip install selenium webdriver-manager'+(autoUpload?' requests':'')+'\\n\\n';
+    py+='from selenium import webdriver\\n';
+    py+='from selenium.webdriver.common.by import By\\n';
+    py+='from selenium.webdriver.chrome.service import Service\\n';
+    py+='from selenium.webdriver.support.ui import WebDriverWait\\n';
+    py+='from selenium.webdriver.support import expected_conditions as EC\\n';
+    py+='from webdriver_manager.chrome import ChromeDriverManager\\n';
+    py+='from datetime import datetime, timedelta\\n';
+    py+='import time, os, glob\\n';
+    if(autoUpload)py+='import requests\\n';
+    py+='\\n';
+    py+='# ═══ CONFIG ═══\\n';
+    py+='URL = "https://www.idx.co.id/id/data-pasar/ringkasan-perdagangan/ringkasan-saham/"\\n';
+    py+='DOWNLOAD_DIR = r"'+folder+'"\\n';
+    py+='START_DATE = "'+startDate+'"\\n';
+    py+='END_DATE = "'+endDate+'"\\n';
+    if(autoUpload)py+='BANYU_LANGIT = "'+blUrl+'"\\n';
+    py+='\\n';
+    py+='options = webdriver.ChromeOptions()\\n';
+    py+='prefs = {"download.default_directory": DOWNLOAD_DIR, "download.prompt_for_download": False, "download.directory_upgrade": True}\\n';
+    py+='options.add_experimental_option("prefs", prefs)\\n';
+    py+='driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)\\n';
+    py+='wait = WebDriverWait(driver, 30)\\n\\n';
+    py+='driver.get(URL)\\n';
+    py+='wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))\\n';
+    py+='time.sleep(3)\\n\\n';
+    py+='start = datetime.strptime(START_DATE, "%Y-%m-%d")\\n';
+    py+='end = datetime.strptime(END_DATE, "%Y-%m-%d")\\n';
+    py+='current = start\\n';
+    py+='downloaded = []\\n\\n';
+    py+='while current <= end:\\n';
+    py+='    tanggal = current.strftime("%Y-%m-%d")\\n';
+    py+='    print(f"[{tanggal}] Setting date...")\\n';
+    py+='    date_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".mx-datepicker input")))\\n';
+    py+='    driver.execute_script("""\\n';
+    py+='        const input = arguments[0]; const value = arguments[1];\\n';
+    py+='        input.value = value;\\n';
+    py+='        input.dispatchEvent(new Event("input", { bubbles: true }));\\n';
+    py+='        input.dispatchEvent(new Event("change", { bubbles: true }));\\n';
+    py+='    """, date_input, tanggal)\\n';
+    py+='    time.sleep(3)\\n';
+    py+='    download_btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., \'Unduh\')]")))\\n';
+    py+='    if not download_btn.is_enabled():\\n';
+    py+='        print(f"  ⛔ Libur/no data → skip")\\n';
+    py+='        current += timedelta(days=1)\\n';
+    py+='        continue\\n';
+    py+='    before = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx")))\\n';
+    py+='    download_btn.click()\\n';
+    py+='    print(f"  ✔ Downloading...")\\n';
+    py+='    time.sleep(6)\\n';
+    py+='    after = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx")))\\n';
+    py+='    new_files = after - before\\n';
+    py+='    if new_files:\\n';
+    py+='        f = list(new_files)[0]\\n';
+    py+='        print(f"  📁 File: {os.path.basename(f)}")\\n';
+    py+='        downloaded.append(f)\\n';
+    py+='    current += timedelta(days=1)\\n\\n';
+    py+='driver.quit()\\n';
+    py+='print(f"\\\\n✅ Downloaded {len(downloaded)} files")\\n\\n';
+
+    if(autoUpload){
+      py+='# ═══ AUTO UPLOAD TO BANYU LANGIT ═══\\n';
+      py+='print("\\\\n📤 Uploading to Banyu Langit...")\\n';
+      py+='for f in downloaded:\\n';
+      py+='    try:\\n';
+      py+='        with open(f, "rb") as fp:\\n';
+      py+='            r = requests.post(f"{BANYU_LANGIT}/api/settings/upload-idx", files={"file": (os.path.basename(f), fp, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})\\n';
+      py+='            d = r.json()\\n';
+      py+='            print(f"  ✔ {os.path.basename(f)}: {d}")\\n';
+      py+='    except Exception as e:\\n';
+      py+='        print(f"  ❌ {os.path.basename(f)}: {e}")\\n';
+      py+='print("\\\\n🎉 All done!")\\n';
+    }
+
+    // Show in textarea + download button
+    var pyText=py.replace(/\\n/g,'\n').replace(/\\\\n/g,'\\n').replace(/\\\\"/g,'"');
+    var out='<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;margin-bottom:4px">Generated Script:</div>';
+    out+='<textarea id="idx-dl-script" style="width:100%;height:200px;font-family:var(--fm);font-size:10px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:8px;color:var(--t1);outline:none;resize:vertical;white-space:pre" readonly>'+pyText.replace(/</g,'&lt;')+'</textarea>';
+    out+='<div style="display:flex;gap:8px;margin-top:6px">';
+    out+='<button onclick="idxDlCopy()" style="padding:6px 16px;border-radius:6px;border:1px solid var(--b2);background:var(--bg2);cursor:pointer;font-size:11px">📋 Copy</button>';
+    out+='<button onclick="idxDlDownloadFile()" style="padding:6px 16px;border-radius:6px;border:none;background:var(--bl);color:#fff;cursor:pointer;font-size:11px;font-weight:600">💾 Download .py</button>';
+    out+='</div></div>';
+    document.getElementById('idx-dl-output').innerHTML=out;
+    document.getElementById('idx-dl-script').value=pyText;
+  }
+
+  if(type==='bat'){
+    var bat='@echo off\\n';
+    bat+='echo ═══ IDX Daily Download — Banyu Langit ═══\\n';
+    bat+='echo.\\n';
+    bat+='python download_idx.py\\n';
+    bat+='echo.\\n';
+    bat+='pause\\n';
+    var batText=bat.replace(/\\n/g,'\n');
+    var out2='<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;margin-bottom:4px">.bat Runner:</div>';
+    out2+='<textarea style="width:100%;height:80px;font-family:var(--fm);font-size:10px;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:8px;color:var(--t1);outline:none" readonly>'+batText.replace(/</g,'&lt;')+'</textarea>';
+    out2+='<div style="margin-top:6px"><button onclick="idxDlDownloadBat()" style="padding:6px 16px;border-radius:6px;border:none;background:#22c55e;color:#fff;cursor:pointer;font-size:11px;font-weight:600">💾 Download .bat</button></div></div>';
+    document.getElementById('idx-dl-output').innerHTML=out2;
+  }
+}
+
+function idxDlCopy(){
+  var ta=document.getElementById('idx-dl-script');
+  if(ta){ta.select();document.execCommand('copy');showT('📋','Script copied to clipboard');}
+}
+
+function idxDlDownloadFile(){
+  var ta=document.getElementById('idx-dl-script');if(!ta)return;
+  var blob=new Blob([ta.value],{type:'text/plain'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='download_idx.py';a.click();
+}
+
+function idxDlDownloadBat(){
+  var bat='@echo off\r\necho === IDX Daily Download === Banyu Langit ===\r\necho.\r\npython download_idx.py\r\necho.\r\npause\r\n';
+  var blob=new Blob([bat],{type:'text/plain'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='run_download.bat';a.click();
+}

@@ -182,6 +182,25 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_qf_code ON quarterly_financials(code);
   CREATE INDEX IF NOT EXISTS idx_qf_period ON quarterly_financials(period);
+
+  CREATE TABLE IF NOT EXISTS idx_indices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    index_code TEXT NOT NULL,
+    previous REAL DEFAULT 0,
+    highest REAL DEFAULT 0,
+    lowest REAL DEFAULT 0,
+    close REAL DEFAULT 0,
+    change_val REAL DEFAULT 0,
+    num_stocks INTEGER DEFAULT 0,
+    volume INTEGER DEFAULT 0,
+    value INTEGER DEFAULT 0,
+    frequency INTEGER DEFAULT 0,
+    market_cap REAL DEFAULT 0,
+    UNIQUE(trade_date, index_code)
+  );
+  CREATE INDEX IF NOT EXISTS idx_indices_date ON idx_indices(trade_date);
+  CREATE INDEX IF NOT EXISTS idx_indices_code ON idx_indices(index_code);
 `);
 
 // ═══ Default header mappings ═══
@@ -223,4 +242,9 @@ function latestFundDate() {
   return r?.d || '';
 }
 
-module.exports = { db, dataDir, latestSnap, latestIdxDate, latestFundDate };
+function latestIndexDate() {
+  const r = db.prepare('SELECT MAX(trade_date) as d FROM idx_indices').get();
+  return r?.d || '';
+}
+
+module.exports = { db, dataDir, latestSnap, latestIdxDate, latestFundDate, latestIndexDate };

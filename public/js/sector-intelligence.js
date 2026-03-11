@@ -640,11 +640,11 @@ var corrLists=null; // cached sector/industry lists
 async function loadSecCorrelation(el){
   // Detect if we're in standalone correlation tab or inside sectors
   var isStandalone=el.id==='correlation-content';
-  window._corrReload=isStandalone?'loadCorrelationView()':'loadSectorView()';
+  window._corrReloadFn=isStandalone?loadCorrelationView:function(){secIntView='correlation';loadSectorView();};
   // Sub-tab bar
   var h='<div style="padding:8px 12px;display:flex;gap:3px;border-bottom:1px solid var(--b1)">';
   [{k:'ownership',l:'👥 By Ownership'},{k:'industry',l:'🏭 By Industry'},{k:'custom',l:'🔧 Custom'}].forEach(function(m){
-    h+='<button class="bei-sort-btn'+(corrMode===m.k?' on':'')+'" onclick="corrMode=\''+m.k+'\';eval(window._corrReload)" style="padding:5px 12px;font-size:11px">'+m.l+'</button>';
+    h+='<button class="bei-sort-btn'+(corrMode===m.k?' on':'')+'" onclick="corrMode=\''+m.k+'\';window._corrReloadFn()" style="padding:5px 12px;font-size:11px">'+m.l+'</button>';
   });
   h+='</div>';
   h+='<div id="corr-ctrl"></div>';
@@ -673,7 +673,7 @@ async function loadSecCorrelation(el){
 
 function renderCorrCtrl(){
   var el=$('corr-ctrl');if(!el)return;
-  var rl='eval(window._corrReload||\"loadCorrelationView()\")';
+  var rl='window._corrReloadFn()';
   var h='<div style="padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--b1)">';
 
   if(corrMode==='custom'){
