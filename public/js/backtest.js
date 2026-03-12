@@ -219,6 +219,40 @@ function renderBtR(d){
   h+='</div>';
   if(d.monte_carlo){h+=btMC(d.monte_carlo,s);if(d.monte_carlo.bands)h+=btMCChart(d.monte_carlo.bands,s.initial_capital);}
   if(d.by_ticker&&d.by_ticker.length)h+=btTK(d.by_ticker);
+  // Open positions (floating)
+  if(d.open_positions&&d.open_positions.length){
+    h+='<div style="background:var(--bg2);border:1px solid var(--am);border-radius:8px;overflow:hidden;margin-bottom:10px">';
+    h+=btSH('⏳ Open Positions ('+d.open_positions.length+')');
+    h+='<table style="width:100%;font-size:10px;border-collapse:collapse"><thead><tr>';
+    ['Ticker','Entry Date','Entry$','Current$','Unreal. P&L','%Chg','Shares','Pos.Val','Bars','MAE','MFE'].forEach(function(c){
+      h+='<th style="padding:4px 6px;font-size:8px;color:var(--t3);border-bottom:1px solid var(--b1);text-align:'+(c==='Ticker'||c==='Entry Date'?'left':'right')+'">'+c+'</th>';
+    });
+    h+='</tr></thead><tbody>';
+    d.open_positions.forEach(function(p){
+      var cc=p.unrealized>0?'up':p.unrealized<0?'dn':'';
+      h+='<tr>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1)"><span class="code" onclick="gsOpen(\''+esc(p.code)+'\')">'+esc(p.code)+'</span></td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+p.ed+'</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+(p.ep||0).toLocaleString()+'</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:600">'+(p.current||0).toLocaleString()+'</td>';
+      h+='<td class="'+cc+'" style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:600">'+fmtRp(p.unrealized)+'</td>';
+      h+='<td class="'+cc+'" style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+(p.pnlP>0?'+':'')+p.pnlP+'%</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+(p.shares||0).toLocaleString()+'</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+fmtRp(p.pv)+'</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+p.bars+'</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);color:var(--rd)">'+p.mae+'%</td>';
+      h+='<td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);color:var(--gn)">'+(p.mfe>0?'+':'')+p.mfe+'%</td>';
+      h+='</tr>';
+    });
+    // Total unrealized
+    var totUnreal=d.open_positions.reduce(function(s,p){return s+p.unrealized;},0);
+    var totVal=d.open_positions.reduce(function(s,p){return s+p.pv;},0);
+    h+='<tr style="font-weight:700;background:var(--bgH)"><td style="padding:4px 6px;border-bottom:1px solid var(--b1)" colspan="4">Total Open</td>';
+    h+='<td class="'+(totUnreal>0?'up':totUnreal<0?'dn':'')+'" style="padding:4px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+fmtRp(totUnreal)+'</td>';
+    h+='<td style="padding:4px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);color:'+(totUnreal>0?'var(--gn)':totUnreal<0?'var(--rd)':'var(--t3)')+'">'+(totVal>0?((totUnreal/totVal*100).toFixed(2)+'%'):'')+'</td>';
+    h+='<td colspan="5"></td></tr>';
+    h+='</tbody></table></div>';
+  }
   if(d.trades&&d.trades.length)h+=btTR(d.trades);
   h+='<div style="font-size:9px;color:var(--t3);margin-top:4px">'+d.period.start+' → '+d.period.end+' · '+d.period.days+'d · '+(d.compute_time/1000).toFixed(1)+'s</div>';
   return h;
@@ -227,7 +261,7 @@ function renderBtR(d){
 function btP(v){return(v>0?'+':'')+v+'%';}
 function btSH(t){return'<div style="padding:4px 10px;font-size:8px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--b1);border-top:1px solid var(--b1);background:var(--bgH)">'+t+'</div>';}
 function btSR(l,v,d){var c=d>0?'var(--gn)':d<0?'var(--rd)':'var(--t1)';return'<tr><td style="padding:2px 10px;border-bottom:1px solid var(--b1);color:var(--t2);font-size:10px">'+l+'</td><td style="padding:2px 10px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:600;color:'+c+'">'+v+'</td></tr>';}
-function btRI(r){return r==='exit_signal'?'<span style="color:var(--bl)">Signal</span>':r==='force_cutloss'?'<span style="color:var(--rd);font-weight:700">✂ CL</span>':r==='end'?'<span style="color:var(--t3)">End</span>':r||'';}
+function btRI(r){return r==='exit_signal'?'<span style="color:var(--bl)">Signal</span>':r==='force_cutloss'?'<span style="color:var(--rd);font-weight:700">✂ CL</span>':r==='open'?'<span style="color:var(--am);font-weight:600">⏳ Open</span>':r==='end'?'<span style="color:var(--t3)">End</span>':r||'';}
 
 // ═══ EQUITY ═══
 function btEqC(data,ic,bn){var W=600,H=180,P={t:10,r:55,b:20,l:8},cW=W-P.l-P.r,cH=H-P.t-P.b;var all=data.map(function(d){return d.equity;}).concat(data.map(function(d){return d.benchmark||ic;}));var mn=Math.min.apply(null,all)*.98,mx=Math.max.apply(null,all)*1.02;if(mx===mn)mx=mn+1;var sx=function(i){return P.l+(i/(data.length-1))*cW;},sy=function(v){return P.t+(1-(v-mn)/(mx-mn))*cH;};var h='<svg width="100%" viewBox="0 0 '+W+' '+H+'">';for(var g=0;g<=3;g++){var gy=P.t+(g/3)*cH,gv=mx-(g/3)*(mx-mn);h+='<line x1="'+P.l+'" y1="'+gy+'" x2="'+(W-P.r)+'" y2="'+gy+'" stroke="var(--b1)" stroke-width="0.5"/><text x="'+(W-P.r+3)+'" y="'+(gy+3)+'" font-size="7" fill="var(--t3)" font-family="var(--fm)">'+fmtRp(gv)+'</text>';}var bp='';for(var i=0;i<data.length;i++)bp+=(i===0?'M':'L')+sx(i).toFixed(1)+','+sy(data[i].benchmark||ic).toFixed(1);h+='<path d="'+bp+'" fill="none" stroke="var(--t3)" stroke-width="0.8" stroke-dasharray="3,2" opacity="0.5"/>';var ep='';for(var i=0;i<data.length;i++)ep+=(i===0?'M':'L')+sx(i).toFixed(1)+','+sy(data[i].equity).toFixed(1);var ec=data[data.length-1].equity>=ic?'var(--gn)':'var(--rd)';h+='<path d="'+ep+'L'+sx(data.length-1).toFixed(1)+','+(P.t+cH)+'L'+P.l+','+(P.t+cH)+'Z" fill="'+ec+'" opacity="0.06"/><path d="'+ep+'" fill="none" stroke="'+ec+'" stroke-width="1.2"/>';var ds=Math.max(1,Math.floor(data.length/6));for(var i=0;i<data.length;i+=ds)h+='<text x="'+sx(i)+'" y="'+(H-3)+'" font-size="6" fill="var(--t3)" text-anchor="middle" font-family="var(--fm)">'+data[i].date.substring(2,7)+'</text>';h+='<circle cx="'+(P.l+6)+'" cy="'+(P.t+3)+'" r="2.5" fill="'+ec+'"/><text x="'+(P.l+12)+'" y="'+(P.t+6)+'" font-size="7" fill="var(--t2)">Strategy</text><line x1="'+(P.l+55)+'" y1="'+(P.t+3)+'" x2="'+(P.l+65)+'" y2="'+(P.t+3)+'" stroke="var(--t3)" stroke-width="0.8" stroke-dasharray="3,2"/><text x="'+(P.l+68)+'" y="'+(P.t+6)+'" font-size="7" fill="var(--t3)">'+(bn||'Bench')+'</text>';return h+'</svg>';}

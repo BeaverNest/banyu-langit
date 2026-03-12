@@ -1,87 +1,10 @@
 const express = require('express');
-const fs = require('fs');
-const XLSX = require('xlsx');
 const { db, latestIdxDate } = require('../db');
 const { parseTradeDate } = require('../utils/normalize');
 
 const router = express.Router();
 
-// Upload (bulk) — with duplicate detection, format validation, corporate actions
 module.exports = function(upload) {
-  // Expected IDX headers
-  var IDX_HEADERS = ['Kode Saham','Nama Perusahaan','Tanggal Perdagangan Terakhir','Sebelumnya','Open Price','Tertinggi','Terendah','Penutupan','Selisih','Volume','Nilai','Frekuensi','Bid','Bid Volume','Offer','Offer Volume','Listed Shares','Tradeble Shares','Foreign Buy','Foreign Sell'];
-
-  router.post('/upload', upload.array('file', 500), async (req, res) => {
-    try {
-      const files = req.files || [];
-      if (!files.length) return res.status(400).json({ error: 'No files' });
-
-      const ins = db.prepare(`INSERT INTO idx_daily(trade_date,code,name,prev_close,open_price,high,low,close,change,volume,value,frequency,bid,bid_vol,offer,offer_vol,listed_shares,tradeable_shares,foreign_buy,foreign_sell)VALUES(@trade_date,@code,@name,@prev_close,@open_price,@high,@low,@close,@change,@volume,@value,@frequency,@bid,@bid_vol,@offer,@offer_vol,@listed_shares,@tradeable_shares,@foreign_buy,@foreign_sell)ON CONFLICT(trade_date,code) DO UPDATE SET name=excluded.name,prev_close=excluded.prev_close,open_price=excluded.open_price,high=excluded.high,low=excluded.low,close=excluded.close,change=excluded.change,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,bid=excluded.bid,bid_vol=excluded.bid_vol,offer=excluded.offer,offer_vol=excluded.offer_vol,listed_shares=excluded.listed_shares,tradeable_shares=excluded.tradeable_shares,foreign_buy=excluded.foreign_buy,foreign_sell=excluded.foreign_sell`);
-
-      const chk = db.prepare('SELECT id FROM idx_daily WHERE trade_date=? AND code=?');
-
-      let totalNew = 0, totalUpdated = 0, totalSkipped = 0;
-      const fileDates = [];
-      const warnings = [];
-      const manualDate = req.body.trade_date || '';
-
-      db.transaction(() => {
-        for (const file of files) {
-          const wb = XLSX.readFile(file.path);
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws);
-
-          // Format validation — check headers
-          if (rows.length > 0) {
-            var fileHeaders = Object.keys(rows[0]);
-            var missing = IDX_HEADERS.filter(function(h) { return !fileHeaders.some(function(fh) { return fh.trim() === h; }); });
-            var unknown = fileHeaders.filter(function(fh) { return !IDX_HEADERS.some(function(h) { return h === fh.trim(); }); });
-            if (missing.length > 3) {
-              warnings.push({ file: file.originalname, type: 'headers', message: 'Missing ' + missing.length + ' expected columns: ' + missing.slice(0, 5).join(', '), missing: missing.slice(0, 10) });
-            }
-            if (unknown.length > 0 && unknown.length > fileHeaders.length / 2) {
-              warnings.push({ file: file.originalname, type: 'format', message: 'Unrecognized format — ' + unknown.length + ' unknown columns', unknown: unknown.slice(0, 5) });
-            }
-          }
-
-          let fileNew = 0, fileUpdated = 0, fileSkipped = 0, fileDate = '';
-          for (const r of rows) {
-            const code = String(r['Kode Saham'] || '').trim().toUpperCase();
-            if (!code) continue;
-            const td = manualDate || parseTradeDate(r['Tanggal Perdagangan Terakhir']) || '';
-            if (!td) continue;
-            if (!fileDate) fileDate = td;
-
-            // Duplicate detection
-            const existing = chk.get(td, code);
-
-            ins.run({ trade_date: td, code, name: String(r['Nama Perusahaan'] || '').trim(), prev_close: parseInt(r['Sebelumnya']) || 0, open_price: parseInt(r['Open Price']) || 0, high: parseInt(r['Tertinggi']) || 0, low: parseInt(r['Terendah']) || 0, close: parseInt(r['Penutupan']) || 0, change: parseInt(r['Selisih']) || 0, volume: parseInt(r['Volume']) || 0, value: parseInt(r['Nilai']) || 0, frequency: parseInt(r['Frekuensi']) || 0, bid: parseInt(r['Bid']) || 0, bid_vol: parseInt(r['Bid Volume']) || 0, offer: parseInt(r['Offer']) || 0, offer_vol: parseInt(r['Offer Volume']) || 0, listed_shares: parseInt(r['Listed Shares']) || 0, tradeable_shares: parseInt(r['Tradeble Shares']) || 0, foreign_buy: parseInt(r['Foreign Buy']) || 0, foreign_sell: parseInt(r['Foreign Sell']) || 0 });
-
-            if (existing) fileUpdated++;
-            else fileNew++;
-          }
-
-          if (fileDate) fileDates.push({ file: file.originalname, date: fileDate, new: fileNew, updated: fileUpdated });
-          totalNew += fileNew;
-          totalUpdated += fileUpdated;
-        }
-      })();
-
-      const dates = db.prepare('SELECT COUNT(DISTINCT trade_date)as c FROM idx_daily').get().c;
-      const tickers = db.prepare('SELECT COUNT(DISTINCT code)as c FROM idx_daily').get().c;
-
-      // Log upload
-      for (const fd of fileDates) {
-        db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,rows_updated,tickers,upload_type)VALUES(?,?,?,?,?,?,?)').run(fd.file, fd.date, fd.new + fd.updated, fd.new, fd.updated, tickers, 'idx_daily');
-      }
-
-      // Auto-detect corporate actions
-      const detected = detectCorporateActions();
-
-      res.json({ success: true, imported: totalNew + totalUpdated, new_rows: totalNew, updated_rows: totalUpdated, files: fileDates, dates, tickers, warnings, detected_ca: detected });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
   // Quote
   router.get('/quote', (req, res) => {
     const code = (req.query.code || '').toUpperCase().trim();
@@ -230,29 +153,6 @@ module.exports = function(upload) {
   });
 
   // ═══ Fundamental Data (BEI Screener XLSX) ═══
-  router.post('/fundamental/upload', upload.single('file'), (req, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ error: 'No file' });
-      const wb = XLSX.readFile(req.file.path);
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-      if (!rows.length) return res.status(400).json({ error: 'Empty' });
-      const snapMonth = req.body.snapshot_month || new Date().toISOString().substring(0, 7);
-      const ins = db.prepare(`INSERT INTO idx_fundamental(snapshot_month,code,name,sector,subsector,industry,subindustry,idx_index,per,pbv,roe,roa,der,npm,mkt_cap,total_rev,chg_4w,chg_13w,chg_26w,chg_52w,mtd,ytd)VALUES(@sm,@code,@name,@sector,@subsector,@industry,@subindustry,@idx_index,@per,@pbv,@roe,@roa,@der,@npm,@mkt_cap,@total_rev,@chg_4w,@chg_13w,@chg_26w,@chg_52w,@mtd,@ytd)ON CONFLICT(snapshot_month,code) DO UPDATE SET name=excluded.name,sector=excluded.sector,subsector=excluded.subsector,industry=excluded.industry,subindustry=excluded.subindustry,idx_index=excluded.idx_index,per=excluded.per,pbv=excluded.pbv,roe=excluded.roe,roa=excluded.roa,der=excluded.der,npm=excluded.npm,mkt_cap=excluded.mkt_cap,total_rev=excluded.total_rev,chg_4w=excluded.chg_4w,chg_13w=excluded.chg_13w,chg_26w=excluded.chg_26w,chg_52w=excluded.chg_52w,mtd=excluded.mtd,ytd=excluded.ytd`);
-      let count = 0;
-      db.transaction(() => {
-        for (const r of rows) {
-          const code = String(r['Kode Saham'] || '').trim().toUpperCase();
-          if (!code) continue;
-          ins.run({ sm: snapMonth, code, name: String(r['Nama Perusahaan'] || '').trim(), sector: String(r['Sektor'] || ''), subsector: String(r['Subsektor'] || ''), industry: String(r['Industri'] || ''), subindustry: String(r['Subindustri'] || ''), idx_index: String(r['Index'] || ''), per: parseFloat(r['PER']) || 0, pbv: parseFloat(r['PBV']) || 0, roe: parseFloat(r['ROE %']) || 0, roa: parseFloat(r['ROA %']) || 0, der: parseFloat(r['DER']) || 0, npm: parseFloat(r['NPM %']) || 0, mkt_cap: parseFloat(r['Mkt Cap']) || 0, total_rev: parseFloat(r['Total Rev']) || 0, chg_4w: parseFloat(r['4-wk %Pr. Chg.']) || 0, chg_13w: parseFloat(r['13-wk %Pr. Chg.']) || 0, chg_26w: parseFloat(r['26-wk %Pr. Chg.']) || 0, chg_52w: parseFloat(r['52-wk %Pr. Chg.']) || 0, mtd: parseFloat(r['MTD']) || 0, ytd: parseFloat(r['YTD']) || 0 });
-          count++;
-        }
-      })();
-      fs.unlinkSync(req.file.path);
-      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,tickers,upload_type)VALUES(?,?,?,?,?,?)').run(req.file.originalname, snapMonth, count, count, count, 'fundamental');
-      res.json({ success: true, count, snapshot_month: snapMonth });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
   router.get('/fundamental', (req, res) => {
     try {
       const code = (req.query.code || '').toUpperCase().trim();
@@ -666,14 +566,19 @@ module.exports = function(upload) {
           .forEach(r => { avgMap[r.code] = r; });
       }
 
+      // Batch MA calculation — single query instead of per-stock queries
       const maMap = {};
-      const maStmt = db.prepare('SELECT close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 200');
-      for (const s of todayStocks) {
-        const hist = maStmt.all(s.code).map(r => r.close).reverse();
-        const ma = {};
-        if (hist.length >= 20) { const s20 = hist.slice(-20); ma.ma20 = Math.round(s20.reduce((a, v) => a + v, 0) / 20); }
-        if (hist.length >= 200) { ma.ma200 = Math.round(hist.reduce((a, v) => a + v, 0) / 200); }
-        if (ma.ma20 || ma.ma200) maMap[s.code] = ma;
+      const maDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 200').all().map(r => r.trade_date);
+      if (maDates.length >= 20) {
+        const ma20Dates = maDates.slice(0, 20);
+        const ph20 = ma20Dates.map(() => '?').join(',');
+        db.prepare(`SELECT code, ROUND(AVG(close)) as ma20 FROM idx_daily WHERE trade_date IN (${ph20}) AND close>0 GROUP BY code`).all(...ma20Dates)
+          .forEach(r => { maMap[r.code] = { ma20: r.ma20, ma200: 0 }; });
+      }
+      if (maDates.length >= 200) {
+        const ph200 = maDates.map(() => '?').join(',');
+        db.prepare(`SELECT code, ROUND(AVG(close)) as ma200 FROM idx_daily WHERE trade_date IN (${ph200}) AND close>0 GROUP BY code`).all(...maDates)
+          .forEach(r => { if (maMap[r.code]) maMap[r.code].ma200 = r.ma200; else maMap[r.code] = { ma20: 0, ma200: r.ma200 }; });
       }
 
       const { latestFundDate } = require('../db');
@@ -748,80 +653,6 @@ module.exports = function(upload) {
   });
 
   // ═══ INDEX SUMMARY (BEI Index Data) ═══
-  router.post('/indices/upload', upload.array('file', 500), (req, res) => {
-    try {
-      const files = req.files || [];
-      if (!files.length) return res.status(400).json({ error: 'No files' });
-
-      const ins = db.prepare(`INSERT INTO idx_indices(trade_date,index_code,previous,highest,lowest,close,change_val,num_stocks,volume,value,frequency,market_cap)
-        VALUES(@trade_date,@index_code,@previous,@highest,@lowest,@close,@change_val,@num_stocks,@volume,@value,@frequency,@market_cap)
-        ON CONFLICT(trade_date,index_code) DO UPDATE SET previous=excluded.previous,highest=excluded.highest,lowest=excluded.lowest,close=excluded.close,change_val=excluded.change_val,num_stocks=excluded.num_stocks,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,market_cap=excluded.market_cap`);
-
-      const chk = db.prepare('SELECT id FROM idx_indices WHERE trade_date=? AND index_code=?');
-
-      let totalNew = 0, totalUpdated = 0, totalIndices = new Set(), fileDates = [];
-
-      db.transaction(() => {
-        for (const file of files) {
-          const wb = XLSX.readFile(file.path);
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-          // Detect trade_date from filename: Index_Summary-YYYYMMDD.xlsx
-          let fileDate = '';
-          const m = (file.originalname || '').match(/(\d{4})(\d{2})(\d{2})/);
-          if (m) fileDate = m[1] + '-' + m[2] + '-' + m[3];
-          // Fallback: manual date from request body
-          if (!fileDate) fileDate = req.body.trade_date || '';
-          // Fallback: today
-          if (!fileDate) fileDate = new Date().toISOString().split('T')[0];
-
-          if (fileDate && !fileDates.includes(fileDate)) fileDates.push(fileDate);
-
-          for (const r of rows) {
-            const indexCode = String(r['Index Code'] || '').trim();
-            if (!indexCode) continue;
-
-            const existing = chk.get(fileDate, indexCode);
-
-            ins.run({
-              trade_date: fileDate,
-              index_code: indexCode,
-              previous: parseFloat(r['Previous']) || 0,
-              highest: parseFloat(r['Highest']) || 0,
-              lowest: parseFloat(r['Lowest']) || 0,
-              close: parseFloat(r['Close']) || 0,
-              change_val: parseFloat(r['Change']) || 0,
-              num_stocks: parseInt(r['# Stock']) || 0,
-              volume: parseInt(r['Volume']) || 0,
-              value: parseInt(r['Value']) || 0,
-              frequency: parseInt(r['Frequency']) || 0,
-              market_cap: parseFloat(r['Market Capitalization*'] || r['Market Capitalization'] || 0) || 0
-            });
-
-            totalIndices.add(indexCode);
-            if (existing) totalUpdated++; else totalNew++;
-          }
-          fs.unlinkSync(file.path);
-        }
-      })();
-
-      // Log upload
-      db.prepare('INSERT INTO upload_logs(filename,snapshot_date,rows_total,rows_new,rows_updated,tickers,upload_type)VALUES(?,?,?,?,?,?,?)')
-        .run(files.map(f => f.originalname).join(', '), fileDates.join(', '), totalNew + totalUpdated, totalNew, totalUpdated, totalIndices.size, 'idx_indices');
-
-      res.json({
-        success: true,
-        imported: totalNew + totalUpdated,
-        new_rows: totalNew,
-        updated_rows: totalUpdated,
-        indices: totalIndices.size,
-        dates: fileDates.length,
-        files: files.length
-      });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
   // Index summary stats
   router.get('/indices/stats', (req, res) => {
     try {
@@ -868,6 +699,207 @@ module.exports = function(upload) {
         FROM idx_indices GROUP BY index_code ORDER BY index_code`).all();
       res.json({ indices: rows });
     } catch (e) { res.json({ indices: [], error: e.message }); }
+  });
+
+  // ═══════════════════════════════════════════
+  // IDX API Bridge Import (reads from Deno IDX-API SQLite)
+  // ═══════════════════════════════════════════
+
+  const idxBridge = require('../utils/idx-api-bridge');
+
+  // Helper: log sync result
+  function logSync(type, date, rows, status, message) {
+    try {
+      db.prepare(`INSERT INTO sync_logs(sync_type,sync_date,rows_synced,status,message,finished_at)
+        VALUES(?,?,?,?,?,datetime('now'))`).run(type, date || '', rows, status, message || '');
+    } catch (e) { console.error('sync_log error:', e.message); }
+  }
+
+  // --- Bridge Status ---
+  router.get('/sync/bridge-status', (req, res) => {
+    try {
+      const status = idxBridge.getIdxApiStatus();
+      res.json(status);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Stock Summary (from IDX-API DB) ---
+  router.post('/sync/stock-summary', (req, res) => {
+    const { date } = req.body;
+    try {
+      const result = idxBridge.importStockSummary(db, { date: date || '' });
+      logSync('stock_summary', date || '', result.rows, 'ok', 'bridge: ' + result.rows + ' rows');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('stock_summary', date || '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Index Summary ---
+  router.post('/sync/index-summary', (req, res) => {
+    const { date } = req.body;
+    try {
+      const result = idxBridge.importIndexSummary(db, { date: date || '' });
+      logSync('index_summary', date || '', result.rows, 'ok', 'bridge: ' + result.rows + ' rows');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('index_summary', date || '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Financial Ratios ---
+  router.post('/sync/financial-ratios', (req, res) => {
+    try {
+      const result = idxBridge.importFinancialRatios(db);
+      logSync('financial_ratios', '', result.rows, 'ok', 'bridge');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('financial_ratios', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Stock Screener ---
+  router.post('/sync/screener', (req, res) => {
+    try {
+      const result = idxBridge.importStockScreener(db);
+      logSync('screener', result.snapshot_month || '', result.rows, 'ok', 'bridge');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('screener', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Dividends ---
+  router.post('/sync/dividends', (req, res) => {
+    try {
+      const result = idxBridge.importDividends(db);
+      logSync('dividends', '', result.rows, 'ok', 'bridge');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('dividends', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Stock Splits ---
+  router.post('/sync/stock-splits', (req, res) => {
+    try {
+      const result = idxBridge.importStockSplits(db);
+      logSync('stock_splits', '', result.rows, 'ok', 'bridge');
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('stock_splits', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Batch Import: stock summary for date range ---
+  router.post('/sync/batch-stock', (req, res) => {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    try {
+      const result = idxBridge.importStockSummary(db, { from, to });
+      logSync('batch_stock', from + ' to ' + to, result.rows, 'ok', 'bridge: ' + (result.dates ? result.dates.length : 0) + ' dates');
+      res.json({ ok: true, total_rows: result.rows, dates: result.dates });
+    } catch (e) {
+      logSync('batch_stock', from + '-' + to, 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Batch Import: index summary for date range ---
+  router.post('/sync/batch-index', (req, res) => {
+    const { from, to } = req.body;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    try {
+      const result = idxBridge.importIndexSummary(db, { from, to });
+      logSync('batch_index', from + ' to ' + to, result.rows, 'ok', 'bridge');
+      res.json({ ok: true, total_rows: result.rows });
+    } catch (e) {
+      logSync('batch_index', from + '-' + to, 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import All (one-click) ---
+  router.post('/sync/import-all', (req, res) => {
+    try {
+      const results = {};
+      results.stock = idxBridge.importStockSummary(db, {});
+      results.index = idxBridge.importIndexSummary(db, {});
+      results.fundamental = idxBridge.importFinancialRatios(db);
+      results.screener = idxBridge.importStockScreener(db);
+      results.dividends = idxBridge.importDividends(db);
+      results.splits = idxBridge.importStockSplits(db);
+      results.profiles = idxBridge.importCompanyProfiles(db);
+      results.details = idxBridge.importCompanyDetails(db);
+      const totalRows = Object.values(results).reduce((s, r) => s + (r.rows || 0), 0);
+      logSync('import_all', '', totalRows, 'ok', JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.rows]))));
+      res.json({ ok: true, total_rows: totalRows, detail: results });
+    } catch (e) {
+      logSync('import_all', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Import Company Profiles + Details ---
+  router.post('/sync/company-profiles', (req, res) => {
+    try {
+      const r1 = idxBridge.importCompanyProfiles(db);
+      const r2 = idxBridge.importCompanyDetails(db);
+      logSync('company_profiles', '', r1.rows + r2.rows, 'ok', 'profiles=' + r1.rows + ' details=' + r2.rows);
+      res.json({ ok: true, profiles: r1.rows, details: r2.rows });
+    } catch (e) {
+      logSync('company_profiles', '', 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+  router.get('/sync/status', (req, res) => {
+    try {
+      const latestStock = db.prepare('SELECT MAX(trade_date) as d FROM idx_daily').get()?.d || '';
+      const latestIndex = db.prepare('SELECT MAX(trade_date) as d FROM idx_indices').get()?.d || '';
+      const latestFund = db.prepare('SELECT MAX(snapshot_month) as d FROM idx_fundamental').get()?.d || '';
+      const stockCount = db.prepare('SELECT COUNT(DISTINCT trade_date) as c FROM idx_daily').get()?.c || 0;
+      const indexCount = db.prepare('SELECT COUNT(DISTINCT trade_date) as c FROM idx_indices').get()?.c || 0;
+      const tickerCount = db.prepare('SELECT COUNT(DISTINCT code) as c FROM idx_daily').get()?.c || 0;
+      const recentLogs = db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT 20').all();
+      let bridgeStatus = { ok: false };
+      try { bridgeStatus = idxBridge.getIdxApiStatus(); } catch (e) { bridgeStatus = { ok: false, error: e.message }; }
+      res.json({
+        latest: { stock: latestStock, index: latestIndex, fundamental: latestFund },
+        counts: { stock_dates: stockCount, index_dates: indexCount, tickers: tickerCount },
+        recent_syncs: recentLogs,
+        bridge: bridgeStatus
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Sync Status ---
+  router.post('/sync/today', (req, res) => {
+    const today = new Date();
+    const dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    try {
+      const stockResult = idxBridge.importStockSummary(db, { date: dateStr });
+      const indexResult = idxBridge.importIndexSummary(db, { date: dateStr });
+      logSync('today', dateStr, stockResult.rows + indexResult.rows, 'ok', 'stock=' + stockResult.rows + ' index=' + indexResult.rows);
+      res.json({ ok: true, date: dateStr, stock_rows: stockResult.rows, index_rows: indexResult.rows });
+    } catch (e) {
+      logSync('today', dateStr, 0, 'error', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Compat stubs ---
+  router.get('/sync/index-list', (req, res) => {
+    res.json({ ok: true, count: 0, message: 'Use Deno: deno run --allow-all sync-all.ts' });
   });
 
   return router;

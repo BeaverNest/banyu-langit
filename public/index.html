@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Banyu Langit Trading Diary</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23141720'/><text x='16' y='22' text-anchor='middle' font-size='18'>🌊</text></svg>">
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<title>Banyu Langit</title>
+<link rel="icon" href="/logo-watermark.png" type="image/png">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/base.css">
 <link rel="stylesheet" href="/css/diary.css">
 <link rel="stylesheet" href="/css/watchlist.css">
@@ -15,172 +15,195 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 </head>
 <body>
+
+<!-- ═══ TOPBAR ═══ -->
 <div class="topbar">
-  <div class="logo"><span class="logo-mark">🌊</span>Banyu Langit</div>
+  <div class="logo"><img src="/logo-watermark.png">BL</div>
   <div class="topbar-search" id="gsearch-wrap">
-    <input id="gsearch" placeholder="Search ticker... (BBCA, TLKM)" autocomplete="off" oninput="gsAcType()" onkeydown="gsAcKey(event)">
+    <input id="gsearch" placeholder="/ Search ticker..." autocomplete="off" oninput="gsAcType()" onkeydown="gsAcKey(event)">
     <div class="gs-ac" id="gs-ac"></div>
   </div>
   <div class="topbar-r">
-    <!-- WATCHLIST DROPDOWN (moved from tab) -->
-    <button class="ib" id="wlbtn" onclick="togWL()" title="Watchlist">📋<span class="badge" id="wlbdg" style="display:none">0</span></button>
-    <div class="ndrop" id="wldrop" style="width:360px">
-      <div class="ndrop-h"><span>📋 Watchlist</span><button onclick="event.stopPropagation();togWL()" style="font-size:14px">✕</button></div>
-      <div style="padding:6px 10px;border-bottom:1px solid var(--b1);display:flex;gap:4px">
-        <input id="wli" style="flex:1;background:var(--bgH);border:1px solid var(--b2);border-radius:6px;padding:4px 8px;color:var(--t1);font-family:var(--f);font-size:11px;outline:none;text-transform:uppercase" placeholder="Add ticker (BBCA.JK)" onkeydown="if(event.key==='Enter'){addW();event.stopPropagation()}">
-        <button onclick="addW()" style="padding:4px 10px;border-radius:6px;border:none;background:var(--gn);color:#fff;font-weight:700;font-size:11px;cursor:pointer">+</button>
+    <button class="ib" id="wlbtn" onclick="togWL()" title="Watchlist [W]">📋<span class="badge" id="wlbdg" style="display:none">0</span></button>
+    <div class="ndrop" id="wldrop" style="width:340px">
+      <div class="ndrop-h"><span>Watchlist</span><button onclick="event.stopPropagation();togWL()">✕</button></div>
+      <div style="padding:4px 8px;border-bottom:1px solid var(--b1);display:flex;gap:3px">
+        <input id="wli" style="flex:1;background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:3px 6px;color:var(--t1);font-family:var(--f);font-size:var(--font-sm);outline:none;text-transform:uppercase" placeholder="BBCA.JK" onkeydown="if(event.key==='Enter'){addW();event.stopPropagation()}">
+        <button onclick="addW()" style="padding:3px 8px;border-radius:4px;border:none;background:var(--gn);color:#fff;font-weight:700;font-size:var(--font-sm);cursor:pointer">+</button>
       </div>
-      <div id="wll" style="max-height:200px;overflow-y:auto"></div>
-      <div style="padding:6px 10px;border-top:1px solid var(--b1);font-size:10px;font-weight:700;color:var(--t3)">🔔 ALERTS</div>
-      <div style="padding:4px 10px;display:flex;gap:3px;border-bottom:1px solid var(--b1)">
-        <input class="a_s" id="as" placeholder="BBCA.JK" style="width:70px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;text-transform:uppercase;outline:none">
-        <select class="a_c" id="ac" style="width:40px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px;color:var(--t1);font-size:10px;outline:none"><option value="above">≥</option><option value="below">≤</option></select>
-        <input class="a_p" id="ap" type="number" step="0.01" placeholder="Price" style="width:65px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none">
-        <input class="a_n" id="an" placeholder="Note" style="flex:1;min-width:40px;background:var(--bgH);border:1px solid var(--b2);border-radius:5px;padding:3px 6px;color:var(--t1);font-size:10px;outline:none">
-        <button onclick="addAl()" style="padding:3px 8px;border-radius:5px;border:none;background:var(--am);color:#fff;font-weight:700;font-size:10px;cursor:pointer">+</button>
+      <div id="wll" style="max-height:180px;overflow-y:auto"></div>
+      <div style="padding:4px 8px;border-top:1px solid var(--b1);font-size:var(--font-xs);font-weight:700;color:var(--t3)">ALERTS</div>
+      <div style="padding:3px 8px;display:flex;gap:2px;border-bottom:1px solid var(--b1)">
+        <input class="a_s" id="as" placeholder="BBCA" style="width:60px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px 5px;color:var(--t1);font-size:var(--font-xs);text-transform:uppercase;outline:none">
+        <select class="a_c" id="ac" style="width:36px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px;color:var(--t1);font-size:var(--font-xs);outline:none"><option value="above">≥</option><option value="below">≤</option></select>
+        <input class="a_p" id="ap" type="number" step="0.01" placeholder="Price" style="width:58px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px 5px;color:var(--t1);font-size:var(--font-xs);outline:none">
+        <input class="a_n" id="an" placeholder="Note" style="flex:1;min-width:36px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px 5px;color:var(--t1);font-size:var(--font-xs);outline:none">
+        <button onclick="addAl()" style="padding:2px 6px;border-radius:3px;border:none;background:var(--am);color:#fff;font-weight:700;font-size:var(--font-xs);cursor:pointer">+</button>
       </div>
-      <div id="alst" style="max-height:150px;overflow-y:auto"></div>
+      <div id="alst" style="max-height:120px;overflow-y:auto"></div>
     </div>
-
-    <button class="ib" id="bell" onclick="togN()">🔔<span class="badge" id="bdg">0</span></button>
-    <div class="ndrop" id="ndrop"><div class="ndrop-h"><span>Notifications</span><button onclick="event.stopPropagation();clrN()">Clear all</button></div><div class="ndrop-l" id="nlist"></div></div>
-    <button class="ib" id="thbtn" onclick="togTh()">☀️</button>
+    <button class="ib" id="bell" onclick="togN()" title="Notifications">🔔<span class="badge" id="bdg">0</span></button>
+    <div class="ndrop" id="ndrop"><div class="ndrop-h"><span>Notifications</span><button onclick="event.stopPropagation();clrN()">Clear</button></div><div class="ndrop-l" id="nlist"></div></div>
+    <button class="ib" id="thbtn" onclick="togTh()" title="Theme [T]">🌙</button>
     <button class="ib" onclick="openSettings()" title="Settings">⚙️</button>
   </div>
 </div>
 
+<!-- ═══ LAYOUT: Sidebar + Content ═══ -->
 <div class="layout">
-<div class="pL" id="pL" style="width:100%;max-width:100%;position:relative">
-  <!-- Watermark -->
-  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:0;opacity:0.04"><img src="/logo-watermark.png" style="width:340px;height:340px;object-fit:contain"></div>
-  <!-- ═══ NEW 5-TAB STRUCTURE ═══ -->
+
+<!-- SIDEBAR -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-tabs">
+    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [1]">
+      <span class="tab-icon">📈</span><span class="tab-label">Market</span>
+    </div>
+    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="IDX Daily [2]">
+      <span class="tab-icon">📊</span><span class="tab-label">IDX Daily</span>
+    </div>
+    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [3]">
+      <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
+    </div>
+    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [4]">
+      <span class="tab-icon">🔬</span><span class="tab-label">Analysis</span>
+    </div>
+    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Portfolio [5]">
+      <span class="tab-icon">💼</span><span class="tab-label">Portfolio</span>
+    </div>
+    <div class="sidebar-tab" onclick="stab('ins',this)" data-tab="ins" title="Insider [6]">
+      <span class="tab-icon">🔍</span><span class="tab-label">Insider</span>
+    </div>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="sidebar-tab" onclick="toggleCompact()" title="Compact mode [C]">
+      <span class="tab-icon">◻</span><span class="tab-label">Compact</span><span class="compact-indicator">ON</span>
+    </div>
+  </div>
+  <div class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar [S]">
+    <span id="sidebar-arrow">◀</span>
+  </div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="pL" id="pL">
+  <!-- Old tabs hidden (CSS display:none), kept for backward compat -->
   <div class="tabs">
-    <button class="tab on" onclick="stab('mkt',this)">📈 Market</button>
-    <button class="tab" onclick="stab('idx',this)">📊 IDX Daily</button>
-    <button class="tab" onclick="stab('diary',this)">📝 Diary</button>
-    <button class="tab" onclick="stab('analysis',this)">🔬 Analysis</button>
-    <button class="tab" onclick="stab('pf',this)">💼 Portfolio</button>
-    <button class="tab" onclick="stab('ins',this)">🔍 Insider</button>
+    <button class="tab on" onclick="stab('mkt',this)">Market</button>
+    <button class="tab" onclick="stab('idx',this)">IDX Daily</button>
+    <button class="tab" onclick="stab('diary',this)">Diary</button>
+    <button class="tab" onclick="stab('analysis',this)">Analysis</button>
+    <button class="tab" onclick="stab('pf',this)">Portfolio</button>
+    <button class="tab" onclick="stab('ins',this)">Insider</button>
   </div>
 
-  <!-- ═══ TAB 1: MARKET (Global Overview + News) ═══ -->
+  <!-- TAB 1: MARKET -->
   <div class="tpanel on" id="t-mkt">
     <div class="wt">
-      <button class="wt-b on" onclick="smkt('ov',this)">🌍 Overview</button>
-      <button class="wt-b" onclick="smkt('nws',this)">📰 News</button>
-      <button class="wt-b" onclick="smkt('cmd',this)">🛢 Commodities</button>
+      <button class="wt-b on" onclick="smkt('ov',this)">Overview</button>
+      <button class="wt-b" onclick="smkt('nws',this)">News</button>
+      <button class="wt-b" onclick="smkt('cmd',this)">Commodities</button>
     </div>
     <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-nws">
-      <div class="nbar"><input id="nsi" placeholder="Ticker or keyword (BBCA.JK, IHSG)" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
-      <div class="nlist" id="nsl"><div class="ne">Loading market news...</div></div>
+      <div class="nbar"><input id="nsi" placeholder="Ticker or keyword" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
+      <div class="nlist" id="nsl"><div class="ne">Loading...</div></div>
     </div>
     <div class="wp" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
-  <!-- ═══ TAB 2: IDX DAILY (Unified) ═══ -->
+  <!-- TAB 2: IDX DAILY -->
   <div class="tpanel" id="t-idx">
-    <div id="idx-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading IDX data...</div></div>
+    <div id="idx-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div>
   </div>
 
-  <!-- ═══ TAB 3: DIARY (Unchanged) ═══ -->
+  <!-- TAB 3: DIARY -->
   <div class="tpanel" id="t-diary">
-    <div class="sbar"><div class="sw"><span style="font-size:12px;color:var(--t3)">🔍</span><input class="si" id="sinp" placeholder="Search diary..."><button class="sc" id="sclr" onclick="clrS()">✕</button></div></div>
+    <div class="sbar"><div class="sw"><span style="font-size:var(--font-md);color:var(--t3)">🔍</span><input class="si" id="sinp" placeholder="Search diary..."><button class="sc" id="sclr" onclick="clrS()">✕</button></div></div>
     <div class="rind" id="rind"><span>↩ Replying to <strong id="rtxt"></strong></span><button class="cx" onclick="cxR()">✕</button></div>
     <div class="cmp"><div class="cmp-row"><div class="av">🧑‍💻</div><div class="cmp-b">
-      <textarea class="cta" id="cta" placeholder="What's happening with your trades?" rows="1"></textarea>
-      <div class="phint" id="phint">📋 Ctrl+V to paste screenshot</div>
+      <textarea class="cta" id="cta" placeholder="Trade notes..." rows="1"></textarea>
+      <div class="phint" id="phint">Ctrl+V paste screenshot</div>
       <div class="cprev" id="cprev"></div>
-      <div class="ctb"><div class="tbl"><button class="tb" onclick="$('fi').click()">🖼 Photo</button><input type="file" id="fi" accept="image/*" multiple><div class="tp"><button class="pl" data-t="WIN" onclick="pTag(this)">▲ Win</button><button class="pl" data-t="LOSS" onclick="pTag(this)">▼ Loss</button><button class="pl" data-t="NOTE" onclick="pTag(this)">◆ Note</button></div></div><button class="pbtn" id="pbtn" onclick="post()" disabled>Post</button></div>
+      <div class="ctb"><div class="tbl"><button class="tb" onclick="$('fi').click()">🖼</button><input type="file" id="fi" accept="image/*" multiple><div class="tp"><button class="pl" data-t="WIN" onclick="pTag(this)">▲W</button><button class="pl" data-t="LOSS" onclick="pTag(this)">▼L</button><button class="pl" data-t="NOTE" onclick="pTag(this)">◆N</button></div></div><button class="pbtn" id="pbtn" onclick="post()" disabled>Post</button></div>
     </div></div></div>
     <div class="feed" id="feed"></div>
   </div>
 
-  <!-- ═══ TAB 4: ANALYSIS (Screener + Sectors + Compare + Correlation) ═══ -->
+  <!-- TAB 4: ANALYSIS -->
   <div class="tpanel" id="t-analysis">
     <div class="wt">
-      <button class="wt-b on" onclick="anaSubTab('screener',this)">🔬 Screener</button>
-      <button class="wt-b" onclick="anaSubTab('sectors',this)">📊 Sectors</button>
-      <button class="wt-b" onclick="anaSubTab('compare',this)">📈 Compare</button>
-      <button class="wt-b" onclick="anaSubTab('correlation',this)">🔗 Correlation</button>
-      <button class="wt-b" onclick="anaSubTab('backtest',this)">🧪 Backtest</button>
+      <button class="wt-b on" onclick="anaSubTab('screener',this)">Screener</button>
+      <button class="wt-b" onclick="anaSubTab('sectors',this)">Sectors</button>
+      <button class="wt-b" onclick="anaSubTab('compare',this)">Compare</button>
+      <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
+      <button class="wt-b" onclick="anaSubTab('backtest',this)">Backtest</button>
     </div>
     <div class="wp on" id="ana-screener"><div id="scr-content"></div></div>
     <div class="wp" id="ana-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure and run backtest</div></div></div>
+    <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure backtest</div></div></div>
   </div>
 
-  <!-- ═══ TAB 5: PORTFOLIO (Tracker + Kelly) ═══ -->
+  <!-- TAB 5: PORTFOLIO -->
   <div class="tpanel" id="t-pf">
-    <div id="pf-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading portfolio...</div></div>
+    <div id="pf-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div>
   </div>
 
-  <!-- ═══ TAB 6: INSIDER (Unchanged) ═══ -->
+  <!-- TAB 6: INSIDER -->
   <div class="tpanel" id="t-ins">
     <div class="ins-topbar" id="ins-topbar">
       <div class="ins-nav">
         <button class="ins-back" id="ins-back" onclick="insBack()" style="display:none">← Back</button>
-        <span class="ins-title" id="ins-title">Market Overview</span>
+        <span class="ins-title" id="ins-title">Insider</span>
       </div>
       <div class="ins-search-bar">
-        <div class="ins-search"><input id="inq" placeholder="Search ticker or investor..." onkeydown="acKey(event)" oninput="acType()" autocomplete="off"><button onclick="insSearch()">Search</button><div class="ins-ac" id="ins-ac"></div></div>
+        <div class="ins-search"><input id="inq" placeholder="Search ticker / investor..." onkeydown="acKey(event)" oninput="acType()" autocomplete="off"><button onclick="insSearch()">Go</button><div class="ins-ac" id="ins-ac"></div></div>
       </div>
-      <div class="ins-actions"></div>
     </div>
     <div class="ins-info" id="ins-info"></div>
     <div class="ins-content" id="ins-content"><div class="ne">Loading...</div></div>
   </div>
-
 </div>
 </div>
 
 <!-- ENTRY POPUP -->
-<div class="epop" id="epop" onclick="if(event.target===this)cPop()">
-  <div class="epop-box" id="epop-box"></div>
-</div>
-
+<div class="epop" id="epop" onclick="if(event.target===this)cPop()"><div class="epop-box" id="epop-box"></div></div>
 <div class="mo" id="imo" onclick="$('imo').classList.remove('o')"><img id="imoi"></div>
-<div class="dlg" id="ddlg"><div class="dbox"><h3>Delete?</h3><p>Can't be undone.</p><div class="dbtn"><button class="dc" onclick="cDel()">Cancel</button><button class="dd" onclick="eDel()">Delete</button></div></div></div>
-<div class="emo" id="eov"><div class="ebox"><h3>Edit Entry</h3><textarea class="eta" id="etx"></textarea><div class="etr" id="etr"></div><div class="eis" id="eis"></div><div class="eac"><button class="eap" onclick="$('efi').click()">🖼 Add</button><input type="file" id="efi" accept="image/*" multiple><button class="dc" onclick="cEdit()">Cancel</button><button class="pbtn" onclick="sEdit()">Save</button></div></div></div>
+<div class="dlg" id="ddlg"><div class="dbox"><h3>Delete?</h3><p>Permanent.</p><div class="dbtn"><button class="dc" onclick="cDel()">Cancel</button><button class="dd" onclick="eDel()">Delete</button></div></div></div>
+<div class="emo" id="eov"><div class="ebox"><h3>Edit</h3><textarea class="eta" id="etx"></textarea><div class="etr" id="etr"></div><div class="eis" id="eis"></div><div class="eac"><button class="eap" onclick="$('efi').click()">🖼</button><input type="file" id="efi" accept="image/*" multiple><button class="dc" onclick="cEdit()">Cancel</button><button class="pbtn" onclick="sEdit()">Save</button></div></div></div>
 <div class="toast" id="toast"><div class="toast-t" id="ttt"></div><div class="toast-b" id="ttb"></div></div>
 <div class="net-tip" id="net-tip"></div>
 
-<!-- GLOBAL TICKER PAGE -->
-<div class="ticker-overlay" id="ticker-ov">
-  <div class="ticker-page" id="ticker-page"></div>
-</div>
+<!-- TICKER PAGE -->
+<div class="ticker-overlay" id="ticker-ov"><div class="ticker-page" id="ticker-page"></div></div>
 
-<!-- ═══ SETTINGS MODAL ═══ -->
+<!-- SETTINGS MODAL -->
 <div class="smod" id="smod" onclick="if(event.target===this)closeSettings()">
   <div class="smod-box">
     <div class="smod-nav">
       <div class="smod-nav-h"><span>Settings</span><button onclick="closeSettings()">✕</button></div>
       <div class="smod-nav-list" id="smod-nav">
-        <div class="smod-nav-item on" onclick="setTab('upload',this)"><span class="sni-icon">📊</span><span class="sni-label">Data Upload</span></div>
+        <div class="smod-nav-item on" onclick="setTab('upload',this)"><span class="sni-icon">📊</span><span class="sni-label">Upload</span></div>
         <div class="smod-nav-item" onclick="setTab('dbstats',this)"><span class="sni-icon">🗄</span><span class="sni-label">Database</span></div>
         <div class="smod-nav-item" onclick="setTab('ca',this)"><span class="sni-icon">⚡</span><span class="sni-label">Corp Actions</span><span class="sni-badge" id="smod-ca-badge" style="display:none">0</span></div>
-        <div class="smod-nav-item" onclick="setTab('tags',this)"><span class="sni-icon">🏷</span><span class="sni-label">Investor Tags</span></div>
-        <div class="smod-nav-item" onclick="setTab('export',this)"><span class="sni-icon">📥</span><span class="sni-label">Export Data</span></div>
-        <div class="smod-nav-item" onclick="setTab('idxdl',this)"><span class="sni-icon">⬇️</span><span class="sni-label">IDX Download</span></div>
-        <div class="smod-nav-item" onclick="setTab('prefs',this)"><span class="sni-icon">🎨</span><span class="sni-label">Preferences</span></div>
+        <div class="smod-nav-item" onclick="setTab('tags',this)"><span class="sni-icon">🏷</span><span class="sni-label">Tags</span></div>
+        <div class="smod-nav-item" onclick="setTab('export',this)"><span class="sni-icon">📥</span><span class="sni-label">Export</span></div>
+        <div class="smod-nav-item" onclick="setTab('idxapi',this)"><span class="sni-icon">🔄</span><span class="sni-label">IDX API</span></div>
+        <div class="smod-nav-item" onclick="setTab('prefs',this)"><span class="sni-icon">🎨</span><span class="sni-label">Prefs</span></div>
       </div>
     </div>
     <div class="smod-body">
-      <div class="smod-body-h" id="smod-title"><span class="sbh-icon">📊</span> Data Upload</div>
+      <div class="smod-body-h" id="smod-title"><span class="sbh-icon">📊</span> Upload</div>
       <div class="smod-body-content" id="smod-content"></div>
     </div>
   </div>
 </div>
 
-<!-- Hidden file inputs for settings uploads -->
 <input type="file" id="insfi2" accept=".xlsx,.xls" style="display:none">
 <input type="file" id="tagfi2" accept=".xlsx" style="display:none">
-<input type="file" id="idxfi" accept=".xlsx,.xls" style="display:none" multiple>
-<input type="file" id="fundfi" accept=".xlsx,.xls" style="display:none">
 
-<!-- ═══ SCRIPTS — load order matters ═══ -->
+<!-- SCRIPTS -->
 <script src="/js/utils.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/settings.js"></script>
@@ -191,7 +214,6 @@
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
 <script src="/js/backtest.js"></script>
-<script src="/js/fund-upload.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
 <script src="/js/portfolio.js"></script>

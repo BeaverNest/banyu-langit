@@ -10,6 +10,7 @@ services:
       - ./public:/app/public
       - ./server:/app/server
       - ./.env:/app/.env:ro
+      - ./IDX-API-main/data:/app/IDX-API-main/data:ro
     restart: unless-stopped
     command: npx nodemon --watch server server/index.js
 

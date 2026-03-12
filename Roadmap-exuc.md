@@ -1,148 +1,214 @@
 # 🌊 Banyu Langit — Execution Roadmap
-
-## Current State (March 8, 2026 — Evening)
-
-### Stats
-- **48 files** total, 11 modified/new this session
-- **14 JS frontend files** (was 12, added idx-daily-v2.js, removed idx.js + activity-spike.js)
-- **739 lines** screener.js backend (was 573, added groups + spike + new fields)
-- **136 lines** app.js (was 968 — massive reduction via redesign)
-- **608 lines** idx-daily-v2.js (new, replaces idx.js 500+ lines + activity-spike.js 200+ lines)
-- **495 lines** screener.js frontend (was 403, V5 with rule groups)
-- **11 SQLite tables** + auto-migration for schema changes
-
-### What's New This Session (Sprint 5)
-- **Full tab redesign**: 5 tabs (Market | IDX Daily | Diary | Analysis | Insider)
-- **Watchlist moved to topbar** dropdown (always accessible)
-- **IDX Daily V2**: unified Rankings + Digest + Flow with column toggle + drag-reorder
-- **Digest dashboard**: mockup-style cards (Top Gainer/Loser, Sector Activity, Most Active, Foreign Buy/Sell, Volume Spikes, Dormant→Active)
-- **Screener V5**: Rule Groups (AND/OR mixed), bigger popup, localStorage persistence
-- **New indicators**: Activity Score, Val/Freq/FNet Spike, EPS, Free Float %, Industry
-- **Backend**: groups evaluation, activity spike in /run, unified endpoint /api/idx/unified
+# Handover per 12 Maret 2026
 
 ---
 
-## ⚠️ Stability Assessment
+## ⚡ TL;DR Buat Yang Baru Join
 
-### 🟢 Solid & Stable
-| Area | Status |
+Banyu Langit = **Bloomberg Terminal mini untuk IDX**. Docker, localhost:3003. Solo project.
+
+**Hari ini (Sprint 6) yang dikerjakan:**
+1. Bangun **Backtesting Engine dari nol** — sekarang bisa test formula trading di data historis, hasilnya lengkap kayak AmiBroker (equity curve, Monte Carlo, MAE/MFE, monthly returns, dll)
+2. Tambah **Index Summary upload** (data 45 indeks BEI) buat benchmark backtesting
+3. Temukan **IDX API** yang bisa automate semua data upload — belum diimplementasi
+
+**Next (Sprint 7):**
+1. **Integrasi IDX API** — hapus semua manual upload, data masuk otomatis
+2. **Redesign UI** — Bloomberg Terminal style (dark, data-dense, monospace)
+
+---
+
+## Apa Yang Barusan Dikerjakan (Sprint 6)
+
+### Backtesting Engine V7
+Dari nol sampai production dalam 1 session. Ini **fitur paling complex** di app ini.
+
+**Cara kerja:**
+1. User tulis formula entry (kapan beli) + exit (kapan jual) pakai AFL-style syntax
+2. Engine scan semua saham di setiap hari trading historis
+3. Kalau formula match → simulasi beli, hold, cek exit formula tiap hari
+4. Kumpulkan semua trades → hitung stats, gambar chart
+
+**File yang terlibat:**
+- `server/routes/backtest.js` (~400 baris) — simulation engine, Monte Carlo, stats
+- `public/js/backtest.js` (~300 baris) — UI, charts (SVG), tables
+
+**Iterasi yang dilalui:**
+- V1: Basic engine, 0 trades bug (position sizing salah)
+- V2: Fix position sizing, tambah debug endpoint
+- V3: Tambah exit formula, MAE/MFE, exposure, consecutive stats
+- V4: Scope filter, formula reference, flexible benchmark
+- V5: Fix SQL `!=""` bug, autocomplete
+- V6: Fix autocomplete click handler (mousedown vs onclick)
+- **V7 (final)**: Force cutloss toggle, open positions tracking, MC equity band chart, AmiBroker-complete stats, fixed-width trade table columns
+
+**Bugs yang sudah difix:**
+- `idx < 50` skip semua saham → dihapus, pakai null check
+- Position sizing `Math.floor(capital / (maxPos * price / 100)) * 100` → overflow → rewrite ke `allocation / price` approach
+- SQLite `!=""` → `!=''` (double quote = column identifier di SQLite)
+- `/scopes` endpoint 500 error → sama SQL bug + missing try/catch
+- Autocomplete dropdown tidak bisa diklik → inline onclick string tidak capture closure → pakai `addEventListener('mousedown')`
+
+**Yang masih perlu diperhatikan:**
+- Monte Carlo semua percentile hasilnya sama kalau trades sedikit (< 20)
+- Autocomplete kadang tidak responsive — perlu debounce
+- Trade table column width mungkin perlu fine-tune tergantung data
+
+### Index Summary Upload
+- Tabel baru `idx_indices` di `server/db.js`
+- 5 endpoint di `server/routes/idx.js`: upload, stats, latest, history, list
+- Upload handler di `public/js/settings.js`
+- Format: XLSX dari idx.co.id → Historical → Download
+- Auto-detect tanggal dari filename `Index_Summary-YYYYMMDD.xlsx`
+
+### Perubahan Lain
+- Logo watermark dihapus → bull/bear logo jadi site logo + favicon
+- `public/index.html`: Backtest sub-tab, script tag, logo
+- `public/js/app.js`: Backtest routing di `anaSubTab()`
+- `server/index.js`: Mount `/api/backtest` route
+
+---
+
+## Kondisi App Sekarang
+
+### Yang Stabil ✅
+| Area | Catatan |
+|------|---------|
+| Diary, Watchlist, Alerts | Production-ready, tidak disentuh session ini |
+| Screener V5 | Rule groups + formula, stable |
+| Insider Ownership | Network graph, tags, CRUD, stable |
+| Corporate Action | Auto-detect, confirm/dismiss, stable |
+| Settings 7 tab | Semua upload type working |
+| Portfolio + Kelly | Stable |
+| IDX Daily V2 | Stable setelah Sprint 5 |
+| Market + Commodities | Stable (tapi Yahoo Finance kadang rate limit) |
+| Index Summary upload | Baru, tapi simple — harusnya stable |
+
+### Yang Perlu Diawasi 🟡
+| Area | Kenapa |
 |------|--------|
-| Diary, Watchlist, Alerts | Production-ready, moved to dropdown |
-| Screener V5 engine | Rule groups working, configs persist |
-| Insider Ownership + Tags | Stable, CRUD working |
-| Corporate Action system | Stable, auto-detect reliable |
-| Settings modal (6 tabs) | Stable |
-| Export CSV (4 types) | Stable |
-| Global Search + Ticker Page | Stable, tab refs updated |
-| Market Overview + News | Stable |
-| Comparison (mixed mode) | Stable, moved to Analysis tab |
+| Backtesting Engine | Baru, complex, banyak edge case |
+| Backtest autocomplete | Working tapi UX bisa lebih smooth |
+| Backtest trade table | Column width sudah di-fix tapi mungkin perlu adjust |
 
-### 🟡 Working but Needs Testing
-| Area | Issue | Risk |
-|------|-------|------|
-| IDX Daily V2 (new) | New unified code, drag-reorder | Medium — needs user testing |
-| Screener Rule Groups (new) | Backend groups eval new | Medium — test multi-group combos |
-| Watchlist dropdown (new) | Moved from tab to dropdown | Low — simpler UI |
-| Analysis tab routing (new) | 4 sub-tabs, new routing | Low — mostly wiring |
-| Correlation standalone tab | Wrapper function added | Low — existing code |
-
-### 🟢 Technical Debt — Resolved
-| Item | Status |
-|------|--------|
-| **app.js split** | ✅ Done — 136 lines (was 968) |
-| **idx.js frontend split** | ✅ Replaced by idx-daily-v2.js |
-| **activity-spike.js** | ✅ Merged into idx-daily-v2.js |
-| **Screener OR logic** | ✅ Done — Rule Groups (AND/OR mixed) |
-
-### 🔴 Technical Debt — Remaining
-| Item | Impact | Effort |
-|------|--------|--------|
-| **insider.js split** | Medium — 566 lines | Medium |
-| **No error boundary** | Medium — unhandled errors crash page | Medium |
-| **No caching** | Medium — screener/run is heavy (computes all indicators) | Medium |
-| **No tests** | Low now, High later | High effort |
+### Yang Bermasalah 🔴
+| Area | Masalah |
+|------|---------|
+| Yahoo Finance | Rate limit dari Docker, kadang timeout |
+| Commodities tab | Kadang stuck loading |
+| insider.js | 566 baris, perlu di-split |
+| Error boundary | Tidak ada — JS error = blank page |
 
 ---
 
-## Sprint History
+## Database Schema (13+ tabel)
 
-| Sprint | Focus | Status |
-|--------|-------|--------|
-| Sprint 1 | Infrastructure | ⏸ Partial (dev mode done, rest deferred) |
-| Sprint 2 | Data Engine | ✅ Complete |
-| Sprint 3 | Analysis & UX | ✅ Complete |
-| Sprint 4 | Sector Intelligence & Polish | ✅ Complete |
-| **Sprint 5** | **Full Tab Redesign + Screener V5** | **✅ Complete** |
-| Sprint 6 | Testing + Stability | 🔜 Recommended next |
-| Sprint 7 | Morning Dashboard + Presets | Planned |
-| Sprint 8 | Insider Intelligence | Planned |
-| Sprint 9 | Automation (Telegram, cron) | Planned |
+Tabel utama yang sering dipakai:
+- `idx_daily` — OHLCV harian, UNIQUE(trade_date, code)
+- `idx_indices` — index summary, UNIQUE(trade_date, index_code)  ← **BARU**
+- `idx_fundamental` — PER/PBV/ROE, UNIQUE(snapshot_month, code)
+- `holdings` — insider ownership, UNIQUE(snapshot_date, code, investor)
+- `corporate_actions` — split/bonus, UNIQUE(code, ex_date)
+- `portfolio_trades` — trade tracker
+- `screener_configs` — saved screener configs
+- `investor_groups/rules/overrides` — tagging system
 
----
-
-## After Testing: Feature Priorities
-
-| Priority | Feature | Value |
-|----------|---------|-------|
-| 1 | Screener Presets | 1-click templates (Asing Akumulasi, Breakout, Oversold Bounce) |
-| 2 | Morning Dashboard | Daily landing page — digest + watchlist + alerts + screener |
-| 3 | Insider Activity Alerts | Detect accumulation/distribution between snapshots |
-| 4 | Konglomerat Network V2 | Full-screen D3 visualization |
-| 5 | Telegram Bot | Remote monitoring |
+Data storage: `data/trading.db` (SQLite, WAL mode)
+Diary + watchlist + alerts: JSON files di `data/`
 
 ---
 
-## Decision Log
+## Arsitektur File
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-03-05 | Skip Sprint 1, jump to Sprint 2 | Features > infra for solo project |
-| 2026-03-07 | Backward CA adjustment | Industry standard |
-| 2026-03-07 | Settings as modal popup | Cleaner UX |
-| 2026-03-07 | Mixed comparison mode | More flexible than per-mode |
-| 2026-03-07 | Tags CRUD in browser | Less friction than Excel |
-| 2026-03-08 | Monthly aggregation for heatmap | Weekly too granular, unreadable |
-| 2026-03-08 | Correlation 3 modes | More meaningful than top-N by value |
-| 2026-03-08 | Extract sector-intelligence.js | app.js was 1072 lines, too large |
-| 2026-03-08 | **5-tab redesign** | Reduce overlap, cleaner UX — Market/IDX/Diary/Analysis/Insider |
-| 2026-03-08 | **Watchlist → topbar dropdown** | Always accessible, saves tab space |
-| 2026-03-08 | **IDX Daily = unified** | Rankings + Activity Spike + Digest + Flow in 1 tab |
-| 2026-03-08 | **Activity Spike merged** | Was standalone sub-tab, now columns in IDX Daily |
-| 2026-03-08 | **Digest as default view** | Dashboard-first, detail second |
-| 2026-03-08 | **Drag-drop column reorder** | More intuitive than dropdown selector |
-| 2026-03-08 | **Rule Groups (AND/OR)** | `(Group1 AND) OR (Group2 AND)` — powerful screening |
-| 2026-03-08 | **Config persist in localStorage** | Survives Docker rebuild — screener state not lost |
-| 2026-03-08 | **Skip Dividend Yield data** | No reliable source yet, field ready when data available |
-
----
-
-## File Changes — Sprint 5
-
-### New Files
-| File | Lines | Purpose |
-|------|-------|---------|
-| `public/js/idx-daily-v2.js` | 608 | Unified IDX Daily (replaces idx.js + activity-spike.js) |
-
-### Modified Files
-| File | Lines | Changes |
-|------|-------|---------|
-| `public/index.html` | 189 | 5-tab layout + watchlist dropdown |
-| `public/js/app.js` | 136 | New routing, watchlist toggle (was 968!) |
-| `public/js/screener.js` | 495 | V5: rule groups, persistence, new indicators |
-| `public/js/compare.js` | 342 | Sub-tab routing fix |
-| `public/js/gsearch.js` | 517 | Tab reference fixes |
-| `public/js/watchlist.js` | 37 | Dropdown mode |
-| `public/js/sector-intelligence.js` | 627 | Correlation wrapper |
-| `public/js/init.js` | 3 | Updated init calls |
-| `server/routes/idx.js` | 750 | Unified endpoint + no limit |
-| `server/routes/screener.js` | 739 | Groups logic + spike calc + new fields |
-
-### Removed Files
-| File | Reason |
-|------|--------|
-| `public/js/idx.js` | Replaced by idx-daily-v2.js |
-| `public/js/activity-spike.js` | Merged into idx-daily-v2.js |
+```
+banyu-langit/
+├── public/
+│   ├── index.html          ← 6 tab layout, semua script tags
+│   ├── logo-watermark.png  ← bull/bear logo
+│   ├── css/ (6 files)      ← base, components, diary, insider, market, watchlist
+│   └── js/ (17 files)      ← app, backtest, commodities, compare, diary, 
+│                               fund-upload, gsearch, idx-daily-v2, init,
+│                               insider, portfolio, screener, sector-intelligence,
+│                               settings, tags-editor, utils, watchlist
+├── server/
+│   ├── index.js            ← Express server, route mounting, ticker API, auth
+│   ├── db.js               ← SQLite schema, 13+ tabel, helpers
+│   ├── routes/             ← backtest, diary, idx, insider, market, portfolio,
+│   │                          screener, watchlist
+│   └── utils/              ← yahoo.js, news.js, normalize.js
+├── docker-compose.yml      ← production
+├── docker-compose.dev.yml  ← dev mode (nodemon + bind mount)
+└── Dockerfile
+```
 
 ---
 
-*Last updated: 2026-03-08*
+## Sprint 7 Plan (Next)
+
+### Phase A: IDX API (prioritas 1)
+
+**Context:** IDX API wrapper (github.com/NeaByteLab/IDX-API) pakai Deno. Kita perlu extract HTTP endpoint URLs dari source code-nya, lalu buat Node.js fetcher sendiri. README-nya sudah di-upload session ini.
+
+**Endpoints yang dibutuhkan:**
+| API Call | Data | Target Tabel |
+|----------|------|-------------|
+| `getStockSummary(YYYYMMDD)` | OHLCV + foreign flow semua saham | `idx_daily` |
+| `getIndexSummary(YYYYMMDD)` | 45 indeks BEI | `idx_indices` |
+| `syncFinancialRatio(year, month)` | PER, PBV, ROE, DER | `idx_fundamental` |
+| `syncStockSplit(year, month)` | Split ratio + tanggal | `corporate_actions` |
+| `syncCompanyDividend(year, month)` | Dividend per share | `quarterly_financials` / baru |
+| `getIndexList()` | Real-time index prices | Replace Yahoo Finance |
+| `syncCompanyProfile()` | Company metadata | Enrich ticker page |
+
+**Strategy:**
+1. Data XLSX lama (2021-2026) tetap di database — tidak dihapus
+2. API data UPSERT — update yang ada, insert yang baru
+3. Backfill: loop tanggal-tanggal yang missing
+4. Daily: cron atau on-startup sync
+
+**Risk:**
+- idx.co.id API bisa berubah tanpa notice
+- Rate limiting (perlu delay antar request)
+- Data format mungkin beda dari XLSX
+
+### Phase B: Bloomberg Redesign (prioritas 2)
+
+**Scope:**
+- Dark theme default (sekarang light)
+- Data-dense: kurangi padding/margin, compact cards
+- Monospace semua angka
+- Lazy load: tab hanya render saat diklik (sekarang semua sekaligus)
+- Reduce DOM: less HTML elements, lighter
+
+**Constraint:** Semua feature yang ada HARUS tetap berfungsi. Ini redesign visual, bukan feature removal.
+
+---
+
+## Decision Log (Session Ini)
+
+| Keputusan | Alasan |
+|-----------|--------|
+| Backtest pakai formula-only (hapus SL/TP/hold days param) | Lebih fleksibel, AmiBroker approach — semua logic di formula |
+| Force cutloss sebagai toggle terpisah | Safety net independent dari exit formula |
+| Open positions tidak di-force close | User mau lihat floating P&L |
+| IDX API untuk data pipeline | Hapus friction manual upload harian |
+| Bloomberg Terminal style redesign | Data-dense, dark, monospace — match quant workflow |
+| Index Summary sebagai benchmark | Local data, tidak tergantung Yahoo Finance |
+| Logo watermark dihapus → jadi site logo | Cleaner layout |
+
+---
+
+## Git Backup
+
+```powershell
+cd C:\Project\banyu-langit
+git add .
+git commit -m "Sprint 6: Backtesting V7 + Index Summary + Logo"
+git tag v2.6-sprint6
+```
+
+---
+
+*Sprint 6 selesai. Next: IDX API + Bloomberg Redesign.*
+*Kalau ada yang nanya kenapa backtest 0 trades → cek formula + date range + data availability.*
+*Kalau error "no such column" → cek SQL quoting, SQLite pakai '' bukan "" untuk string.*

@@ -201,6 +201,52 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_indices_date ON idx_indices(trade_date);
   CREATE INDEX IF NOT EXISTS idx_indices_code ON idx_indices(index_code);
+
+  CREATE TABLE IF NOT EXISTS dividends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    ex_date TEXT NOT NULL DEFAULT '',
+    cash_dividend REAL DEFAULT 0,
+    cum_date TEXT DEFAULT '',
+    record_date TEXT DEFAULT '',
+    payment_date TEXT DEFAULT '',
+    name TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    UNIQUE(code, ex_date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_div_code ON dividends(code);
+  CREATE INDEX IF NOT EXISTS idx_div_date ON dividends(ex_date);
+
+  CREATE TABLE IF NOT EXISTS sync_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_type TEXT NOT NULL,
+    sync_date TEXT DEFAULT '',
+    rows_synced INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'ok',
+    message TEXT DEFAULT '',
+    started_at TEXT DEFAULT (datetime('now')),
+    finished_at TEXT DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_sync_type ON sync_logs(sync_type);
+
+  CREATE TABLE IF NOT EXISTS company_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    name TEXT DEFAULT '',
+    sector TEXT DEFAULT '',
+    sub_sector TEXT DEFAULT '',
+    industry TEXT DEFAULT '',
+    sub_industry TEXT DEFAULT '',
+    board TEXT DEFAULT '',
+    listing_date TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    website TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cp_code ON company_profiles(code);
 `);
 
 // ═══ Default header mappings ═══

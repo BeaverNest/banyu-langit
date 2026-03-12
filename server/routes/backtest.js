@@ -258,19 +258,31 @@ router.post('/run', (req, res) => {
       equity.push({ date: td, equity: Math.round(totEq), benchmark: Math.round(bv), drawdown: Math.round(dd * 100) / 100, positions: openPos.length });
     }
 
-    // Force close
+    // Separate open positions (still floating) from closed trades
     const lastD = allDates[allDates.length - 1];
+    const openPositions = [];
     for (const pos of openPos) {
       const hist = hbc[pos.code];
       const idx = dIdx[pos.code] ? dIdx[pos.code][lastD] : -1;
       const cur = idx >= 0 ? hist[idx].ac : pos.ep;
       const pnlP = (cur - pos.ep) / pos.ep * 100;
       const days = allDates.length - 1 - pos.edi;
-      trades.push({ code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: lastD, xp: cur,
+      openPositions.push({
+        code: pos.code, ed: pos.ed, ep: pos.ep, current: cur,
+        shares: pos.shares, pv: Math.round(pos.ep * pos.shares),
+        unrealized: Math.round((cur - pos.ep) * pos.shares),
+        pnlP: Math.round(pnlP * 100) / 100, bars: days,
+        mae: Math.round((pos.mae || 0) * 100) / 100,
+        mfe: Math.round((pos.mfe || 0) * 100) / 100,
+      });
+      // Also add to trades as 'open' for stats calculation
+      trades.push({
+        code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: lastD, xp: cur,
         shares: pos.shares, pv: Math.round(pos.ep * pos.shares),
         pnl: Math.round((cur - pos.ep) * pos.shares), pnlP: Math.round(pnlP * 100) / 100,
         bars: days, ppb: days > 0 ? Math.round(pnlP / days * 100) / 100 : 0,
-        reason: 'end', mae: Math.round((pos.mae || 0) * 100) / 100, mfe: Math.round((pos.mfe || 0) * 100) / 100 });
+        reason: 'open', mae: Math.round((pos.mae || 0) * 100) / 100, mfe: Math.round((pos.mfe || 0) * 100) / 100
+      });
     }
 
     // ═══ STATS ═══
@@ -368,7 +380,8 @@ router.post('/run', (req, res) => {
         recovery_factor: recoveryFactor, rar_maxdd: rarMaxDD,
         std_error: stdErr, max_trade_dd: maxTradeDD$, max_trade_dd_pct: maxTradeDDpct,
         avg_pl: avgPL, avg_pl_pct: avgPLpct },
-      trades: trades.slice(-500),
+      trades: trades.filter(t => t.reason !== 'open').slice(-500),
+      open_positions: openPositions,
       equity: equity.length > 600 ? equity.filter((_, i) => i % Math.ceil(equity.length / 600) === 0 || i === equity.length - 1) : equity,
       by_ticker: Object.values(byT).sort((a, b) => b.pnl - a.pnl).slice(0, 30),
       monte_carlo: mc,
