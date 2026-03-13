@@ -11,7 +11,7 @@ async function loadSectorView(){
 
   // Sub-navigation
   var h='<div style="display:flex;align-items:center;gap:3px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap">';
-  [{k:'overview',l:'📊 Overview'},{k:'rotation',l:'🔥 Rotation'},{k:'timeline',l:'📈 Flow Timeline'},{k:'correlation',l:'🔗 Correlation'}].forEach(function(v){
+  [{k:'overview',l:'📊 Overview'},{k:'rotation',l:'🔥 Rotation'},{k:'timeline',l:'📈 Flow Timeline'}].forEach(function(v){
     h+='<button class="bei-sort-btn'+(secIntView===v.k?' on':'')+'" onclick="secIntView=\''+v.k+'\';loadSectorView()" style="padding:5px 12px;font-size:11px">'+v.l+'</button>';
   });
   h+='</div>';

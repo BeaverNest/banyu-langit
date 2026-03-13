@@ -18,7 +18,7 @@
 
 <!-- ═══ TOPBAR ═══ -->
 <div class="topbar">
-  <div class="logo"><img src="/logo-watermark.png">BL</div>
+  <div class="logo"><img src="/logo-watermark.png">BANYU LANGIT</div>
   <div class="topbar-search" id="gsearch-wrap">
     <input id="gsearch" placeholder="/ Search ticker..." autocomplete="off" oninput="gsAcType()" onkeydown="gsAcKey(event)">
     <div class="gs-ac" id="gs-ac"></div>
@@ -101,12 +101,17 @@
     <div class="wt">
       <button class="wt-b on" onclick="smkt('ov',this)">Overview</button>
       <button class="wt-b" onclick="smkt('nws',this)">News</button>
+      <button class="wt-b" onclick="smkt('ann',this)">BEI Announcements</button>
       <button class="wt-b" onclick="smkt('cmd',this)">Commodities</button>
     </div>
     <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading...</div></div>
+    </div>
+    <div class="wp" id="m-ann">
+      <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
+      <div class="nlist" id="ann-list"><div class="ne">Click Search or load to see BEI announcements</div></div>
     </div>
     <div class="wp" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
@@ -184,12 +189,12 @@
     <div class="smod-nav">
       <div class="smod-nav-h"><span>Settings</span><button onclick="closeSettings()">✕</button></div>
       <div class="smod-nav-list" id="smod-nav">
-        <div class="smod-nav-item on" onclick="setTab('upload',this)"><span class="sni-icon">📊</span><span class="sni-label">Upload</span></div>
+        <div class="smod-nav-item on" onclick="setTab('sync',this)"><span class="sni-icon">🔄</span><span class="sni-label">Sync Center</span></div>
         <div class="smod-nav-item" onclick="setTab('dbstats',this)"><span class="sni-icon">🗄</span><span class="sni-label">Database</span></div>
+        <div class="smod-nav-item" onclick="setTab('upload',this)"><span class="sni-icon">📋</span><span class="sni-label">Upload</span></div>
         <div class="smod-nav-item" onclick="setTab('ca',this)"><span class="sni-icon">⚡</span><span class="sni-label">Corp Actions</span><span class="sni-badge" id="smod-ca-badge" style="display:none">0</span></div>
         <div class="smod-nav-item" onclick="setTab('tags',this)"><span class="sni-icon">🏷</span><span class="sni-label">Tags</span></div>
         <div class="smod-nav-item" onclick="setTab('export',this)"><span class="sni-icon">📥</span><span class="sni-label">Export</span></div>
-        <div class="smod-nav-item" onclick="setTab('idxapi',this)"><span class="sni-icon">🔄</span><span class="sni-label">IDX API</span></div>
         <div class="smod-nav-item" onclick="setTab('prefs',this)"><span class="sni-icon">🎨</span><span class="sni-label">Prefs</span></div>
       </div>
     </div>

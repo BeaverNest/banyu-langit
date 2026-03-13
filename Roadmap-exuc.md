@@ -1,200 +1,204 @@
-# 🌊 Banyu Langit — Execution Roadmap
-# Handover per 12 Maret 2026
+# Banyu Langit — Execution Roadmap
+# Updated 13 Maret 2026 (post Sprint 8)
 
 ---
 
-## ⚡ TL;DR Buat Yang Baru Join
+## TL;DR
 
 Banyu Langit = **Bloomberg Terminal mini untuk IDX**. Docker, localhost:3003. Solo project.
 
-**Hari ini (Sprint 6) yang dikerjakan:**
-1. Bangun **Backtesting Engine dari nol** — sekarang bisa test formula trading di data historis, hasilnya lengkap kayak AmiBroker (equity curve, Monte Carlo, MAE/MFE, monthly returns, dll)
-2. Tambah **Index Summary upload** (data 45 indeks BEI) buat benchmark backtesting
-3. Temukan **IDX API** yang bisa automate semua data upload — belum diimplementasi
+**Sprint 8 (selesai):**
+- **1-Click Sync** dari browser — Deno HTTP server (:3456) + proxy, 3 modes (Daily/Full/Cron)
+- **39 tabel bridge** — 1.3M rows di trading.db, dari 8 tabel jadi 30
+- **Bloomberg redesign** — black/amber/red palette, red topbar, wider ticker page
+- **Data utilization** — IDX indices replace Yahoo, BEI announcements (77K), suspend badges, dividends, bid/offer chart
 
-**Next (Sprint 7):**
-1. **Integrasi IDX API** — hapus semua manual upload, data masuk otomatis
-2. **Redesign UI** — Bloomberg Terminal style (dark, data-dense, monospace)
+**Sprint 8.5 (next):**
+1. Fundamental tab proper redesign (fix units, remove duplikasi, analytical flow)
+2. Macro foreign/domestic flow chart
+3. market_calendar fix gap detection
+4. Sector enrichment dari data baru
 
 ---
 
-## Apa Yang Barusan Dikerjakan (Sprint 6)
+## Sprint 8 — Completed
 
-### Backtesting Engine V7
-Dari nol sampai production dalam 1 session. Ini **fitur paling complex** di app ini.
+### 1-Click Sync System
+Dari 4-step manual process jadi 1 tombol di browser.
 
-**Cara kerja:**
-1. User tulis formula entry (kapan beli) + exit (kapan jual) pakai AFL-style syntax
-2. Engine scan semua saham di setiap hari trading historis
-3. Kalau formula match → simulasi beli, hold, cek exit formula tiap hari
-4. Kumpulkan semua trades → hitung stats, gambar chart
+**Sebelum:** PowerShell → Deno script → browser → Import All (4 steps, 2 tools)
+**Sesudah:** Browser → Settings → Sync Center → Daily Sync (1 click)
 
-**File yang terlibat:**
-- `server/routes/backtest.js` (~400 baris) — simulation engine, Monte Carlo, stats
-- `public/js/backtest.js` (~300 baris) — UI, charts (SVG), tables
+**Files:**
+- `IDX-API-main/deno-server.ts` — Deno HTTP server, 38 sync functions, port 3456
+- `server/utils/deno-proxy.js` — Node.js proxy: forward to Deno, poll progress, auto bridge import
+- `start-deno.ps1` — Start Deno server (1x, biarkan running)
 
-**Iterasi yang dilalui:**
-- V1: Basic engine, 0 trades bug (position sizing salah)
-- V2: Fix position sizing, tambah debug endpoint
-- V3: Tambah exit formula, MAE/MFE, exposure, consecutive stats
-- V4: Scope filter, formula reference, flexible benchmark
-- V5: Fix SQL `!=""` bug, autocomplete
-- V6: Fix autocomplete click handler (mousedown vs onclick)
-- **V7 (final)**: Force cutloss toggle, open positions tracking, MC equity band chart, AmiBroker-complete stats, fixed-width trade table columns
+**3 Sync Modes:**
+| Mode | Duration | What |
+|------|----------|------|
+| Daily | ~8s | Stock + Index hari ini |
+| Full | ~12min | 5 hari + screener + profiles + monthly |
+| Cron All | ~16min | Semua 38 Deno sync functions |
 
-**Bugs yang sudah difix:**
-- `idx < 50` skip semua saham → dihapus, pakai null check
-- Position sizing `Math.floor(capital / (maxPos * price / 100)) * 100` → overflow → rewrite ke `allocation / price` approach
-- SQLite `!=""` → `!=''` (double quote = column identifier di SQLite)
-- `/scopes` endpoint 500 error → sama SQL bug + missing try/catch
-- Autocomplete dropdown tidak bisa diklik → inline onclick string tidak capture closure → pakai `addEventListener('mousedown')`
+**Catatan:** `docker-compose.yml` perlu `extra_hosts: host.docker.internal:host-gateway` supaya Docker bisa reach Deno di Windows. Sudah ada di current compose.
 
-**Yang masih perlu diperhatikan:**
-- Monte Carlo semua percentile hasilnya sama kalau trades sedikit (< 20)
-- Autocomplete kadang tidak responsive — perlu debounce
-- Trade table column width mungkin perlu fine-tune tergantung data
+### Bridge Expansion (39 Tabel)
+`idx-api-bridge.js` sekarang punya 37 import functions. `db.js` punya 30 tabel.
 
-### Index Summary Upload
-- Tabel baru `idx_indices` di `server/db.js`
-- 5 endpoint di `server/routes/idx.js`: upload, stats, latest, history, list
-- Upload handler di `public/js/settings.js`
-- Format: XLSX dari idx.co.id → Historical → Download
-- Auto-detect tanggal dari filename `Index_Summary-YYYYMMDD.xlsx`
+**Total: 1,329,078 rows** di trading.db:
 
-### Perubahan Lain
-- Logo watermark dihapus → bull/bear logo jadi site logo + favicon
-- `public/index.html`: Backtest sub-tab, script tag, logo
-- `public/js/app.js`: Backtest routing di `anaSubTab()`
-- `server/index.js`: Mount `/api/backtest` route
+| Tabel | Rows | Source |
+|-------|------|--------|
+| idx_daily (stock_summary) | 270,897 | OHLCV + foreign flow |
+| trading_ss | 879,591 | Historical OHLCV 2021+ |
+| company_announcements | ~77,000 | BEI news feed |
+| broker_summary | 25,814 | Broker trading activity |
+| idx_indices (index_summary) | 12,754 | 45 index time series |
+| daily_index | 12,349 | Index close per day |
+| market_calendar | 11,537 | BEI calendar (holidays) |
+| index_chart | 10,620 | Index chart data |
+| sectoral_movement | 5,880 | Sector performance |
+| company_suspends | 2,848 | Suspend/unsuspend |
+| issued_history | 1,645 | Share issuance |
+| idx_fundamental | 958 | Screener snapshot |
+| company_profiles | 957 | Company master |
+| security_stocks | 956 | Security master |
+| + 16 smaller tables | ~3,500 | Various reference data |
+
+### Bloomberg Redesign
+- **Dark theme:** `--bg0:#000000` (true black), `--bl:#ff9800` (amber accent)
+- **Red topbar:** `--topbar-bg:#b71c1c`, white text, centered search
+- **Logo:** "BANYU LANGIT" full text (was "BL")
+- **Ticker page:** widened 860px → 1100px
+
+### Data Utilization
+| Feature | Data Source | Impact |
+|---------|-----------|--------|
+| IDX Indices in Market Overview | index_list (45 indices) | Replace Yahoo, instant load |
+| BEI Announcements tab | company_announcements (77K) | Replace Google News dependency |
+| Announcement popup + PDF links | attachments JSON | Direct access to BEI filings |
+| Suspend badge ⚠ | company_suspends | Visual warning in Rankings + ticker page |
+| Dividend History + Yield | dividends (111 rows) | Fundamental tab enrichment |
+| Financial Statements | financial_ratios (139 rows) | EPS, book value, assets, equity |
+| Bid/Offer Volume chart | idx_daily bid_vol/offer_vol | Replace foreign flow in Overview |
+| Bid/Offer ratio bar | idx_daily | Quick visual sentiment |
+| News tab per ticker | company_announcements filtered | Ticker-specific BEI filings |
 
 ---
 
 ## Kondisi App Sekarang
 
-### Yang Stabil ✅
-| Area | Catatan |
-|------|---------|
-| Diary, Watchlist, Alerts | Production-ready, tidak disentuh session ini |
-| Screener V5 | Rule groups + formula, stable |
-| Insider Ownership | Network graph, tags, CRUD, stable |
-| Corporate Action | Auto-detect, confirm/dismiss, stable |
-| Settings 7 tab | Semua upload type working |
-| Portfolio + Kelly | Stable |
-| IDX Daily V2 | Stable setelah Sprint 5 |
-| Market + Commodities | Stable (tapi Yahoo Finance kadang rate limit) |
-| Index Summary upload | Baru, tapi simple — harusnya stable |
-
-### Yang Perlu Diawasi 🟡
-| Area | Kenapa |
+### Stabil & Production-Ready
+| Area | Status |
 |------|--------|
-| Backtesting Engine | Baru, complex, banyak edge case |
-| Backtest autocomplete | Working tapi UX bisa lebih smooth |
-| Backtest trade table | Column width sudah di-fix tapi mungkin perlu adjust |
+| 1-Click Sync (Daily/Full/Cron) | ✅ Tested, all 38 functions pass |
+| Bridge Import (37 functions) | ✅ 1.3M rows |
+| Sync Center UI | ✅ Deno health, progress, log |
+| Market Overview (IDX indices) | ✅ From database, no Yahoo |
+| BEI Announcements | ✅ 77K rows, search, popup, PDF |
+| Suspend badges | ✅ Rankings + ticker page |
+| Dividend History | ✅ Yield calculation |
+| IDX Daily (Digest/Rankings/Flow) | ✅ Stable |
+| Screener V5 + AFL | ✅ Stable |
+| Backtesting V7 | ✅ Stable |
+| Sector Intelligence | ✅ Stable |
+| Portfolio + Kelly | ✅ Stable |
+| Insider Ownership | ✅ Stable |
+| Diary | ✅ Stable |
 
-### Yang Bermasalah 🔴
-| Area | Masalah |
-|------|---------|
-| Yahoo Finance | Rate limit dari Docker, kadang timeout |
-| Commodities tab | Kadang stuck loading |
-| insider.js | 566 baris, perlu di-split |
-| Error boundary | Tidak ada — JS error = blank page |
+### Perlu Polish
+| Area | Issue |
+|------|-------|
+| Fundamental tab | Data asal ditempel, unit salah (K vs T), duplikasi dengan Quarterly |
+| Financial Ratios display | "Assets: 7K" harusnya "7T" — unit mismatch |
+| Price Performance | 4W/13W/26W/52W = 0% dari screener |
+| Gap detection | 414 gaps, market_calendar data ready tapi belum dipakai |
+| Yahoo fallback | Commodities/currencies masih Yahoo (no IDX equivalent) |
+
+### Known Issues
+| Issue | Impact | Fix |
+|-------|--------|-----|
+| Financial ratios unit | Display salah | Sprint 8.5 |
+| Fund + Quarterly duplikasi | Confusing UX | Sprint 8.5 redesign |
+| insider.js 566 lines | Hard to maintain | Future split |
+| No error boundary | JS error = blank page | Future |
 
 ---
 
-## Database Schema (13+ tabel)
+## Sprint 8.5 Plan — Ticker Page Polish
 
-Tabel utama yang sering dipakai:
-- `idx_daily` — OHLCV harian, UNIQUE(trade_date, code)
-- `idx_indices` — index summary, UNIQUE(trade_date, index_code)  ← **BARU**
-- `idx_fundamental` — PER/PBV/ROE, UNIQUE(snapshot_month, code)
-- `holdings` — insider ownership, UNIQUE(snapshot_date, code, investor)
-- `corporate_actions` — split/bonus, UNIQUE(code, ex_date)
-- `portfolio_trades` — trade tracker
-- `screener_configs` — saved screener configs
-- `investor_groups/rules/overrides` — tagging system
+### Phase A: Fundamental Tab Redesign
+- Fix financial_ratios unit scaling
+- Merge Financial Statements + Quarterly into one coherent section
+- Design analytical flow: Valuation → Trend → Dividends → Classification
+- Remove redundancy
 
-Data storage: `data/trading.db` (SQLite, WAL mode)
-Diary + watchlist + alerts: JSON files di `data/`
+### Phase B: Data Utilization
+- Macro Foreign vs Domestic flow chart (IDX Daily header)
+- market_calendar → fix 414 gap detection
+- sectoral_movement → enrich Sectors tab
+- industry_trading PER/PBV → Sectors Overview
 
 ---
 
-## Arsitektur File
+## Quant Trading Roadmap (Sprint 9+)
+
+### Architecture
+```
+Data (39 tabel, 1.3M rows)
+    │
+    ▼
+Composite Score (multi-factor ranking)
+    │
+    ▼
+Backtest (simulate trading based on score)
+    │
+    ▼
+Monte Carlo (stress test robustness)
+    │
+    ▼
+IC Tracking (validate prediction quality)
+    │
+    ▼
+Forward Test (paper trading)
+    │
+    ▼
+Live Trading (manual execution with signals)
+```
+
+### Composite Score Factors
+- **Momentum**: MA position, price change %, relative strength vs sector
+- **Value**: PER, PBV, ROE relative to sector
+- **Flow**: Foreign net accumulation, broker pattern
+- **Activity**: Volume/frequency spike, bid-offer imbalance
+- **Weights**: Configurable, default equal
+
+### Technology Candidates
+- **PineTS** — Pine Script transpiler, run TradingView indicators di JS
+- **QFChart** — Financial charting with drawing tools, multi-pane indicators
+
+---
+
+## Daily Workflow
 
 ```
-banyu-langit/
-├── public/
-│   ├── index.html          ← 6 tab layout, semua script tags
-│   ├── logo-watermark.png  ← bull/bear logo
-│   ├── css/ (6 files)      ← base, components, diary, insider, market, watchlist
-│   └── js/ (17 files)      ← app, backtest, commodities, compare, diary, 
-│                               fund-upload, gsearch, idx-daily-v2, init,
-│                               insider, portfolio, screener, sector-intelligence,
-│                               settings, tags-editor, utils, watchlist
-├── server/
-│   ├── index.js            ← Express server, route mounting, ticker API, auth
-│   ├── db.js               ← SQLite schema, 13+ tabel, helpers
-│   ├── routes/             ← backtest, diary, idx, insider, market, portfolio,
-│   │                          screener, watchlist
-│   └── utils/              ← yahoo.js, news.js, normalize.js
-├── docker-compose.yml      ← production
-├── docker-compose.dev.yml  ← dev mode (nodemon + bind mount)
-└── Dockerfile
+1. Start Deno server (1x saja):
+   .\start-deno.ps1
+
+2. Start Docker (1x saja):
+   docker compose up -d
+
+3. Daily routine:
+   - Buka localhost:3003
+   - Settings → Sync Center → Daily Sync
+   - Browse: IDX Daily, Analysis, Portfolio
+   
+4. Weekly/Monthly:
+   - Settings → Sync Center → Full Sync (atau Cron All)
+   - Check BEI Announcements
+   - Review Sector Rotation
 ```
-
----
-
-## Sprint 7 Plan (Next)
-
-### Phase A: IDX API (prioritas 1)
-
-**Context:** IDX API wrapper (github.com/NeaByteLab/IDX-API) pakai Deno. Kita perlu extract HTTP endpoint URLs dari source code-nya, lalu buat Node.js fetcher sendiri. README-nya sudah di-upload session ini.
-
-**Endpoints yang dibutuhkan:**
-| API Call | Data | Target Tabel |
-|----------|------|-------------|
-| `getStockSummary(YYYYMMDD)` | OHLCV + foreign flow semua saham | `idx_daily` |
-| `getIndexSummary(YYYYMMDD)` | 45 indeks BEI | `idx_indices` |
-| `syncFinancialRatio(year, month)` | PER, PBV, ROE, DER | `idx_fundamental` |
-| `syncStockSplit(year, month)` | Split ratio + tanggal | `corporate_actions` |
-| `syncCompanyDividend(year, month)` | Dividend per share | `quarterly_financials` / baru |
-| `getIndexList()` | Real-time index prices | Replace Yahoo Finance |
-| `syncCompanyProfile()` | Company metadata | Enrich ticker page |
-
-**Strategy:**
-1. Data XLSX lama (2021-2026) tetap di database — tidak dihapus
-2. API data UPSERT — update yang ada, insert yang baru
-3. Backfill: loop tanggal-tanggal yang missing
-4. Daily: cron atau on-startup sync
-
-**Risk:**
-- idx.co.id API bisa berubah tanpa notice
-- Rate limiting (perlu delay antar request)
-- Data format mungkin beda dari XLSX
-
-### Phase B: Bloomberg Redesign (prioritas 2)
-
-**Scope:**
-- Dark theme default (sekarang light)
-- Data-dense: kurangi padding/margin, compact cards
-- Monospace semua angka
-- Lazy load: tab hanya render saat diklik (sekarang semua sekaligus)
-- Reduce DOM: less HTML elements, lighter
-
-**Constraint:** Semua feature yang ada HARUS tetap berfungsi. Ini redesign visual, bukan feature removal.
-
----
-
-## Decision Log (Session Ini)
-
-| Keputusan | Alasan |
-|-----------|--------|
-| Backtest pakai formula-only (hapus SL/TP/hold days param) | Lebih fleksibel, AmiBroker approach — semua logic di formula |
-| Force cutloss sebagai toggle terpisah | Safety net independent dari exit formula |
-| Open positions tidak di-force close | User mau lihat floating P&L |
-| IDX API untuk data pipeline | Hapus friction manual upload harian |
-| Bloomberg Terminal style redesign | Data-dense, dark, monospace — match quant workflow |
-| Index Summary sebagai benchmark | Local data, tidak tergantung Yahoo Finance |
-| Logo watermark dihapus → jadi site logo | Cleaner layout |
 
 ---
 
@@ -203,12 +207,11 @@ banyu-langit/
 ```powershell
 cd C:\Project\banyu-langit
 git add .
-git commit -m "Sprint 6: Backtesting V7 + Index Summary + Logo"
-git tag v2.6-sprint6
+git commit -m "Sprint 8: 1-click sync + 39 tables + Bloomberg redesign + data utilization"
+git tag v3.0-sprint8
 ```
 
 ---
 
-*Sprint 6 selesai. Next: IDX API + Bloomberg Redesign.*
-*Kalau ada yang nanya kenapa backtest 0 trades → cek formula + date range + data availability.*
-*Kalau error "no such column" → cek SQL quoting, SQLite pakai '' bukan "" untuk string.*
+*Sprint 8 done (14 items). Sprint 8.5: Fundamental redesign + data polish.*
+*Sprint 9: Quant foundation — composite score + morning signal dashboard.*

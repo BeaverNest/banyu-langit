@@ -5,7 +5,7 @@ async function loadCommodities(){
   var el=document.getElementById('cmd-content');
   if(!el)return;
   if(cmdData){cmdRender(el);return;}
-  el.innerHTML='<div style="padding:20px;text-align:center;color:#888">Loading commodities...</div>';
+  el.innerHTML='<div style="padding:20px;text-align:center;color:var(--t2)">Loading commodities...</div>';
   try{
     var r=await fetch('/api/commodities');
     if(!r.ok){el.innerHTML='<div style="padding:20px;color:red">HTTP '+r.status+'</div>';return;}
@@ -19,7 +19,7 @@ function cmdRender(el){
   if(!el)el=document.getElementById('cmd-content');
   if(!el||!cmdData)return;
   var cmds=cmdData.commodities;
-  if(!cmds||!cmds.length){el.innerHTML='<div style="padding:20px;color:#888">No commodities</div>';return;}
+  if(!cmds||!cmds.length){el.innerHTML='<div style="padding:20px;color:var(--t2)">No commodities</div>';return;}
 
   var h='<div style="padding:10px 12px">';
 
@@ -31,20 +31,20 @@ function cmdRender(el){
     var fn=c.total_fnet||0;
     var isExp=cmdExpanded===c.id;
 
-    h+='<div style="background:'+(isExp?'var(--blB,#e8f4fd)':'var(--bg2,#fff)')+';border:1px solid '+(isExp?'var(--bl,#3b82f6)':'var(--b2,#e2e8f0)')+';border-radius:10px;padding:10px 12px;cursor:pointer" onclick="cmdToggle(\''+c.id+'\')">';
+    h+='<div style="background:'+(isExp?'var(--blB,rgba(255,152,0,.08))':'var(--bg2,#fff)')+';border:1px solid '+(isExp?'var(--bl,var(--bl))':'var(--b2,var(--b2))')+';border-radius:10px;padding:10px 12px;cursor:pointer" onclick="cmdToggle(\''+c.id+'\')">';
 
     // Row 1: icon + label + chart link
     h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
     h+='<span style="font-size:16px">'+(c.icon||'📦')+'</span>';
-    h+='<div style="flex:1"><b style="font-size:13px">'+(c.label||'?')+'</b> <span style="font-size:9px;color:#888">'+(c.desc||'')+'</span></div>';
-    if(c.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(c.tv)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;padding:3px 8px;border-radius:4px;background:#3b82f6;color:#fff;text-decoration:none;font-weight:600">📈 Chart</a>';
+    h+='<div style="flex:1"><b style="font-size:13px">'+(c.label||'?')+'</b> <span style="font-size:9px;color:var(--t2)">'+(c.desc||'')+'</span></div>';
+    if(c.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(c.tv)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;padding:3px 8px;border-radius:4px;background:var(--bl);color:#fff;text-decoration:none;font-weight:600">📈 Chart</a>';
     h+='</div>';
 
     // Row 2: stats
     h+='<div style="display:flex;gap:8px;font-size:10px">';
-    h+='<span style="color:#888">'+(c.stocks?c.stocks.length:0)+' stocks</span>';
-    h+='<span style="color:'+(ac>0?'#22c55e':ac<0?'#ef4444':'#888')+';font-weight:600">Avg: '+(ac>0?'+':'')+ac.toFixed(2)+'%</span>';
-    h+='<span style="color:'+(fn>0?'#22c55e':fn<0?'#ef4444':'#888')+';font-weight:600">FNet: '+cmdFmt(fn)+'</span>';
+    h+='<span style="color:var(--t2)">'+(c.stocks?c.stocks.length:0)+' stocks</span>';
+    h+='<span style="color:'+(ac>0?'var(--gn)':ac<0?'var(--rd)':'#888')+';font-weight:600">Avg: '+(ac>0?'+':'')+ac.toFixed(2)+'%</span>';
+    h+='<span style="color:'+(fn>0?'var(--gn)':fn<0?'var(--rd)':'#888')+';font-weight:600">FNet: '+cmdFmt(fn)+'</span>';
     h+='</div>';
 
     // Row 3: ticker chips
@@ -53,10 +53,10 @@ function cmdRender(el){
       var show=Math.min(c.stocks.length,10);
       for(var j=0;j<show;j++){
         var s=c.stocks[j];
-        var sc=s.chg_pct>0?'#22c55e':s.chg_pct<0?'#ef4444':'#888';
+        var sc=s.chg_pct>0?'var(--gn)':s.chg_pct<0?'var(--rd)':'#888';
         h+='<span style="font-family:monospace;font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:rgba(0,0,0,0.05);color:'+sc+'">'+s.code+'</span>';
       }
-      if(c.stocks.length>10)h+='<span style="font-size:9px;color:#888">+'+(c.stocks.length-10)+'</span>';
+      if(c.stocks.length>10)h+='<span style="font-size:9px;color:var(--t2)">+'+(c.stocks.length-10)+'</span>';
       h+='</div>';
     }
     h+='</div>';
@@ -70,7 +70,7 @@ function cmdRender(el){
     if(cmd&&cmd.stocks&&cmd.stocks.length)h+=cmdTable(cmd);
   }
 
-  if(cmdData.trade_date)h+='<div style="font-size:10px;color:#888;padding:4px 0">IDX Data: '+cmdData.trade_date+'</div>';
+  if(cmdData.trade_date)h+='<div style="font-size:10px;color:var(--t2);padding:4px 0">IDX Data: '+cmdData.trade_date+'</div>';
   h+='</div>';
 
   el.innerHTML=h;
@@ -88,19 +88,19 @@ function cmdTable(cmd){
   else if(cmdSort==='fnet')stocks.sort(function(a,b){return d*((b.fnet_val||0)-(a.fnet_val||0));});
   else stocks.sort(function(a,b){return d*((b.value||0)-(a.value||0));});
 
-  var h='<div style="border:1px solid var(--b2,#e2e8f0);border-radius:10px;overflow:hidden;margin-bottom:12px">';
-  h+='<div style="padding:8px 12px;border-bottom:1px solid var(--b1,#f0f0f0);display:flex;align-items:center;gap:8px">';
+  var h='<div style="border:1px solid var(--b2,var(--b2));border-radius:10px;overflow:hidden;margin-bottom:12px">';
+  h+='<div style="padding:8px 12px;border-bottom:1px solid var(--b1,var(--b1));display:flex;align-items:center;gap:8px">';
   h+='<span style="font-size:14px">'+(cmd.icon||'')+'</span><b>'+cmd.label+' — '+cmd.desc+'</b>';
   h+='<span style="flex:1"></span>';
-  if(cmd.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(cmd.tv)+'" target="_blank" style="font-size:10px;padding:3px 10px;border-radius:4px;background:#3b82f6;color:#fff;text-decoration:none;font-weight:600">📈 TradingView</a>';
+  if(cmd.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(cmd.tv)+'" target="_blank" style="font-size:10px;padding:3px 10px;border-radius:4px;background:var(--bl);color:#fff;text-decoration:none;font-weight:600">📈 TradingView</a>';
   h+='</div>';
 
-  h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:var(--bgH,#f8f9fa)">';
+  h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:var(--bgH,var(--bgH))">';
   var cols=[['code','Code','al'],['','Name','al'],['close','Close','ar'],['chg','Chg%','ar'],['value','Value','ar'],['fnet','F.Net','ar']];
   for(var i=0;i<cols.length;i++){
     var ck=cols[i][0],cl=cols[i][1],ca=cols[i][2];
     var arrow=cmdSort===ck?(cmdDir==='desc'?' ▼':' ▲'):'';
-    var sty=cmdSort===ck?'color:#3b82f6;':'';
+    var sty=cmdSort===ck?'color:var(--bl);':'';
     if(ck)h+='<th style="padding:6px 8px;text-align:'+ca+';cursor:pointer;'+sty+'" onclick="cmdSortBy(\''+ck+'\')">'+cl+arrow+'</th>';
     else h+='<th style="padding:6px 8px;text-align:'+ca+'">'+cl+'</th>';
   }
@@ -110,13 +110,13 @@ function cmdTable(cmd){
     var s=stocks[j];
     var chg=s.chg_pct||0;
     var fn=s.fnet_val||0;
-    h+='<tr style="border-top:1px solid var(--b1,#f0f0f0)">';
-    h+='<td style="padding:4px 8px"><span style="color:#3b82f6;font-weight:700;cursor:pointer;font-family:monospace" onclick="if(typeof gsOpen===\'function\')gsOpen(\''+s.code+'\')">'+s.code+'</span></td>';
-    h+='<td style="padding:4px 8px;font-size:9px;color:#888">'+((s.name||'').substring(0,30))+'</td>';
+    h+='<tr style="border-top:1px solid var(--b1,var(--b1))">';
+    h+='<td style="padding:4px 8px"><span style="color:var(--bl);font-weight:700;cursor:pointer;font-family:monospace" onclick="if(typeof gsOpen===\'function\')gsOpen(\''+s.code+'\')">'+s.code+'</span></td>';
+    h+='<td style="padding:4px 8px;font-size:9px;color:var(--t2)">'+((s.name||'').substring(0,30))+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600">'+(s.close||0).toLocaleString()+'</td>';
-    h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(chg>0?'#22c55e':chg<0?'#ef4444':'#888')+'">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
+    h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(chg>0?'var(--gn)':chg<0?'var(--rd)':'#888')+'">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace">'+cmdFmt(s.value||0)+'</td>';
-    h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(fn>0?'#22c55e':fn<0?'#ef4444':'#888')+'">'+cmdFmt(fn)+'</td>';
+    h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(fn>0?'var(--gn)':fn<0?'var(--rd)':'#888')+'">'+cmdFmt(fn)+'</td>';
     h+='</tr>';
   }
   h+='</tbody></table></div>';

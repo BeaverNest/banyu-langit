@@ -13,7 +13,36 @@ module.exports = function(upload) {
     const row = db.prepare('SELECT * FROM idx_daily WHERE trade_date=? AND code=?').get(td, code);
     if (!row) return res.json({ error: 'Not found' });
     const chgPct = row.prev_close ? ((row.close - row.prev_close) / row.prev_close * 100) : 0;
-    res.json({ ...row, change_pct: Math.round(chgPct * 100) / 100, foreign_net: row.foreign_buy - row.foreign_sell, foreign_buy_val: row.foreign_buy * row.close, foreign_sell_val: row.foreign_sell * row.close, foreign_net_val: (row.foreign_buy - row.foreign_sell) * row.close, market_cap: row.close * row.listed_shares });
+    // Check suspend status
+    const isSuspended = getSuspendedSet().has(code);
+    res.json({ ...row, change_pct: Math.round(chgPct * 100) / 100, foreign_net: row.foreign_buy - row.foreign_sell, foreign_buy_val: row.foreign_buy * row.close, foreign_sell_val: row.foreign_sell * row.close, foreign_net_val: (row.foreign_buy - row.foreign_sell) * row.close, market_cap: row.close * row.listed_shares, suspended: isSuspended });
+  });
+
+  // ═══ Suspended stocks — currently suspended (latest event per code is "Suspend") ═══
+  let _suspendedCache = { set: null, ts: 0 };
+  function getSuspendedSet() {
+    if (_suspendedCache.set && Date.now() - _suspendedCache.ts < 300000) return _suspendedCache.set;
+    try {
+      // Get latest suspend/unsuspend event per code
+      const rows = db.prepare(`
+        SELECT code, type, suspend_date FROM company_suspends
+        WHERE (code, suspend_date) IN (
+          SELECT code, MAX(suspend_date) FROM company_suspends GROUP BY code
+        )
+      `).all();
+      const suspended = new Set();
+      rows.forEach(r => { if (r.type === 'Suspend' || r.type === 'suspend') suspended.add(r.code); });
+      _suspendedCache = { set: suspended, ts: Date.now() };
+      return suspended;
+    } catch { return new Set(); }
+  }
+
+  router.get('/suspended', (req, res) => {
+    try {
+      const suspended = getSuspendedSet();
+      const list = [...suspended].sort();
+      res.json({ count: list.length, codes: list });
+    } catch (e) { res.json({ count: 0, codes: [], error: e.message }); }
   });
 
   // Top rankings
@@ -831,6 +860,7 @@ module.exports = function(upload) {
   router.post('/sync/import-all', (req, res) => {
     try {
       const results = {};
+      // Original 8
       results.stock = idxBridge.importStockSummary(db, {});
       results.index = idxBridge.importIndexSummary(db, {});
       results.fundamental = idxBridge.importFinancialRatios(db);
@@ -839,8 +869,29 @@ module.exports = function(upload) {
       results.splits = idxBridge.importStockSplits(db);
       results.profiles = idxBridge.importCompanyProfiles(db);
       results.details = idxBridge.importCompanyDetails(db);
-      const totalRows = Object.values(results).reduce((s, r) => s + (r.rows || 0), 0);
-      logSync('import_all', '', totalRows, 'ok', JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.rows]))));
+      // All 39 tables — safe call with fallback
+      const extras = [
+        ['broker', 'importBrokerSummary'], ['calendar', 'importMarketCalendar'],
+        ['announcement', 'importCompanyAnnouncement'], ['foreign', 'importForeignTrading'],
+        ['domestic', 'importDomesticTrading'], ['industry', 'importIndustryTrading'],
+        ['sectoral', 'importSectoralMovement'], ['daily_index', 'importDailyIndex'],
+        ['top_movers', 'importTopMovers'], ['active', 'importActiveStocks'],
+        ['suspend', 'importCompanySuspend'], ['rights', 'importRightOfferings'],
+        ['participants', 'importParticipantBrokers'], ['trading_ss', 'importTradingSS'],
+        ['trading_daily', 'importTradingDaily'], ['index_chart', 'importIndexChart'],
+        ['index_list', 'importIndexList'], ['fin_reports', 'importFinancialReports'],
+        ['issued', 'importIssuedHistory'], ['add_listing', 'importAdditionalListings'],
+        ['new_listing', 'importNewListings'], ['security', 'importSecurityStocks'],
+        ['delisting', 'importCompanyDelistings'], ['relisting', 'importCompanyRelistings'],
+        ['prof_ann', 'importProfileAnnouncements'], ['dealers', 'importParticipantDealers'],
+        ['prof_part', 'importParticipantProfiles'], ['trade_sum', 'importTradeSummary'],
+        ['fin_ratios', 'importFinancialRatiosFull']
+      ];
+      for (const [key, fn] of extras) {
+        try { if (typeof idxBridge[fn] === 'function') results[key] = idxBridge[fn](db); } catch (e) { results[key] = { rows: 0, error: e.message }; }
+      }
+      const totalRows = Object.values(results).reduce((s, r) => s + (r?.rows || 0), 0);
+      logSync('import_all', '', totalRows, 'ok', JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v?.rows || 0]))));
       res.json({ ok: true, total_rows: totalRows, detail: results });
     } catch (e) {
       logSync('import_all', '', 0, 'error', e.message);
@@ -901,6 +952,15 @@ module.exports = function(upload) {
   router.get('/sync/index-list', (req, res) => {
     res.json({ ok: true, count: 0, message: 'Use Deno: deno run --allow-all sync-all.ts' });
   });
+
+  // ═══ 1-Click Sync via Deno Server ═══
+  try {
+    const setupDenoProxy = require('../utils/deno-proxy');
+    setupDenoProxy(router, db, idxBridge, logSync);
+    console.log('[IDX] Deno proxy routes registered');
+  } catch (e) {
+    console.warn('[IDX] Deno proxy not loaded:', e.message);
+  }
 
   return router;
 };

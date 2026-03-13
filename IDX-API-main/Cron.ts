@@ -3,8 +3,8 @@ import * as Sync from '@app/Backend/Sync/index.ts'
 import Database from '@app/Database.ts'
 import Logger from '@app/Logger.ts'
 
-const startDate = '2026-01-01'
-const endDate = '2026-03-10'
+const startDate = '2025-01-01'
+const endDate = '2026-03-12'
 const delayMs = 400
 
 function formatYmd(date: Date): string {

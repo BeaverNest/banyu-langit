@@ -81,7 +81,13 @@ app.get('/api/ticker/:code', async (req, res) => {
       const latest = db.prepare('SELECT * FROM idx_daily WHERE trade_date=? AND code=?').get(td, code);
       if (latest) {
         const chgPct = latest.prev_close ? ((latest.close - latest.prev_close) / latest.prev_close * 100) : 0;
-        result.price = { ...latest, change_pct: Math.round(chgPct * 100) / 100, foreign_net: latest.foreign_buy - latest.foreign_sell, foreign_net_val: (latest.foreign_buy - latest.foreign_sell) * latest.close, market_cap: latest.close * latest.listed_shares };
+        // Check suspend status
+        let suspended = false;
+        try {
+          const susRow = db.prepare('SELECT type FROM company_suspends WHERE code=? ORDER BY suspend_date DESC LIMIT 1').get(code);
+          if (susRow && (susRow.type === 'Suspend' || susRow.type === 'suspend')) suspended = true;
+        } catch {}
+        result.price = { ...latest, change_pct: Math.round(chgPct * 100) / 100, foreign_net: latest.foreign_buy - latest.foreign_sell, foreign_net_val: (latest.foreign_buy - latest.foreign_sell) * latest.close, market_cap: latest.close * latest.listed_shares, suspended };
       }
       // Foreign flow last 20 days
       const flow = db.prepare('SELECT trade_date,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 20').all(code);
@@ -137,7 +143,7 @@ app.get('/api/ticker/:code', async (req, res) => {
 
     // Price chart — always provide (last 120 days), with adjustment if CA exists
     if (td) {
-      const hist = db.prepare('SELECT trade_date,close,high,low,volume,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 500').all(code);
+      const hist = db.prepare('SELECT trade_date,close,high,low,volume,foreign_buy,foreign_sell,bid_vol,offer_vol FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 500').all(code);
       hist.reverse();
       if (hist.length >= 2) {
         result.adj_chart = hist.map(r => {
@@ -156,11 +162,122 @@ app.get('/api/ticker/:code', async (req, res) => {
             adj_high: cumFactor !== 1 ? Math.round(r.high * cumFactor) : r.high,
             adj_low: cumFactor !== 1 ? Math.round(r.low * cumFactor) : r.low,
             fnet_val: (r.foreign_buy - r.foreign_sell) * r.close,
+            bid_vol: r.bid_vol || 0,
+            offer_vol: r.offer_vol || 0,
+            volume: r.volume || 0,
             adjusted: cumFactor !== 1
           };
         });
       }
     }
+
+    // Dividends for this ticker
+    try {
+      const divs = db.prepare('SELECT * FROM dividends WHERE code=? ORDER BY ex_date DESC LIMIT 10').all(code);
+      if (divs.length) {
+        result.dividends = divs;
+        // Dividend yield = latest cash_dividend / close * 100
+        if (result.price && result.price.close > 0 && divs[0].cash_dividend) {
+          result.dividend_yield = Math.round(divs[0].cash_dividend / result.price.close * 10000) / 100;
+        }
+      }
+    } catch {}
+
+    // Deep financial ratios (assets, equity, EPS, book_value)
+    try {
+      const ratios = db.prepare('SELECT * FROM financial_ratios WHERE code=? ORDER BY period DESC LIMIT 8').all(code);
+      if (ratios.length) {
+        result.financial_ratios = ratios;
+        result.financial_ratios_unit = 'million';
+      }
+    } catch {}
+
+    // ═══ SECTOR PEERS — median/percentile PER/PBV/ROE/DER/NPM for same sector & industry ═══
+    try {
+      const { latestFundDate } = require('./db');
+      const fm2 = latestFundDate();
+      if (fm2 && result.fundamental) {
+        const sect = result.fundamental.sector;
+        const ind = result.fundamental.industry;
+        function calcPercentiles(arr) {
+          if (!arr.length) return { median: 0, p25: 0, p75: 0, min: 0, max: 0, count: 0 };
+          const s = arr.slice().sort((a, b) => a - b);
+          const n = s.length;
+          return {
+            median: s[Math.floor(n / 2)],
+            p25: s[Math.floor(n * 0.25)],
+            p75: s[Math.floor(n * 0.75)],
+            min: s[0],
+            max: s[n - 1],
+            count: n
+          };
+        }
+        if (sect) {
+          const peers = db.prepare('SELECT code, per, pbv, roe, roa, der, npm, mkt_cap FROM idx_fundamental WHERE snapshot_month=? AND sector=? AND per>0 AND pbv>0').all(fm2, sect);
+          if (peers.length >= 3) {
+            result.sector_peers = {
+              sector: sect,
+              count: peers.length,
+              per: calcPercentiles(peers.map(p => p.per).filter(v => v > 0 && v < 200)),
+              pbv: calcPercentiles(peers.map(p => p.pbv).filter(v => v > 0 && v < 50)),
+              roe: calcPercentiles(peers.map(p => p.roe).filter(v => Math.abs(v) < 200)),
+              der: calcPercentiles(peers.map(p => p.der).filter(v => v >= 0 && v < 50)),
+              npm: calcPercentiles(peers.map(p => p.npm).filter(v => Math.abs(v) < 200))
+            };
+          }
+        }
+        if (ind) {
+          const indPeers = db.prepare('SELECT code, per, pbv, roe, der, npm FROM idx_fundamental WHERE snapshot_month=? AND industry=? AND per>0 AND pbv>0').all(fm2, ind);
+          if (indPeers.length >= 3) {
+            result.industry_peers = {
+              industry: ind,
+              count: indPeers.length,
+              per: calcPercentiles(indPeers.map(p => p.per).filter(v => v > 0 && v < 200)),
+              pbv: calcPercentiles(indPeers.map(p => p.pbv).filter(v => v > 0 && v < 50)),
+              roe: calcPercentiles(indPeers.map(p => p.roe).filter(v => Math.abs(v) < 200))
+            };
+          }
+        }
+      }
+    } catch {}
+
+    // ═══ INDUSTRY PER/PBV TIME SERIES — from industry_trading table ═══
+    try {
+      const ind = (result.fundamental || {}).industry;
+      if (ind) {
+        const indTs = db.prepare('SELECT trade_date, per, pbv, market_cap, volume, value FROM industry_trading WHERE industry=? AND per>0 ORDER BY trade_date DESC LIMIT 250').all(ind);
+        if (indTs.length >= 5) {
+          indTs.reverse();
+          result.industry_ts = { industry: ind, data: indTs };
+        }
+      }
+    } catch {}
+
+    // ═══ FINANCIAL REPORTS — PDF links from BEI ═══
+    try {
+      const reports = db.prepare('SELECT * FROM financial_reports WHERE code=? ORDER BY year DESC, period DESC LIMIT 8').all(code);
+      if (reports.length) result.financial_reports_list = reports;
+    } catch {}
+
+    // ═══ ISSUED HISTORY — share issuance/dilution ═══
+    try {
+      const issued = db.prepare('SELECT * FROM issued_history WHERE code=? ORDER BY issue_date DESC LIMIT 20').all(code);
+      if (issued.length) result.issued_history = issued;
+    } catch {}
+
+    // ═══ COMPANY PROFILE & DETAIL ═══
+    try {
+      const prof = db.prepare('SELECT * FROM company_profiles WHERE code=?').get(code);
+      if (prof) result.profile = prof;
+      const det = db.prepare('SELECT * FROM company_details WHERE code=?').get(code);
+      if (det) result.detail = det;
+    } catch {}
+
+    // Announcements count
+    try {
+      const annCount = db.prepare('SELECT COUNT(*) as c FROM company_announcements WHERE company_code=?').get(code);
+      if (annCount && annCount.c > 0) result.announcements_count = annCount.c;
+    } catch {}
 
     res.json(result);
   } catch (e) { res.json({ code: req.params.code, error: e.message }); }

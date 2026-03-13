@@ -4,10 +4,17 @@ services:
     container_name: banyu-langit
     ports:
       - "3003:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - diary-uploads:/app/uploads
       - diary-data:/app/data
+      - ./public:/app/public
+      - ./server:/app/server
+      - ./.env:/app/.env:ro
+      - ./IDX-API-main/data:/app/IDX-API-main/data:ro
     restart: unless-stopped
+    command: npx nodemon --watch server server/index.js
 
 volumes:
   diary-uploads:

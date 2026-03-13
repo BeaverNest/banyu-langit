@@ -5,6 +5,7 @@ var idxData = null;
 var idxFilter = '';
 var idxSectorFilter = '';
 var idxAvg = 20;
+var idxSuspended = new Set(); // suspended stock codes
 
 // Column ORDER + visibility — array defines display order (user can reorder via dropdown)
 var idxColOrder = ['code','name','close','chg','value','freq','fnet','score','freq_spike','vol_spike','ma20','ma200','vol','fbuy','fsell','val_spike','fnet_spike','sector'];
@@ -33,8 +34,12 @@ async function loadIdxDaily() {
   idxShellRendered = false;
   el.innerHTML = '<div style="padding:12px">' + skelRows(10) + '</div>';
   try {
-    var r = await fetch('/api/idx/unified?avg=' + idxAvg);
+    var [r, sus] = await Promise.all([
+      fetch('/api/idx/unified?avg=' + idxAvg),
+      fetch('/api/idx/suspended').then(function(r){return r.json()}).catch(function(){return{codes:[]}})
+    ]);
     idxData = await r.json();
+    idxSuspended = new Set(sus.codes || []);
     renderIdxDaily();
   } catch (e) { el.innerHTML = '<div class="ne">Error: ' + e.message + '</div>'; }
 }
@@ -389,7 +394,7 @@ function idxRenderCell(k, r) {
   function spikeClr(v) { return v >= 3 ? 'var(--gn)' : v >= 2 ? 'var(--am)' : 'var(--t2)'; }
   var chgCls = (r.change_pct||0)>0?'up':(r.change_pct||0)<0?'dn':'';
   var fCls = (r.fnet_val||0)>0?'up':(r.fnet_val||0)<0?'dn':'';
-  if (k==='code') return '<td class="code al" onclick="gsOpen(\'' + esc(r.code) + '\')">' + esc(r.code) + '</td>';
+  if (k==='code') return '<td class="code al" onclick="gsOpen(\'' + esc(r.code) + '\')">' + esc(r.code) + (idxSuspended.has(r.code) ? ' <span style="font-size:7px;color:var(--rd);font-weight:700" title="Suspended">⚠</span>' : '') + '</td>';
   if (k==='name') return '<td class="al name" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name||'') + '</td>';
   if (k==='close') return '<td class="ar" style="font-family:var(--fm)">' + (r.close||0).toLocaleString() + '</td>';
   if (k==='chg') return '<td class="ar ' + chgCls + '" style="font-family:var(--fm)">' + ((r.change_pct||0)>0?'+':'') + (r.change_pct||0).toFixed(2) + '%</td>';

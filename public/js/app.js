@@ -71,6 +71,7 @@ function smkt(n,b){
   $('m-'+n).classList.add('on');
   if(n==='ov')loadMktOverview();
   if(n==='nws')lNews('');
+  if(n==='ann')loadAnnouncements();
   if(n==='cmd'&&typeof loadCommodities==='function')loadCommodities();
 }
 
@@ -91,13 +92,14 @@ function anaSubTab(n,b){
 // Insider sub-tabs (compat)
 function sins(n,b){var panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(function(x){x.classList.remove('on')});b.classList.add('on');panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});$('i-'+n).classList.add('on');}
 
-// ═══ MARKET OVERVIEW ═══
+// ═══ MARKET OVERVIEW — IDX instant, global async ═══
 var mktCache={};
 async function loadMktOverview(){
   var el=$('ml-ov');if(!el)return;
   if(mktCache._ov&&Date.now()-mktCache._ov.ts<60000){el.innerHTML=mktCache._ov.html;return;}
   el.innerHTML='<div class="ne">Loading...</div>';
   try{
+    // Fetch all 3 categories — indices now uses DB for IDX
     var [idx,cmd,cur]=await Promise.all([
       fetch('/api/market?cat=indices').then(function(r){return r.json()}),
       fetch('/api/market?cat=commodities').then(function(r){return r.json()}),
@@ -112,10 +114,15 @@ async function loadMktOverview(){
         var s=m.change>0?'+':'';
         var pr=m.price?m.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
         var ch=m.price?ar+' '+s+m.change.toFixed(2)+'%':'—';
-        h+='<div class="mkt-item"><span class="mkt-label">'+esc(m.label)+'</span><span class="mkt-desc">'+esc(m.desc)+'</span><span class="mkt-price">'+pr+'</span><span class="mkt-chg '+c+'">'+ch+'</span></div>';
+        var srcBadge=m.source==='idx'?' <span style="font-size:7px;color:var(--gn);vertical-align:super">IDX</span>':'';
+        h+='<div class="mkt-item"><span class="mkt-label">'+esc(m.label)+srcBadge+'</span><span class="mkt-desc">'+esc(m.desc)+'</span><span class="mkt-price">'+pr+'</span><span class="mkt-chg '+c+'">'+ch+'</span></div>';
       });
     }
-    renderSection('INDICES','📊',idx);
+    // Split indices into IDX and Global
+    var idxIndices=idx.filter(function(m){return m.source==='idx'});
+    var globalIndices=idx.filter(function(m){return m.source!=='idx'});
+    if(idxIndices.length)renderSection('IDX INDICES','📊',idxIndices);
+    if(globalIndices.length)renderSection('GLOBAL','🌐',globalIndices);
     renderSection('COMMODITIES','🛢',cmd);
     renderSection('CURRENCIES','💱',cur);
     mktCache._ov={html:h,ts:Date.now()};
@@ -197,6 +204,93 @@ document.addEventListener('keydown',function(e){
     document.body.classList.add('compact');
   }
 })();
+
+// ═══ BEI ANNOUNCEMENTS ═══
+var _annData=[];
+async function loadAnnouncements(){
+  var el=$('ann-list');if(!el)return;
+  var q=($('ann-q')||{}).value||'';
+  el.innerHTML='<div class="ne">Loading...</div>';
+  try{
+    var url='/api/announcements?limit=100';
+    if(q)url+='&q='+encodeURIComponent(q);
+    var r=await fetch(url);var d=await r.json();
+    _annData=d.data||[];
+    if(!_annData.length){el.innerHTML='<div class="ne">No announcements'+(q?' for "'+esc(q)+'"':'')+'</div>';return;}
+    el.innerHTML='<div style="padding:2px 10px;font-size:var(--font-xs);color:var(--t3)">'+d.total.toLocaleString()+' total announcements</div>'+
+      _annData.map(function(a,i){
+        var date=a.ann_date||'';
+        var code=a.company_code||'';
+        var typeColor=a.type==='STOCK'?'var(--gn)':a.type==='BOND'?'var(--bl)':'var(--t3)';
+        var hasAttach=false;
+        try{var att=JSON.parse(a.attachments||'[]');hasAttach=att.length>0;}catch{}
+        return '<div class="ni" style="cursor:pointer" onclick="openAnnPopup('+i+')"><div class="nc" style="flex:1">'+
+          '<div class="nt">'+
+            (code?'<span style="color:var(--bl);font-weight:700;margin-right:6px" onclick="event.stopPropagation();if(typeof gsOpen===\'function\')gsOpen(\''+esc(code)+'\')">'+esc(code)+'</span>':'')+
+            esc(a.title||'')+
+            (hasAttach?' <span style="color:var(--am);font-size:var(--font-xs)">📎</span>':'')+
+          '</div>'+
+          '<div class="nm">'+
+            '<span style="color:'+typeColor+'">'+esc(a.type||'')+'</span>'+
+            '<span>'+esc(date)+'</span>'+
+            (a.subject?'<span style="color:var(--t3)">'+esc(a.subject)+'</span>':'')+
+          '</div>'+
+        '</div></div>';
+      }).join('');
+  }catch(e){el.innerHTML='<div class="ne">Error: '+e.message+'</div>';}
+}
+
+function openAnnPopup(idx){
+  var a=_annData[idx];if(!a)return;
+  var attachments=[];
+  try{attachments=JSON.parse(a.attachments||'[]');}catch{}
+
+  var h='<div class="epop-head"><div style="font-size:18px">📋</div><div class="epop-meta">';
+  h+='<div class="en" style="font-size:15px">';
+  if(a.company_code)h+='<span style="color:var(--bl);cursor:pointer" onclick="cPop();if(typeof gsOpen===\'function\')gsOpen(\''+esc(a.company_code)+'\')">'+esc(a.company_code)+'</span> ';
+  h+=esc(a.title||'')+'</div>';
+  h+='<div style="font-size:var(--font-sm);color:var(--t2);margin-top:2px">';
+  h+='<span style="color:'+(a.type==='STOCK'?'var(--gn)':'var(--bl)')+'">'+esc(a.type||'')+'</span>';
+  h+=' · '+esc(a.ann_date||'');
+  if(a.subject)h+=' · '+esc(a.subject);
+  h+='</div></div>';
+  h+='<button class="epop-close" onclick="cPop()">✕</button></div>';
+
+  h+='<div class="epop-body">';
+
+  // Attachments
+  if(attachments.length){
+    h+='<div style="margin-bottom:12px">';
+    h+='<div style="font-size:var(--font-xs);font-weight:700;color:var(--t3);text-transform:uppercase;margin-bottom:6px">Attachments ('+attachments.length+')</div>';
+    attachments.forEach(function(att){
+      var url=att.url||'';
+      if(url&&!url.startsWith('http'))url='https://www.idx.co.id'+url;
+      var name=att.filename||att.name||'Document';
+      h+='<a href="'+esc(url)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:4px;border-radius:4px;border:1px solid var(--b1);background:var(--bgH);text-decoration:none;color:var(--t1);transition:all .1s" onmouseover="this.style.borderColor=\'var(--bl)\'" onmouseout="this.style.borderColor=\'var(--b1)\'">';
+      h+='<span style="font-size:18px">📄</span>';
+      h+='<div style="flex:1;min-width:0"><div style="font-size:var(--font-md);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(name)+'</div>';
+      h+='<div style="font-size:var(--font-xs);color:var(--t3)">PDF · Click to open</div></div>';
+      h+='<span style="font-size:var(--font-sm);color:var(--bl)">Open ↗</span>';
+      h+='</a>';
+    });
+    h+='</div>';
+  }else{
+    h+='<div style="font-size:var(--font-md);color:var(--t3);padding:12px 0">No attachments</div>';
+  }
+
+  // Ticker link
+  if(a.company_code){
+    h+='<div style="margin-top:8px;display:flex;gap:6px">';
+    h+='<button style="padding:4px 10px;border-radius:4px;border:1px solid var(--b2);background:var(--bgH);color:var(--bl);font-family:var(--f);font-size:var(--font-sm);cursor:pointer" onclick="cPop();if(typeof gsOpen===\'function\')gsOpen(\''+esc(a.company_code)+'\')">View '+esc(a.company_code)+' Detail</button>';
+    h+='<button style="padding:4px 10px;border-radius:4px;border:1px solid var(--b2);background:var(--bgH);color:var(--t2);font-family:var(--f);font-size:var(--font-sm);cursor:pointer" onclick="$(\'ann-q\').value=\''+esc(a.company_code)+'\';cPop();loadAnnouncements()">More from '+esc(a.company_code)+'</button>';
+    h+='</div>';
+  }
+
+  h+='</div>';
+
+  $('epop-box').innerHTML=h;
+  $('epop').classList.add('o');
+}
 
 // ═══ BACKWARD COMPAT ═══
 function scrSubTab(n,b){anaSubTab(n,b);}
