@@ -257,6 +257,10 @@ function renderIdxDigest(d) {
   });
   h += '</div>';
 
+  // ═══ MACRO FOREIGN vs DOMESTIC FLOW CHART ═══
+  h += '<div id="macro-flow-chart" style="margin-bottom:14px;border:1px solid var(--b1);border-radius:8px;background:var(--bg2);padding:10px 12px"><div style="font-size:10px;color:var(--t3)">Loading macro flow...</div></div>';
+  setTimeout(loadMacroFlowChart, 50);
+
   var gainers = data.filter(function(r){return r.change_pct>0;}).sort(function(a,b){return b.change_pct-a.change_pct;}).slice(0,8);
   var losers = data.filter(function(r){return r.change_pct<0;}).sort(function(a,b){return a.change_pct-b.change_pct;}).slice(0,8);
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">';
@@ -604,6 +608,69 @@ function renderFlowTbl() {
   });
   h += '</tbody></table></div>';
   el.innerHTML = h;
+}
+
+// ═══ MACRO FOREIGN vs DOMESTIC FLOW CHART ═══
+async function loadMacroFlowChart() {
+  var el = document.getElementById('macro-flow-chart'); if (!el) return;
+  try {
+    var r = await fetch('/api/idx/macro-flow?days=30');
+    var d = await r.json();
+    if (!d.data || d.data.length < 3) { el.innerHTML = '<div style="font-size:10px;color:var(--t3)">No macro flow data.</div>'; return; }
+    var data = d.data;
+    var W = 760, H = 110;
+    var pad = {t: 12, r: 55, b: 18, l: 50};
+    var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+    var n = data.length;
+    var barW = Math.max(3, Math.min(12, cW / n - 2));
+
+    var maxAbs = 0;
+    data.forEach(function(r) { var a = Math.abs(r.f_net); if (a > maxAbs) maxAbs = a; });
+    if (!maxAbs) maxAbs = 1;
+
+    var h2 = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+    h2 += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Foreign Net Flow</span>';
+    h2 += '<span style="font-size:9px;color:var(--t3)">' + n + ' days</span>';
+    h2 += '<span style="flex:1"></span>';
+    // Latest value badge
+    var lastNet = data[data.length - 1].f_net;
+    var lastClr = lastNet >= 0 ? 'var(--gn)' : 'var(--rd)';
+    h2 += '<span style="font-size:10px;font-weight:700;color:' + lastClr + '">' + fmtRp(lastNet) + '</span>';
+    h2 += '</div>';
+
+    var svg = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" style="display:block">';
+    // Zero line
+    var zeroY = pad.t + cH / 2;
+    svg += '<line x1="' + pad.l + '" y1="' + zeroY + '" x2="' + (W - pad.r) + '" y2="' + zeroY + '" stroke="var(--t3)" stroke-width="0.5"/>';
+    // Grid
+    for (var g = 0; g <= 4; g++) {
+      var gy = pad.t + g / 4 * cH;
+      var gv = maxAbs - g / 2 * maxAbs;
+      svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="0.5"/>';
+      if (g === 0 || g === 2 || g === 4) svg += '<text x="' + (pad.l - 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="end">' + fmtRp(gv) + '</text>';
+    }
+    // Bars
+    data.forEach(function(r, i) {
+      var x = pad.l + (i + 0.5) * (cW / n) - barW / 2;
+      var net = r.f_net;
+      var barH = Math.max(1, Math.abs(net) / maxAbs * (cH / 2));
+      var barY, clr;
+      if (net >= 0) { barY = zeroY - barH; clr = 'var(--gn)'; }
+      else { barY = zeroY; clr = 'var(--rd)'; }
+      svg += '<rect x="' + x + '" y="' + barY + '" width="' + barW + '" height="' + barH + '" fill="' + clr + '" rx="1" opacity="0.8"/>';
+    });
+    // X labels
+    var step = Math.max(1, Math.floor(n / 8));
+    for (var i = 0; i < n; i += step) {
+      var x = pad.l + (i + 0.5) * (cW / n);
+      svg += '<text x="' + x + '" y="' + (H - 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + data[i].date.substring(5) + '</text>';
+    }
+    // Right-side Y axis labels
+    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (pad.t + 6) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">' + fmtRp(maxAbs) + '</text>';
+    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (H - pad.b) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">' + fmtRp(-maxAbs) + '</text>';
+    svg += '</svg>';
+    el.innerHTML = h2 + svg;
+  } catch (e) { el.innerHTML = '<div style="font-size:10px;color:var(--t3)">Macro flow: ' + e.message + '</div>'; }
 }
 
 // ═══ COMPAT ═══

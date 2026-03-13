@@ -101,6 +101,7 @@ router.post('/run', (req, res) => {
 
     // Determine which codes to test based on scope
     let scopeCodes = null; // null = all
+    let scoreUniverse = null; // for score_top: { date → Set of codes }
     if (scopeType === 'stock' && scopeValue) {
       scopeCodes = new Set(scopeValue.split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
       if (scopeCodes.size === 0) scopeCodes = null;
@@ -112,6 +113,25 @@ router.post('/run', (req, res) => {
       const indRows = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND UPPER(industry)=?').all(fm, scopeValue);
       if (indRows.length) scopeCodes = new Set(indRows.map(r => r.code));
       else return res.json({ error: 'Industry not found: ' + scopeValue + '. Check available industries.' });
+    } else if (scopeType === 'score_top' && scopeValue) {
+      // Dynamic universe: top N scored stocks per date
+      const topN = parseInt(scopeValue) || 20;
+      scoreUniverse = {};
+      const scoreRows = db.prepare('SELECT calc_date, code FROM daily_scores WHERE calc_date>=? AND calc_date<=? ORDER BY calc_date, score_composite DESC').all(allDates[0], allDates[allDates.length - 1]);
+      let curDate = '', count = 0;
+      scoreRows.forEach(r => {
+        if (r.calc_date !== curDate) { curDate = r.calc_date; count = 0; }
+        count++;
+        if (count <= topN) {
+          if (!scoreUniverse[r.calc_date]) scoreUniverse[r.calc_date] = new Set();
+          scoreUniverse[r.calc_date].add(r.code);
+        }
+      });
+      // scopeCodes = union of all dates (for loading history)
+      const allScoreCodes = new Set();
+      Object.values(scoreUniverse).forEach(s => s.forEach(c => allScoreCodes.add(c)));
+      if (allScoreCodes.size === 0) return res.json({ error: 'No scores found. Run Backfill first in Scoring tab.' });
+      scopeCodes = allScoreCodes;
     } else if ((scopeType === 'sector' || scopeType === 'industry') && !scopeValue) {
       return res.json({ error: 'Please enter a ' + scopeType + ' name in the scope field' });
     }
@@ -222,8 +242,12 @@ router.post('/run', (req, res) => {
       if (openPos.length < maxPos) {
         const slots = maxPos - openPos.length;
         const cands = [];
+        // Determine eligible codes for this date
+        const dayUniverse = scoreUniverse ? scoreUniverse[td] : null;
         for (const code of Object.keys(hbc)) {
           if (openPos.find(p => p.code === code)) continue;
+          // Score universe filter: only allow codes in top N for this date
+          if (dayUniverse && !dayUniverse.has(code)) continue;
           const hist = hbc[code];
           const idx = dIdx[code] ? dIdx[code][td] : -1;
           if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;

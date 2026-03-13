@@ -29,7 +29,7 @@ function renderBtForm(el){
 
   // ── Params + Run (single row) ──
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;align-items:end">';
-  h+='<div><select id="bt-scope" style="width:85px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px;color:var(--t1);font-size:10px;outline:none" onchange="btScopeChg()"><option value="all">All Stocks</option><option value="stock"'+(d&&d.params.scope_type==='stock'?' selected':'')+'>Stock(s)</option><option value="sector"'+(d&&d.params.scope_type==='sector'?' selected':'')+'>Sector</option><option value="industry"'+(d&&d.params.scope_type==='industry'?' selected':'')+'>Industry</option></select><div style="font-size:7px;color:var(--t3)">Scope</div></div>';
+  h+='<div><select id="bt-scope" style="width:85px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px;color:var(--t1);font-size:10px;outline:none" onchange="btScopeChg()"><option value="all">All Stocks</option><option value="stock"'+(d&&d.params.scope_type==='stock'?' selected':'')+'>Stock(s)</option><option value="sector"'+(d&&d.params.scope_type==='sector'?' selected':'')+'>Sector</option><option value="industry"'+(d&&d.params.scope_type==='industry'?' selected':'')+'>Industry</option><option value="score_top"'+(d&&d.params.scope_type==='score_top'?' selected':'')+'>📊 Top Score</option></select><div style="font-size:7px;color:var(--t3)">Scope</div></div>';
   // Scope value
   h+='<div style="position:relative;'+(d&&d.params.scope_type!=='all'?'':'display:none')+'" id="bt-sv-wrap"><input id="bt-sv" style="width:130px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-size:10px;font-family:var(--fm);outline:none;text-transform:uppercase" placeholder="BBCA,TLKM" value="'+(d?esc(d.params.scope_value||''):'')+ '" oninput="btAcScope()" onfocus="btAcScope()" autocomplete="off"><div id="bt-sv-ac" class="bt-ac-drop"></div><div style="font-size:7px;color:var(--t3)">Filter</div></div>';
   h+='<div><input id="bt-mp" type="number" value="'+(d?d.params.max_positions:5)+'" style="width:45px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none"><div style="font-size:7px;color:var(--t3)">Pos</div></div>';
@@ -141,7 +141,7 @@ document.addEventListener('click',function(e){
   if(!e.target.closest('#bt-bm')){var a=$('bt-bm-ac');if(a)a.style.display='none';}
 });
 
-function btScopeChg(){var v=$('bt-scope').value;var w=$('bt-sv-wrap');if(w)w.style.display=v==='all'?'none':'';var inp=$('bt-sv');if(inp){inp.value='';inp.placeholder=v==='stock'?'BBCA,TLKM':v==='sector'?'Type sector':v==='industry'?'Type industry':'';}}
+function btScopeChg(){var v=$('bt-scope').value;var w=$('bt-sv-wrap');if(w)w.style.display=v==='all'?'none':'';var inp=$('bt-sv');if(inp){inp.value='';inp.placeholder=v==='stock'?'BBCA,TLKM':v==='sector'?'Type sector':v==='industry'?'Type industry':v==='score_top'?'20 (top N stocks)':'';}}
 function btTogRef(){btShowRef=!btShowRef;var el=$('bt-ref'),btn=$('bt-ref-btn');if(el)el.style.display=btShowRef?'':'none';if(btn){btn.style.background=btShowRef?'var(--blB)':'none';btn.style.color=btShowRef?'var(--bl)':'var(--t3)';}}
 function btIns(v){var el=$('bt-xf');if(document.activeElement===$('bt-ef'))el=$('bt-ef');if(!el)el=$('bt-ef');if(el){var s=el.selectionStart!=null?el.selectionStart:el.value.length;el.value=el.value.substring(0,s)+v+' '+el.value.substring(s);el.focus();}}
 

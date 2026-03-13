@@ -142,12 +142,14 @@
       <button class="wt-b" onclick="anaSubTab('compare',this)">Compare</button>
       <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
       <button class="wt-b" onclick="anaSubTab('backtest',this)">Backtest</button>
+      <button class="wt-b" onclick="anaSubTab('scoring',this)">Composite Score</button>
     </div>
     <div class="wp on" id="ana-screener"><div id="scr-content"></div></div>
     <div class="wp" id="ana-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure backtest</div></div></div>
+    <div class="wp" id="ana-scoring"><div id="scoring-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Configure scoring</div></div></div>
   </div>
 
   <!-- TAB 5: PORTFOLIO -->
@@ -219,6 +221,7 @@
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
 <script src="/js/backtest.js"></script>
+<script src="/js/scoring.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
 <script src="/js/portfolio.js"></script>

@@ -87,6 +87,7 @@ function anaSubTab(n,b){
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
   if(n==='correlation'&&typeof loadCorrelationView==='function')loadCorrelationView();
   if(n==='backtest'&&typeof loadBacktest==='function')loadBacktest();
+  if(n==='scoring'&&typeof loadScoring==='function')loadScoring();
 }
 
 // Insider sub-tabs (compat)

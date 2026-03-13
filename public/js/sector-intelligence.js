@@ -173,8 +173,9 @@ function drawForeignSankey(stocks){
   h+='<span>'+stocks.length+' stocks \u00b7 '+gList.length+' '+(sectorDrillSector?'industries':'sectors')+'</span>';
   h+='</div>';
 
-  h+=buildStockTable(stocks);
+  h+=buildStockTable(stocks, true);
   container.innerHTML=h;
+  setTimeout(loadSecEnrichment, 50);
 }
 
 function drawTransactionSankey(stocks){
@@ -234,8 +235,9 @@ function drawTransactionSankey(stocks){
   statsH+='<span>Total: '+fmtRp(totalVal)+'</span></div>';
 
   var h='<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap"><div>'+svgD+'</div><div style="flex:1;min-width:200px">'+legendH+'</div></div>';
-  h+=statsH+buildStockTable(stocks);
+  h+=statsH+buildStockTable(stocks, true);
   container.innerHTML=h;
+  setTimeout(loadSecEnrichment, 50);
 }
 
 // ═══ SORTABLE STOCK TABLE ═══
@@ -248,8 +250,10 @@ function secTblDoSort(key){
   if(tmCache)renderSankeyView($('sec-int-body'),tmCache);
 }
 
-function buildStockTable(stocks){
-  var sorted=stocks.slice();
+function buildStockTable(stocks, withEnrichment){
+  // Filter out inactive stocks (value=0, volume=0)
+  var active = stocks.filter(function(s) { return (s.value || 0) > 0; });
+  var sorted=active.slice();
   var dir=secTblDir==='desc'?-1:1;
   var sortFns={
     code:function(a,b){return dir*a.code.localeCompare(b.code);},
@@ -265,17 +269,34 @@ function buildStockTable(stocks){
   if(sortFns[secTblSort])sorted.sort(sortFns[secTblSort]);
   else sorted.sort(sortFns.value);
 
+  var h = '';
+
+  // ═══ Enrichment Panel (heatmap + industry PER/PBV) — inserted BEFORE stock table ═══
+  if (withEnrichment) {
+    h += '<div id="sec-enrichment" style="margin-top:12px"><div style="font-size:10px;color:var(--t3)">Loading sector data...</div></div>';
+  }
+
+  // ═══ Collapsible Stock Table ═══
+  var inactive = stocks.length - active.length;
+  h += '<div style="margin-top:12px">';
+  h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:pointer" onclick="var t=this.nextElementSibling;t.style.display=t.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.arrow\').textContent=t.style.display===\'none\'?\'▶\':\'▼\'">';
+  h += '<span class="arrow" style="font-size:9px;color:var(--t3)">▼</span>';
+  h += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Stock Details</span>';
+  h += '<span style="font-size:9px;color:var(--t3)">' + active.length + ' active' + (inactive ? ' · ' + inactive + ' inactive hidden' : '') + '</span>';
+  h += '</div>';
+  h += '<div>';
+
   function thh(key,label){
     var arrow=secTblSort===key?(secTblDir==='desc'?' \u25BC':' \u25B2'):'';
     var style=secTblSort===key?'color:var(--bl);':'';
     return '<th class="ar" style="cursor:pointer;user-select:none;'+style+'" onclick="secTblDoSort(\''+key+'\')">'+label+arrow+'</th>';
   }
 
-  var h='<div style="margin-top:8px"><table class="bei-tbl" style="font-size:10px"><thead><tr>';
+  h+='<table class="bei-tbl" style="font-size:10px"><thead><tr>';
   h+='<th class="al" style="cursor:pointer" onclick="secTblDoSort(\'code\')">Code'+(secTblSort==='code'?(secTblDir==='desc'?' \u25BC':' \u25B2'):'')+'</th>';
   h+='<th class="al">'+(sectorDrillSector?'Industry':'Sector')+'</th>';
-  h+=thh('close','Close');h+=thh('chg','Chg%');h+=thh('value','Value');h+=thh('volume','Volume');h+=thh('freq','Freq');
-  h+=thh('fbuy','F.Buy');h+=thh('fsell','F.Sell');h+=thh('fnet','F.Net');
+  h+=thh('close','Close');h+=thh('chg','Chg%');h+=thh('value','Value');h+=thh('freq','Freq');
+  h+=thh('fnet','F.Net');
   h+='</tr></thead><tbody>';
   sorted.slice(0,50).forEach(function(s){
     var chg=s.chg_pct||0;var fn=s.fnet_val||0;
@@ -285,14 +306,11 @@ function buildStockTable(stocks){
     h+='<td class="ar" style="font-family:var(--fm)">'+(s.close||0).toLocaleString()+'</td>';
     h+='<td class="ar '+(chg>0?'up':chg<0?'dn':'')+'" style="font-family:var(--fm)">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
     h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.value||0)+'</td>';
-    h+='<td class="ar" style="font-family:var(--fm)">'+fmtNum(s.volume||0)+'</td>';
     h+='<td class="ar" style="font-family:var(--fm)">'+(s.frequency||0).toLocaleString()+'</td>';
-    h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.fbuy_val||0)+'</td>';
-    h+='<td class="ar" style="font-family:var(--fm)">'+fmtRp(s.fsell_val||0)+'</td>';
     h+='<td class="ar '+(fn>0?'up':fn<0?'dn':'')+'" style="font-family:var(--fm);font-weight:600">'+fmtRp(fn)+'</td>';
     h+='</tr>';
   });
-  h+='</tbody></table></div>';
+  h+='</tbody></table></div></div>';
   return h;
 }
 
@@ -824,4 +842,80 @@ function sectorStockTable(stocks){
 async function loadCorrelationView(){
   var el=$('correlation-content');if(!el)return;
   await loadSecCorrelation(el);
+}
+// ═══ SECTOR ENRICHMENT — Sectoral Movement Heatmap + Industry PER/PBV ═══
+async function loadSecEnrichment() {
+  var el = document.getElementById('sec-enrichment'); if (!el) return;
+  var h = '';
+
+  // 1. Sectoral Movement Heatmap
+  try {
+    var r = await fetch('/api/idx/sectoral?days=30');
+    var sd = await r.json();
+    if (sd.sectors && sd.sectors.length && sd.dates && sd.dates.length) {
+      h += '<div style="border:1px solid var(--b1);border-radius:8px;overflow:hidden;margin-bottom:12px;background:var(--bg2)">';
+      h += '<div style="padding:8px 12px;font-size:11px;font-weight:700;color:var(--t1);border-bottom:1px solid var(--b1)">📊 Sector Performance Heatmap (' + sd.dates.length + ' days)</div>';
+      h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:9px"><thead><tr>';
+      h += '<th style="padding:3px 6px;text-align:left;font-size:8px;color:var(--t3);position:sticky;left:0;background:var(--bg2);z-index:1;min-width:80px">Sector</th>';
+      // Show last 20 dates max
+      var showDates = sd.dates.slice(-15);
+      showDates.forEach(function(dt) {
+        h += '<th style="padding:3px 3px;text-align:center;font-size:7px;color:var(--t3);white-space:nowrap;font-family:var(--fm)">' + dt.substring(5) + '</th>';
+      });
+      h += '</tr></thead><tbody>';
+      sd.sectors.forEach(function(sec) {
+        var shortSec = sec.replace(/^IDX Sector /i, '').replace(/^Composite Index/i, 'IHSG');
+        h += '<tr><td style="padding:3px 6px;font-weight:600;font-size:9px;position:sticky;left:0;background:var(--bg2);z-index:1;white-space:nowrap">' + esc(shortSec) + '</td>';
+        showDates.forEach(function(dt) {
+          var val = sd.data[dt] && sd.data[dt][sec] != null ? sd.data[dt][sec] : null;
+          if (val !== null) {
+            var intensity = Math.min(1, Math.abs(val) / 3);
+            var bg = val > 0 ? 'rgba(0,230,118,' + (intensity * 0.5) + ')' : val < 0 ? 'rgba(255,61,0,' + (intensity * 0.5) + ')' : 'transparent';
+            var clr = val > 0 ? 'var(--gn)' : val < 0 ? 'var(--rd)' : 'var(--t3)';
+            h += '<td style="padding:2px 3px;text-align:center;font-family:var(--fm);background:' + bg + ';color:' + clr + '">' + val.toFixed(1) + '</td>';
+          } else {
+            h += '<td style="padding:2px 3px;text-align:center;color:var(--t3)">-</td>';
+          }
+        });
+        h += '</tr>';
+      });
+      h += '</tbody></table></div></div>';
+    }
+  } catch (e) { /* sectoral data not available */ }
+
+  // 2. Industry PER/PBV Table
+  try {
+    var r2 = await fetch('/api/idx/industry-overview');
+    var id = await r2.json();
+    if (id.data && id.data.length) {
+      h += '<div style="border:1px solid var(--b1);border-radius:8px;overflow:hidden;background:var(--bg2)">';
+      h += '<div style="padding:8px 12px;font-size:11px;font-weight:700;color:var(--t1);border-bottom:1px solid var(--b1)">🏭 Industry Valuation';
+      if (id.trade_date) h += ' <span style="font-size:9px;font-weight:400;color:var(--t3)">' + id.trade_date + '</span>';
+      h += '</div>';
+      h += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr>';
+      h += '<th style="padding:4px 8px;text-align:left;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">Industry</th>';
+      h += '<th style="padding:4px 6px;text-align:right;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">Members</th>';
+      h += '<th style="padding:4px 6px;text-align:right;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">PER</th>';
+      h += '<th style="padding:4px 6px;text-align:right;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">PBV</th>';
+      h += '<th style="padding:4px 6px;text-align:right;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">Mkt Cap</th>';
+      h += '<th style="padding:4px 6px;text-align:right;font-size:8px;color:var(--t3);position:sticky;top:0;background:var(--bg2)">Value</th>';
+      h += '</tr></thead><tbody>';
+      id.data.forEach(function(r) {
+        var perCls = r.per > 0 && r.per < 15 ? 'color:var(--gn)' : r.per > 30 ? 'color:var(--rd)' : '';
+        var pbvCls = r.pbv > 0 && r.pbv < 1.5 ? 'color:var(--gn)' : r.pbv > 3 ? 'color:var(--rd)' : '';
+        h += '<tr style="border-top:1px solid var(--b1)">';
+        h += '<td style="padding:4px 8px;font-weight:600;white-space:nowrap">' + esc(r.industry || '') + '</td>';
+        h += '<td style="padding:4px 6px;text-align:right;font-family:var(--fm)">' + (r.members || 0) + '</td>';
+        h += '<td style="padding:4px 6px;text-align:right;font-family:var(--fm);font-weight:600;' + perCls + '">' + (r.per ? r.per.toFixed(1) : '-') + '</td>';
+        h += '<td style="padding:4px 6px;text-align:right;font-family:var(--fm);font-weight:600;' + pbvCls + '">' + (r.pbv ? r.pbv.toFixed(2) : '-') + '</td>';
+        h += '<td style="padding:4px 6px;text-align:right;font-family:var(--fm)">' + fmtRp(r.market_cap || 0) + '</td>';
+        h += '<td style="padding:4px 6px;text-align:right;font-family:var(--fm)">' + fmtRp(r.value || 0) + '</td>';
+        h += '</tr>';
+      });
+      h += '</tbody></table></div></div>';
+    }
+  } catch (e) { /* industry data not available */ }
+
+  if (h) el.innerHTML = h;
+  else el.innerHTML = '<div style="font-size:10px;color:var(--t3)">No sector enrichment data. Run Cron All sync to populate sectoral_movement & industry_trading tables.</div>';
 }

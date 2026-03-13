@@ -598,6 +598,61 @@ db.exec(`
     UNIQUE(code, period)
   );
   CREATE INDEX IF NOT EXISTS idx_fr_code ON financial_ratios(code);
+
+  CREATE TABLE IF NOT EXISTS daily_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    calc_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    close REAL DEFAULT 0,
+    change_pct REAL DEFAULT 0,
+    sector TEXT DEFAULT '',
+    industry TEXT DEFAULT '',
+    market_cap REAL DEFAULT 0,
+    -- Sub-scores (0-100)
+    score_fundamental REAL DEFAULT 0,
+    score_valuation REAL DEFAULT 0,
+    score_momentum REAL DEFAULT 0,
+    score_composite REAL DEFAULT 0,
+    -- Fundamental raw
+    roe REAL DEFAULT 0,
+    roa REAL DEFAULT 0,
+    npm REAL DEFAULT 0,
+    der REAL DEFAULT 0,
+    -- Valuation raw
+    per REAL DEFAULT 0,
+    pbv REAL DEFAULT 0,
+    per_vs_ind REAL DEFAULT 0,
+    pbv_vs_ind REAL DEFAULT 0,
+    div_yield REAL DEFAULT 0,
+    -- Momentum raw
+    ma5 REAL DEFAULT 0,
+    ma10 REAL DEFAULT 0,
+    ma20 REAL DEFAULT 0,
+    ma50 REAL DEFAULT 0,
+    ma200 REAL DEFAULT 0,
+    ma5_pct REAL DEFAULT 0,
+    ma10_pct REAL DEFAULT 0,
+    ma20_pct REAL DEFAULT 0,
+    ma50_pct REAL DEFAULT 0,
+    ma200_pct REAL DEFAULT 0,
+    rsi14 REAL DEFAULT 0,
+    macd REAL DEFAULT 0,
+    macd_signal REAL DEFAULT 0,
+    macd_hist REAL DEFAULT 0,
+    ret_5d REAL DEFAULT 0,
+    ret_20d REAL DEFAULT 0,
+    fnet_5d REAL DEFAULT 0,
+    fnet_dir TEXT DEFAULT '',
+    -- Weights used
+    w_fundamental REAL DEFAULT 30,
+    w_valuation REAL DEFAULT 25,
+    w_momentum REAL DEFAULT 30,
+    UNIQUE(calc_date, code)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ds_date ON daily_scores(calc_date);
+  CREATE INDEX IF NOT EXISTS idx_ds_code ON daily_scores(code);
+  CREATE INDEX IF NOT EXISTS idx_ds_composite ON daily_scores(calc_date, score_composite);
 `);
 
 // ═══ Default header mappings ═══
