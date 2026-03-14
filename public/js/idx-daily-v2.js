@@ -610,7 +610,7 @@ function renderFlowTbl() {
   el.innerHTML = h;
 }
 
-// ═══ MACRO FOREIGN vs DOMESTIC FLOW CHART ═══
+// ═══ MACRO FOREIGN vs DOMESTIC FLOW CHART (ECharts) ═══
 async function loadMacroFlowChart() {
   var el = document.getElementById('macro-flow-chart'); if (!el) return;
   try {
@@ -618,58 +618,30 @@ async function loadMacroFlowChart() {
     var d = await r.json();
     if (!d.data || d.data.length < 3) { el.innerHTML = '<div style="font-size:10px;color:var(--t3)">No macro flow data.</div>'; return; }
     var data = d.data;
-    var W = 760, H = 110;
-    var pad = {t: 12, r: 55, b: 18, l: 50};
-    var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
-    var n = data.length;
-    var barW = Math.max(3, Math.min(12, cW / n - 2));
-
-    var maxAbs = 0;
-    data.forEach(function(r) { var a = Math.abs(r.f_net); if (a > maxAbs) maxAbs = a; });
-    if (!maxAbs) maxAbs = 1;
-
-    var h2 = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
-    h2 += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Foreign Net Flow</span>';
-    h2 += '<span style="font-size:9px;color:var(--t3)">' + n + ' days</span>';
-    h2 += '<span style="flex:1"></span>';
-    // Latest value badge
     var lastNet = data[data.length - 1].f_net;
     var lastClr = lastNet >= 0 ? 'var(--gn)' : 'var(--rd)';
+    var h2 = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+    h2 += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Foreign Net Flow</span>';
+    h2 += '<span style="font-size:9px;color:var(--t3)">' + data.length + ' days</span>';
+    h2 += '<span style="flex:1"></span>';
     h2 += '<span style="font-size:10px;font-weight:700;color:' + lastClr + '">' + fmtRp(lastNet) + '</span>';
     h2 += '</div>';
-
-    var svg = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" style="display:block">';
-    // Zero line
-    var zeroY = pad.t + cH / 2;
-    svg += '<line x1="' + pad.l + '" y1="' + zeroY + '" x2="' + (W - pad.r) + '" y2="' + zeroY + '" stroke="var(--t3)" stroke-width="0.5"/>';
-    // Grid
-    for (var g = 0; g <= 4; g++) {
-      var gy = pad.t + g / 4 * cH;
-      var gv = maxAbs - g / 2 * maxAbs;
-      svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="0.5"/>';
-      if (g === 0 || g === 2 || g === 4) svg += '<text x="' + (pad.l - 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="end">' + fmtRp(gv) + '</text>';
-    }
-    // Bars
-    data.forEach(function(r, i) {
-      var x = pad.l + (i + 0.5) * (cW / n) - barW / 2;
-      var net = r.f_net;
-      var barH = Math.max(1, Math.abs(net) / maxAbs * (cH / 2));
-      var barY, clr;
-      if (net >= 0) { barY = zeroY - barH; clr = 'var(--gn)'; }
-      else { barY = zeroY; clr = 'var(--rd)'; }
-      svg += '<rect x="' + x + '" y="' + barY + '" width="' + barW + '" height="' + barH + '" fill="' + clr + '" rx="1" opacity="0.8"/>';
-    });
-    // X labels
-    var step = Math.max(1, Math.floor(n / 8));
-    for (var i = 0; i < n; i += step) {
-      var x = pad.l + (i + 0.5) * (cW / n);
-      svg += '<text x="' + x + '" y="' + (H - 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + data[i].date.substring(5) + '</text>';
-    }
-    // Right-side Y axis labels
-    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (pad.t + 6) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">' + fmtRp(maxAbs) + '</text>';
-    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (H - pad.b) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">' + fmtRp(-maxAbs) + '</text>';
-    svg += '</svg>';
-    el.innerHTML = h2 + svg;
+    h2 += BL.container('macro-flow-ec', 110);
+    el.innerHTML = h2;
+    // Deferred render
+    setTimeout(function() {
+      var cel = document.getElementById('macro-flow-ec'); if (!cel) return;
+      var c = BL.init(cel, 'macro-flow'); if (!c) return;
+      var dates = data.map(function(r) { return r.date; });
+      var vals = data.map(function(r) { return r.f_net; });
+      c.setOption({
+        tooltip: { trigger: 'axis', formatter: function(p) { return '<b>' + p[0].axisValue + '</b><br>Net: <b>' + BL.fmtRp(p[0].value) + '</b>'; } },
+        grid: { left: 50, right: 20, top: 8, bottom: 22, containLabel: false },
+        xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 7, formatter: function(v) { return v.substring(5); }, interval: Math.max(0, Math.floor(data.length / 8) - 1) } },
+        yAxis: { type: 'value', axisLabel: { fontSize: 7, formatter: function(v) { return BL.fmtRp(v); } }, splitLine: { lineStyle: { color: '#1e2836' } } },
+        series: [{ type: 'bar', data: vals.map(function(v) { return { value: v, itemStyle: { color: v >= 0 ? BL.colors.green : BL.colors.red, opacity: 0.8 } }; }), barMaxWidth: 12 }]
+      });
+    }, 50);
   } catch (e) { el.innerHTML = '<div style="font-size:10px;color:var(--t3)">Macro flow: ' + e.message + '</div>'; }
 }
 

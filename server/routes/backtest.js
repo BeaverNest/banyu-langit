@@ -80,6 +80,25 @@ router.post('/run', (req, res) => {
     const forceCutloss = req.body.force_cutloss === true || req.body.force_cutloss === 'true';
     const cutlossPct = parseFloat(req.body.cutloss_pct) || -10; // e.g. -10 means -10%
 
+    // Max DD reduce: when portfolio DD exceeds threshold, reduce positions
+    const maxDDReduce = req.body.max_dd_reduce === true || req.body.max_dd_reduce === 'true';
+    const maxDDPct = Math.abs(parseFloat(req.body.max_dd_pct) || 10);
+
+    // Risk Control: freeze + CL + cooldown + probe
+    const riskControl = req.body.risk_control === true || req.body.risk_control === 'true';
+    const rcDDFreeze = Math.abs(parseFloat(req.body.rc_dd_freeze) || 10);
+    const rcCLFreeze = Math.max(1, parseInt(req.body.rc_cl_freeze) || 3);
+    const rcCooldown = Math.max(1, parseInt(req.body.rc_cooldown) || 10);
+    const rcProbePos = Math.max(1, parseInt(req.body.rc_probe_pos) || 1);
+    const rcLiquidate = req.body.rc_liquidate === true || req.body.rc_liquidate === 'true';
+
+    // Risk state machine
+    let rcMode = 'normal'; // normal | freeze | probe
+    let rcConsecLoss = 0;
+    let rcFreezeStart = -1; // day index when freeze started
+    let rcFreezeCount = 0; // total freeze events
+    let rcProbeCount = 0; // times entered probe
+
     // Benchmark: can be index code or stock code
     const benchmark = (req.body.benchmark || 'COMPOSITE').toUpperCase().trim();
 
@@ -173,8 +192,9 @@ router.post('/run', (req, res) => {
     let cap = initCap;
     let peak = initCap;
     let maxDD = 0;
-    const dReturns = [];
+    let dReturns = [];
     let daysExp = 0;
+    let prevDD = 0; // previous day's drawdown % for max DD reduce
 
     // Benchmark: try idx_indices first, then idx_daily (for single stock benchmark)
     let benchData = db.prepare('SELECT trade_date,close FROM idx_indices WHERE index_code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0]);
@@ -235,12 +255,62 @@ router.post('/run', (req, res) => {
             reason, mae: Math.round(pos.mae * 100) / 100, mfe: Math.round(pos.mfe * 100) / 100,
           });
           openPos.splice(pi, 1);
+
+          // ── Risk Control: track consecutive losses ──
+          if (riskControl) {
+            if (pnl > 0) { rcConsecLoss = 0; if (rcMode === 'probe') { rcMode = 'normal'; } }
+            else { rcConsecLoss++; }
+          }
         }
       }
 
+      // ── Risk Control: check freeze triggers ──
+      let justFroze = false;
+      if (riskControl && rcMode === 'normal') {
+        if (rcConsecLoss >= rcCLFreeze) { rcMode = 'freeze'; rcFreezeStart = di; rcFreezeCount++; justFroze = true; }
+        else if (prevDD >= rcDDFreeze) { rcMode = 'freeze'; rcFreezeStart = di; rcFreezeCount++; justFroze = true; }
+      }
+      if (riskControl && rcMode === 'probe' && !justFroze) {
+        if (rcConsecLoss >= rcCLFreeze) { rcMode = 'freeze'; rcFreezeStart = di; rcFreezeCount++; justFroze = true; }
+        else if (prevDD >= rcDDFreeze) { rcMode = 'freeze'; rcFreezeStart = di; rcFreezeCount++; justFroze = true; }
+      }
+
+      // ── Liquidate on freeze: force close all open positions ──
+      if (justFroze && rcLiquidate && openPos.length > 0) {
+        for (let pi = openPos.length - 1; pi >= 0; pi--) {
+          const pos = openPos[pi];
+          const hist = hbc[pos.code];
+          const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
+          const cur = (idx >= 0 && hist[idx]) ? hist[idx].ac : pos.ep;
+          const pnl = (cur - pos.ep) * pos.shares;
+          const pnlP = (cur - pos.ep) / pos.ep * 100;
+          const days = di - pos.edi;
+          const posVal = pos.ep * pos.shares;
+          cap += cur * pos.shares;
+          trades.push({
+            code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: td, xp: cur,
+            shares: pos.shares, pv: Math.round(posVal),
+            pnl: Math.round(pnl), pnlP: Math.round(pnlP * 100) / 100,
+            bars: days, ppb: days > 0 ? Math.round(pnlP / days * 100) / 100 : 0,
+            reason: 'liquidate', mae: Math.round(pos.mae * 100) / 100, mfe: Math.round(pos.mfe * 100) / 100,
+          });
+          openPos.splice(pi, 1);
+        }
+      }
+
+      // Check cooldown → transition to probe
+      if (riskControl && rcMode === 'freeze' && rcFreezeStart >= 0 && (di - rcFreezeStart) >= rcCooldown) {
+        rcMode = 'probe'; rcProbeCount++;
+      }
+
       // ── Entries ──
-      if (openPos.length < maxPos) {
-        const slots = maxPos - openPos.length;
+      let effectiveMaxPos = maxPos;
+      if (riskControl) {
+        if (rcMode === 'freeze') effectiveMaxPos = 0;
+        else if (rcMode === 'probe') effectiveMaxPos = rcProbePos;
+      }
+      if (effectiveMaxPos > 0 && openPos.length < effectiveMaxPos) {
+        const slots = effectiveMaxPos - openPos.length;
         const cands = [];
         // Determine eligible codes for this date
         const dayUniverse = scoreUniverse ? scoreUniverse[td] : null;
@@ -276,6 +346,7 @@ router.post('/run', (req, res) => {
       if (totEq > peak) peak = totEq;
       const dd = peak > 0 ? (peak - totEq) / peak * 100 : 0;
       if (dd > maxDD) maxDD = dd;
+      prevDD = dd; // store for next day's max DD reduce check
       const dr = prevEq > 0 ? (totEq - prevEq) / prevEq : 0;
       dReturns.push(dr);
       const bv = bStart > 0 && bMap[td] ? bMap[td] / bStart * initCap : initCap;
@@ -392,6 +463,91 @@ router.post('/run', (req, res) => {
     const sectors = fm ? db.prepare("SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!='' AND sector IS NOT NULL ORDER BY sector").all(fm).map(r => r.sector) : [];
     const industries = fm ? db.prepare("SELECT DISTINCT industry FROM idx_fundamental WHERE snapshot_month=? AND industry!='' AND industry IS NOT NULL ORDER BY industry").all(fm).map(r => r.industry) : [];
 
+    // ═══ BASELINE COMPARISON — when score_top, auto-run with scope=all ═══
+    let baseline = null;
+    if (scopeType === 'score_top' && trades.length > 0) {
+      try {
+        // Quick baseline: same params but scope=all, no MC
+        const blTrades = [];
+        const blOpenPos = [];
+        let blCap = initCap;
+        let blPeak = initCap;
+        let blMaxDD = 0;
+
+        for (let di = 0; di < allDates.length; di++) {
+          const td = allDates[di];
+          // Exits
+          for (let pi = blOpenPos.length - 1; pi >= 0; pi--) {
+            const pos = blOpenPos[pi];
+            const hist = hbc[pos.code];
+            const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
+            if (idx < 0 || !hist[idx]) continue;
+            const cur = hist[idx].ac;
+            const pnlP = (cur - pos.ep) / pos.ep * 100;
+            const days = di - pos.edi;
+            let reason = null;
+            if (forceCutloss && pnlP <= cutlossPct) reason = 'force_cutloss';
+            else if (days >= 1) {
+              try { const ctx = buildCtx(hist, idx, fundMap[pos.code]); ctx.PnlPct = Math.round(pnlP * 100) / 100; ctx.DaysHeld = days; ctx.EntryPrice = pos.ep; const tk = tokenize(exitF); if (!tk.error && evalF(tk, ctx)) reason = 'exit_signal'; } catch (e) {}
+            }
+            if (reason) {
+              blCap += cur * pos.shares;
+              blTrades.push({ pnl: Math.round((cur - pos.ep) * pos.shares), pnlP: Math.round(pnlP * 100) / 100 });
+              blOpenPos.splice(pi, 1);
+            }
+          }
+          // Entries — NO scoreUniverse filter (all stocks)
+          if (blOpenPos.length < maxPos) {
+            const slots = maxPos - blOpenPos.length;
+            const cands = [];
+            for (const code of Object.keys(hbc)) {
+              if (blOpenPos.find(p => p.code === code)) continue;
+              const hist = hbc[code];
+              const idx = dIdx[code] ? dIdx[code][td] : -1;
+              if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;
+              try { const ctx = buildCtx(hist, idx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, price: hist[idx].ac, value: hist[idx].value || 0 }); } catch (e) {}
+            }
+            cands.sort((a, b) => (b.value || 0) - (a.value || 0));
+            for (const c of cands.slice(0, slots)) {
+              const alloc = blCap / Math.max(1, slots);
+              const sh = Math.floor(Math.floor(alloc / c.price) / 100) * 100;
+              if (sh <= 0) continue;
+              blCap -= sh * c.price;
+              blOpenPos.push({ code: c.code, ep: c.price, shares: sh, ed: td, edi: di });
+            }
+          }
+          // Track DD
+          const blEq = blCap + blOpenPos.reduce((s, p) => { const i = dIdx[p.code] ? dIdx[p.code][td] : -1; return s + (i >= 0 ? hbc[p.code][i].ac * p.shares : p.ep * p.shares); }, 0);
+          if (blEq > blPeak) blPeak = blEq;
+          const dd = blPeak > 0 ? (blPeak - blEq) / blPeak * 100 : 0;
+          if (dd > blMaxDD) blMaxDD = dd;
+        }
+        // Close remaining
+        const lastD2 = allDates[allDates.length - 1];
+        blOpenPos.forEach(p => { const idx = dIdx[p.code] ? dIdx[p.code][lastD2] : -1; const cur = idx >= 0 ? hbc[p.code][idx].ac : p.ep; blCap += cur * p.shares; blTrades.push({ pnl: Math.round((cur - p.ep) * p.shares), pnlP: Math.round((cur - p.ep) / p.ep * 10000) / 100 }); });
+
+        const blFinalEq = Math.round(blCap);
+        const blTotRet = Math.round((blFinalEq / initCap - 1) * 10000) / 100;
+        const blW = blTrades.filter(t => t.pnl > 0);
+        const blWr = blTrades.length ? Math.round(blW.length / blTrades.length * 1000) / 10 : 0;
+        const blAvgW = blW.length ? Math.round(blW.reduce((s, t) => s + t.pnlP, 0) / blW.length * 100) / 100 : 0;
+        const blL = blTrades.filter(t => t.pnl <= 0);
+        const blAvgL = blL.length ? Math.round(blL.reduce((s, t) => s + t.pnlP, 0) / blL.length * 100) / 100 : 0;
+        const blGP = blW.reduce((s, t) => s + t.pnl, 0);
+        const blGL = Math.abs(blL.reduce((s, t) => s + t.pnl, 0));
+        const blPF = blGL > 0 ? Math.round(blGP / blGL * 100) / 100 : 0;
+        const blAvgPL = blTrades.length ? Math.round(blTrades.reduce((s, t) => s + t.pnlP, 0) / blTrades.length * 100) / 100 : 0;
+        const blExp = blTrades.length ? Math.round((blWr / 100 * blAvgW + (1 - blWr / 100) * blAvgL) * 100) / 100 : 0;
+
+        baseline = {
+          total_trades: blTrades.length, win_rate: blWr, total_return: blTotRet,
+          final_equity: blFinalEq, max_drawdown: Math.round(blMaxDD * 100) / 100,
+          profit_factor: blPF, avg_pl_pct: blAvgPL, expectancy: blExp,
+          scope: 'All Stocks'
+        };
+      } catch (blErr) { /* baseline failed, skip */ }
+    }
+
     res.json({
       stats: { total_trades: trades.length, win_rate: wr, wins_count: W.length, losses_count: L.length,
         avg_win: aw, avg_loss: al, expectancy: exp, profit_factor: pf, sharpe,
@@ -411,8 +567,11 @@ router.post('/run', (req, res) => {
       monte_carlo: mc,
       period: { start: allDates[0], end: lastD, days: allDates.length },
       benchmark, formula: entryF, exit_formula: exitF,
-      params: { max_positions: maxPos, scope_type: scopeType, scope_value: scopeValue, lot_method: lotMethod, force_cutloss: forceCutloss, cutloss_pct: cutlossPct },
+      params: { max_positions: maxPos, scope_type: scopeType, scope_value: scopeValue, lot_method: lotMethod, force_cutloss: forceCutloss, cutloss_pct: cutlossPct,
+        risk_control: riskControl, rc_dd_freeze: -rcDDFreeze, rc_cl_freeze: rcCLFreeze, rc_cooldown: rcCooldown, rc_probe_pos: rcProbePos, rc_liquidate: rcLiquidate,
+        rc_stats: riskControl ? { freeze_count: rcFreezeCount, probe_count: rcProbeCount, final_mode: rcMode, final_consec_loss: rcConsecLoss } : null },
       scope_options: { sectors, industries },
+      baseline,
       compute_time: Date.now() - t0
     });
   } catch (e) { console.error('BT error:', e); res.json({ error: e.message }); }

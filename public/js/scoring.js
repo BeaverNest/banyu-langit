@@ -2,34 +2,42 @@
 
 var scrScoreData = null;
 var scrScoreSort = 'score_composite', scrScoreDir = 'desc';
-var scrScoreWeights = { fundamental: 30, valuation: 25, momentum: 30 };
+var scrScoreWeights = { fundamental: 25, valuation: 20, momentum: 20, demand: 20, foreign: 15 };
 var scrScoreLoading = false;
 var scrScoreColToggleOpen = false;
 
 // Column order + visibility (same pattern as IDX Daily)
 var scrScoreColOrder = [
-  'code','name','close','chg','composite','fundamental','valuation','momentum',
+  'code','name','close','chg','composite','fundamental','valuation','momentum','demand','foreign',
   'sector','industry','roe','roa','npm','der','per','pbv','per_vs_ind','pbv_vs_ind','div_yield',
   'ma5','ma10','ma20','ma50','ma200','ma5_pct','ma10_pct','ma20_pct','ma50_pct','ma200_pct',
-  'rsi14','macd','macd_hist','ret_5d','ret_20d','fnet_5d','fnet_dir','mktcap'
+  'rsi14','macd','macd_hist','ret_5d','ret_20d','fnet_5d','fnet_dir',
+  'bid_offer_ratio','bid_offer_5d','rel_vol','freq_spike','val_spike',
+  'fnet_10d','fnet_20d','foreign_pct_val','foreign_accum_streak','fnet_vs_avg','mktcap'
 ];
 var scrScoreCols = {
   code:true, name:true, close:true, chg:true, composite:true, fundamental:true, valuation:true, momentum:true,
+  demand:true, foreign:true,
   sector:true, industry:true, roe:false, roa:false, npm:false, der:false, per:false, pbv:false,
   per_vs_ind:false, pbv_vs_ind:false, div_yield:false,
   ma5:false, ma10:false, ma20:false, ma50:false, ma200:false,
   ma5_pct:false, ma10_pct:false, ma20_pct:false, ma50_pct:false, ma200_pct:false,
   rsi14:false, macd:false, macd_hist:false,
-  ret_5d:false, ret_20d:false, fnet_5d:false, fnet_dir:false, mktcap:false
+  ret_5d:false, ret_20d:false, fnet_5d:false, fnet_dir:false,
+  bid_offer_ratio:false, bid_offer_5d:false, rel_vol:false, freq_spike:false, val_spike:false,
+  fnet_10d:false, fnet_20d:false, foreign_pct_val:false, foreign_accum_streak:false, fnet_vs_avg:false, mktcap:false
 };
 var scrScoreColLabels = {
   code:'Code', name:'Name', close:'Close', chg:'Chg%', composite:'Composite', fundamental:'Fund', valuation:'Value', momentum:'Momentum',
+  demand:'Demand', foreign:'Foreign',
   sector:'Sector', industry:'Industry', roe:'ROE', roa:'ROA', npm:'NPM', der:'DER', per:'PER', pbv:'PBV',
   per_vs_ind:'PER/Ind', pbv_vs_ind:'PBV/Ind', div_yield:'DivYld',
   ma5:'MA5', ma10:'MA10', ma20:'MA20', ma50:'MA50', ma200:'MA200',
   ma5_pct:'MA5%', ma10_pct:'MA10%', ma20_pct:'MA20%', ma50_pct:'MA50%', ma200_pct:'MA200%',
   rsi14:'RSI', macd:'MACD', macd_hist:'MACD.H',
-  ret_5d:'Ret5d', ret_20d:'Ret20d', fnet_5d:'FNet5d', fnet_dir:'FDir', mktcap:'MktCap'
+  ret_5d:'Ret5d', ret_20d:'Ret20d', fnet_5d:'FNet5d', fnet_dir:'FDir',
+  bid_offer_ratio:'B/O', bid_offer_5d:'B/O.5d', rel_vol:'RelVol', freq_spike:'Freq↑', val_spike:'Val↑',
+  fnet_10d:'FNet10d', fnet_20d:'FNet20d', foreign_pct_val:'F%Val', foreign_accum_streak:'FStrk', fnet_vs_avg:'FSpike', mktcap:'MktCap'
 };
 var scrScoreColAlign = {
   code:'al', name:'al', sector:'al', industry:'al', fnet_dir:'al'
@@ -55,8 +63,8 @@ function renderScoringShell(el) {
   // ── Weight controls ──
   h += '<div style="padding:8px 12px;border-bottom:1px solid var(--b1);display:flex;gap:10px;align-items:center;flex-wrap:wrap">';
   h += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Weights:</span>';
-  ['fundamental','valuation','momentum'].forEach(function(k) {
-    var label = k === 'fundamental' ? '📊 Fund' : k === 'valuation' ? '💰 Value' : '📈 Mom';
+  ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
+    var label = k === 'fundamental' ? '📊 Fund' : k === 'valuation' ? '💰 Value' : k === 'momentum' ? '📈 Mom' : k === 'demand' ? '🔥 Demand' : '🌐 Foreign';
     h += '<label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--t2)">' + label;
     h += ' <input type="number" id="sw-' + k + '" value="' + scrScoreWeights[k] + '" min="0" max="100" step="5" style="width:36px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px 3px;color:var(--t1);font-family:var(--fm);font-size:10px;text-align:center;outline:none">';
     h += '%</label>';
@@ -106,7 +114,19 @@ function scoreToggleCol(k) {
   scoreRenderTable();
 }
 function scoreResetCols() {
-  scrScoreColOrder = ['code','name','close','chg','composite','fundamental','valuation','momentum','sector','industry','roe','roa','npm','der','per','pbv','per_vs_ind','pbv_vs_ind','div_yield','ma5','ma10','ma20','ma50','ma200','ma5_pct','ma10_pct','ma20_pct','ma50_pct','ma200_pct','rsi14','macd','macd_hist','ret_5d','ret_20d','fnet_5d','fnet_dir','mktcap'];
+  scrScoreColOrder = ['code','name','close','chg','composite','fundamental','valuation','momentum','demand','foreign','sector','industry','roe','roa','npm','der','per','pbv','per_vs_ind','pbv_vs_ind','div_yield','ma5','ma10','ma20','ma50','ma200','ma5_pct','ma10_pct','ma20_pct','ma50_pct','ma200_pct','rsi14','macd','macd_hist','ret_5d','ret_20d','fnet_5d','fnet_dir','bid_offer_ratio','bid_offer_5d','rel_vol','freq_spike','val_spike','fnet_10d','fnet_20d','foreign_pct_val','foreign_accum_streak','fnet_vs_avg','mktcap'];
+  scrScoreCols = {
+    code:true, name:true, close:true, chg:true, composite:true, fundamental:true, valuation:true, momentum:true,
+    demand:true, foreign:true,
+    sector:true, industry:true, roe:false, roa:false, npm:false, der:false, per:false, pbv:false,
+    per_vs_ind:false, pbv_vs_ind:false, div_yield:false,
+    ma5:false, ma10:false, ma20:false, ma50:false, ma200:false,
+    ma5_pct:false, ma10_pct:false, ma20_pct:false, ma50_pct:false, ma200_pct:false,
+    rsi14:false, macd:false, macd_hist:false,
+    ret_5d:false, ret_20d:false, fnet_5d:false, fnet_dir:false,
+    bid_offer_ratio:false, bid_offer_5d:false, rel_vol:false, freq_spike:false, val_spike:false,
+    fnet_10d:false, fnet_20d:false, foreign_pct_val:false, foreign_accum_streak:false, fnet_vs_avg:false, mktcap:false
+  };
   saveScoreCols();
   var panel = $('score-col-toggle'); if (panel) panel.innerHTML = scoreRenderColPanel();
   scoreRenderTable();
@@ -154,14 +174,16 @@ function scoreThDrop(e) {
 async function calcScore() {
   var btn = $('score-calc-btn'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Calculating...'; }
   var status = $('score-status'); if (status) status.textContent = 'Computing scores for all stocks...';
-  scrScoreWeights.fundamental = parseInt($('sw-fundamental').value) || 30;
-  scrScoreWeights.valuation = parseInt($('sw-valuation').value) || 25;
-  scrScoreWeights.momentum = parseInt($('sw-momentum').value) || 30;
+  scrScoreWeights.fundamental = parseInt($('sw-fundamental').value) || 25;
+  scrScoreWeights.valuation = parseInt($('sw-valuation').value) || 20;
+  scrScoreWeights.momentum = parseInt($('sw-momentum').value) || 20;
+  scrScoreWeights.demand = parseInt($('sw-demand').value) || 20;
+  scrScoreWeights.foreign = parseInt($('sw-foreign').value) || 15;
   localStorage.setItem('scoreWeights', JSON.stringify(scrScoreWeights));
   try {
     var r = await fetch('/api/idx/composite-score', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ w_fundamental: scrScoreWeights.fundamental, w_valuation: scrScoreWeights.valuation, w_momentum: scrScoreWeights.momentum })
+      body: JSON.stringify({ w_fundamental: scrScoreWeights.fundamental, w_valuation: scrScoreWeights.valuation, w_momentum: scrScoreWeights.momentum, w_demand: scrScoreWeights.demand, w_foreign: scrScoreWeights.foreign })
     });
     scrScoreData = await r.json();
     if (status) status.textContent = scrScoreData.ok ? '✅ ' + scrScoreData.total_scored + ' stocks scored (' + scrScoreData.trade_date + ')' : '❌ ' + (scrScoreData.error || 'Error');
@@ -183,6 +205,8 @@ async function loadLastScores() {
         var ef = $('sw-fundamental'); if (ef) ef.value = d.weights.fundamental;
         var ev = $('sw-valuation'); if (ev) ev.value = d.weights.valuation;
         var em = $('sw-momentum'); if (em) em.value = d.weights.momentum;
+        var ed = $('sw-demand'); if (ed) ed.value = d.weights.demand || 20;
+        var efr = $('sw-foreign'); if (efr) efr.value = d.weights.foreign || 15;
       }
       if (status) status.textContent = d.data.length + ' stocks · ' + (d.trade_date || '');
       scoreRenderTable();
@@ -204,12 +228,16 @@ function scoreRenderTable() {
   var fieldMap = {
     code:'code', name:'name', close:'close', chg:'change_pct', composite:'score_composite',
     fundamental:'score_fundamental', valuation:'score_valuation', momentum:'score_momentum',
+    demand:'score_demand', foreign:'score_foreign',
     sector:'sector', industry:'industry', roe:'roe', roa:'roa', npm:'npm', der:'der', per:'per', pbv:'pbv',
     per_vs_ind:'per_vs_ind', pbv_vs_ind:'pbv_vs_ind', div_yield:'div_yield',
     ma5:'ma5', ma10:'ma10', ma20:'ma20', ma50:'ma50', ma200:'ma200',
     ma5_pct:'ma5_pct', ma10_pct:'ma10_pct', ma20_pct:'ma20_pct', ma50_pct:'ma50_pct', ma200_pct:'ma200_pct',
     rsi14:'rsi14', macd:'macd', macd_hist:'macd_hist',
-    ret_5d:'ret_5d', ret_20d:'ret_20d', fnet_5d:'fnet_5d', fnet_dir:'fnet_dir', mktcap:'market_cap'
+    ret_5d:'ret_5d', ret_20d:'ret_20d', fnet_5d:'fnet_5d', fnet_dir:'fnet_dir',
+    bid_offer_ratio:'bid_offer_ratio', bid_offer_5d:'bid_offer_5d', rel_vol:'rel_vol', freq_spike:'freq_spike', val_spike:'val_spike',
+    fnet_10d:'fnet_10d', fnet_20d:'fnet_20d', foreign_pct_val:'foreign_pct_val', foreign_accum_streak:'foreign_accum_streak', fnet_vs_avg:'fnet_vs_avg',
+    mktcap:'market_cap'
   };
   var sf = fieldMap[sortKey] || 'score_composite';
   if (sf === 'code' || sf === 'name' || sf === 'sector' || sf === 'industry' || sf === 'fnet_dir') {
@@ -268,8 +296,8 @@ function scoreRenderCell(k, r) {
   if (k === 'fnet_5d') { var fc = (r.fnet_5d || 0) > 0 ? 'up' : (r.fnet_5d || 0) < 0 ? 'dn' : ''; return '<td class="ar ' + fc + '" style="' + base + 'font-weight:600">' + fmtRp(r.fnet_5d || 0) + '</td>'; }
 
   // Score columns — color coded with background
-  if (k === 'composite' || k === 'fundamental' || k === 'valuation' || k === 'momentum') {
-    var field = k === 'composite' ? 'score_composite' : k === 'fundamental' ? 'score_fundamental' : k === 'valuation' ? 'score_valuation' : 'score_momentum';
+  if (k === 'composite' || k === 'fundamental' || k === 'valuation' || k === 'momentum' || k === 'demand' || k === 'foreign') {
+    var field = k === 'composite' ? 'score_composite' : k === 'fundamental' ? 'score_fundamental' : k === 'valuation' ? 'score_valuation' : k === 'momentum' ? 'score_momentum' : k === 'demand' ? 'score_demand' : 'score_foreign';
     var v = r[field] || 0;
     var hue = v >= 70 ? '142' : v >= 50 ? '45' : v >= 30 ? '25' : '0'; // green → yellow → orange → red
     var sat = Math.min(80, v) + '%';
@@ -300,6 +328,16 @@ function scoreRenderCell(k, r) {
   if (k === 'macd_hist') { var mh = r.macd_hist || 0; var mhc = mh > 0 ? 'color:var(--gn)' : mh < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + mhc + '">' + mh.toFixed(0) + '</td>'; }
   // Returns
   if (k === 'ret_5d' || k === 'ret_20d') { var rv = r[k] || 0; var rvc = rv > 0 ? 'color:var(--gn)' : rv < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + rvc + '">' + (rv > 0 ? '+' : '') + rv.toFixed(2) + '%</td>'; }
+
+  // Demand/Supply columns
+  if (k === 'bid_offer_ratio' || k === 'bid_offer_5d') { var bo = r[k] || 0; var boc = bo > 0.6 ? 'color:var(--gn)' : bo < 0.4 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + boc + '">' + bo.toFixed(2) + '</td>'; }
+  if (k === 'rel_vol' || k === 'freq_spike' || k === 'val_spike') { var sv = r[k] || 0; var svc = sv > 2 ? 'color:var(--gn);font-weight:600' : sv > 1.5 ? 'color:var(--am)' : ''; return '<td class="ar" style="' + base + svc + '">' + sv.toFixed(1) + 'x</td>'; }
+
+  // Foreign Smart Money columns
+  if (k === 'fnet_10d' || k === 'fnet_20d') { var fn2 = r[k] || 0; var fnc2 = fn2 > 0 ? 'color:var(--gn)' : fn2 < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + fnc2 + '">' + fmtRp(fn2) + '</td>'; }
+  if (k === 'foreign_pct_val') { var fp = r.foreign_pct_val || 0; return '<td class="ar" style="' + base + (fp > 30 ? 'color:var(--am)' : '') + '">' + fp.toFixed(1) + '%</td>'; }
+  if (k === 'foreign_accum_streak') { var fas = r.foreign_accum_streak || 0; var fasc = fas >= 5 ? 'color:var(--gn);font-weight:600' : fas >= 3 ? 'color:var(--gn)' : ''; return '<td class="ar" style="' + base + fasc + '">' + fas + 'd</td>'; }
+  if (k === 'fnet_vs_avg') { var fva = r.fnet_vs_avg || 0; var fvac = fva > 1.5 ? 'color:var(--gn)' : fva < -1.5 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + fvac + '">' + fva.toFixed(1) + 'x</td>'; }
 
   return '<td class="ar" style="' + base + '">-</td>';
 }
@@ -354,57 +392,9 @@ function renderICView(el, d) {
   h += ' IC > 0.05 is good, > 0.10 is excellent for equity markets.';
   h += '</div>';
 
-  // IC Time Series Chart
+  // IC Time Series Chart (ECharts)
   var data = d.data;
-  var W = 760, H = 160;
-  var pad = {t: 14, r: 45, b: 22, l: 45};
-  var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
-  var icVals = data.map(function(r) { return r.ic_composite; });
-  var maxIC = Math.max(0.3, Math.max.apply(null, icVals.map(function(v) { return Math.abs(v); })));
-  var zeroY = pad.t + cH / 2;
-
-  var svg = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" style="display:block">';
-  // Zero line
-  svg += '<line x1="' + pad.l + '" y1="' + zeroY + '" x2="' + (W - pad.r) + '" y2="' + zeroY + '" stroke="var(--t3)" stroke-width="0.5"/>';
-  // Grid
-  for (var g = 0; g <= 4; g++) {
-    var gy = pad.t + g / 4 * cH;
-    var gv = maxIC - g / 2 * maxIC;
-    svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="0.5"/>';
-    svg += '<text x="' + (pad.l - 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="end">' + gv.toFixed(2) + '</text>';
-  }
-  // IC lines: composite (main), + sub-scores (lighter)
-  function icLine(vals, color, width, opacity) {
-    var pts = [];
-    vals.forEach(function(v, i) {
-      var x = pad.l + i / (vals.length - 1) * cW;
-      var y = zeroY - (v / maxIC) * (cH / 2);
-      pts.push(x + ',' + y);
-    });
-    svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="' + width + '" opacity="' + opacity + '"/>';
-  }
-  icLine(data.map(function(r) { return r.ic_fundamental; }), 'var(--bl)', '1', '0.3');
-  icLine(data.map(function(r) { return r.ic_valuation; }), 'var(--am)', '1', '0.3');
-  icLine(data.map(function(r) { return r.ic_momentum; }), 'var(--gn)', '1', '0.3');
-  icLine(icVals, '#fff', '2', '1');
-  // End dot
-  var lastX = pad.l + (data.length - 1) / (data.length - 1) * cW;
-  var lastY = zeroY - (icVals[icVals.length - 1] / maxIC) * (cH / 2);
-  svg += '<circle cx="' + lastX + '" cy="' + lastY + '" r="3" fill="#fff"/>';
-  // X labels
-  var step = Math.max(1, Math.floor(data.length / 8));
-  for (var i = 0; i < data.length; i += step) {
-    var x = pad.l + i / (data.length - 1) * cW;
-    svg += '<text x="' + x + '" y="' + (H - 4) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + data[i].date.substring(5) + '</text>';
-  }
-  svg += '</svg>';
-  h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);margin-bottom:6px">' + svg + '</div>';
-  h += '<div style="display:flex;gap:10px;font-size:8px;color:var(--t3);margin-bottom:14px">';
-  h += '<span>━ <span style="color:#fff">Composite</span></span>';
-  h += '<span style="opacity:.5">━ <span style="color:var(--bl)">Fund</span></span>';
-  h += '<span style="opacity:.5">━ <span style="color:var(--am)">Value</span></span>';
-  h += '<span style="opacity:.5">━ <span style="color:var(--gn)">Momentum</span></span>';
-  h += '</div>';
+  h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);margin-bottom:6px">' + BL.container('ic-chart', 280) + '</div>';
 
   // Detail table
   h += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table class="bei-tbl" style="font-size:10px"><thead><tr>';
@@ -430,9 +420,36 @@ function renderICView(el, d) {
   h += '</tbody></table></div>';
   h += '</div>';
   el.innerHTML = h;
+  // Deferred ECharts render
+  setTimeout(function(){ icRenderChart(d.data); }, 50);
 }
 
-// ═══ BACKFILL UI ═══
+function icRenderChart(data) {
+  var el = $('ic-chart'); if (!el) return;
+  var c = BL.init(el, 'ic-chart'); if (!c) return;
+  var dates = data.map(function(r) { return r.date; });
+  c.setOption({
+    tooltip: { trigger: 'axis', formatter: function(p) {
+      var h = '<b>' + p[0].axisValue + '</b>';
+      p.forEach(function(s) { h += '<br><span style="color:' + s.color + '">●</span> ' + s.seriesName + ': <b>' + (typeof s.value === 'number' ? s.value.toFixed(4) : s.value) + '</b>'; });
+      return h;
+    }},
+    legend: { data: ['Composite','Fund','Value','Momentum','Demand','Foreign'], top: 0, left: 0, textStyle: { fontSize: 9 } },
+    grid: { left: 50, right: 20, top: 28, bottom: 44, containLabel: false },
+    dataZoom: BL.dataZoom(),
+    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 7, formatter: function(v) { return v.substring(5); } } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 8, formatter: function(v) { return v.toFixed(2); } },
+      splitLine: { lineStyle: { color: '#1e2836' } } },
+    series: [
+      { name: 'Composite', type: 'line', data: data.map(function(r) { return r.ic_composite; }), symbol: 'none', lineStyle: { width: 2.5, color: '#e0e6ed' }, itemStyle: { color: '#e0e6ed' }, z: 10 },
+      { name: 'Fund', type: 'line', data: data.map(function(r) { return r.ic_fundamental; }), symbol: 'none', lineStyle: { width: 1.5, color: BL.colors.blue }, itemStyle: { color: BL.colors.blue } },
+      { name: 'Value', type: 'line', data: data.map(function(r) { return r.ic_valuation; }), symbol: 'none', lineStyle: { width: 1.5, color: BL.colors.amber }, itemStyle: { color: BL.colors.amber } },
+      { name: 'Momentum', type: 'line', data: data.map(function(r) { return r.ic_momentum; }), symbol: 'none', lineStyle: { width: 1.5, color: BL.colors.green }, itemStyle: { color: BL.colors.green } },
+      { name: 'Demand', type: 'line', data: data.map(function(r) { return r.ic_demand || 0; }), symbol: 'none', lineStyle: { width: 1.5, color: '#fc8452' }, itemStyle: { color: '#fc8452' } },
+      { name: 'Foreign', type: 'line', data: data.map(function(r) { return r.ic_foreign || 0; }), symbol: 'none', lineStyle: { width: 1.5, color: '#73c0de' }, itemStyle: { color: '#73c0de' } }
+    ]
+  });
+}
 var backfillRunning = false;
 
 function renderBackfillUI() {

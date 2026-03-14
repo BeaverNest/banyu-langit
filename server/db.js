@@ -644,10 +644,27 @@ db.exec(`
     ret_20d REAL DEFAULT 0,
     fnet_5d REAL DEFAULT 0,
     fnet_dir TEXT DEFAULT '',
+    -- Demand/Supply raw (NEW)
+    bid_offer_ratio REAL DEFAULT 0,
+    bid_offer_5d REAL DEFAULT 0,
+    rel_vol REAL DEFAULT 0,
+    freq_spike REAL DEFAULT 0,
+    val_spike REAL DEFAULT 0,
+    -- Foreign Smart Money raw (NEW)
+    fnet_10d REAL DEFAULT 0,
+    fnet_20d REAL DEFAULT 0,
+    foreign_pct_val REAL DEFAULT 0,
+    foreign_accum_streak INTEGER DEFAULT 0,
+    fnet_vs_avg REAL DEFAULT 0,
+    -- Sub-scores (NEW)
+    score_demand REAL DEFAULT 0,
+    score_foreign REAL DEFAULT 0,
     -- Weights used
     w_fundamental REAL DEFAULT 30,
     w_valuation REAL DEFAULT 25,
     w_momentum REAL DEFAULT 30,
+    w_demand REAL DEFAULT 0,
+    w_foreign REAL DEFAULT 0,
     UNIQUE(calc_date, code)
   );
   CREATE INDEX IF NOT EXISTS idx_ds_date ON daily_scores(calc_date);
@@ -677,6 +694,24 @@ try {
   if (!cols.includes('upload_type')) db.exec("ALTER TABLE upload_logs ADD COLUMN upload_type TEXT DEFAULT ''");
   if (!cols.includes('warnings')) db.exec("ALTER TABLE upload_logs ADD COLUMN warnings TEXT DEFAULT ''");
 } catch (e) { console.error('Migration:', e.message); }
+
+// Auto-migrate daily_scores for new demand/supply + foreign columns
+try {
+  const dsCols = db.prepare("PRAGMA table_info(daily_scores)").all().map(c => c.name);
+  const newCols = [
+    ['bid_offer_ratio','REAL DEFAULT 0'],['bid_offer_5d','REAL DEFAULT 0'],
+    ['rel_vol','REAL DEFAULT 0'],['freq_spike','REAL DEFAULT 0'],['val_spike','REAL DEFAULT 0'],
+    ['fnet_10d','REAL DEFAULT 0'],['fnet_20d','REAL DEFAULT 0'],
+    ['foreign_pct_val','REAL DEFAULT 0'],['foreign_accum_streak','INTEGER DEFAULT 0'],['fnet_vs_avg','REAL DEFAULT 0'],
+    ['score_demand','REAL DEFAULT 0'],['score_foreign','REAL DEFAULT 0'],
+    ['w_demand','REAL DEFAULT 0'],['w_foreign','REAL DEFAULT 0']
+  ];
+  newCols.forEach(([col, type]) => {
+    if (!dsCols.includes(col)) {
+      try { db.exec(`ALTER TABLE daily_scores ADD COLUMN ${col} ${type}`); } catch(e2) {}
+    }
+  });
+} catch (e) { console.error('Migration daily_scores:', e.message); }
 
 // ═══ Helper functions ═══
 function latestSnap() {

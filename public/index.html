@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/css/market.css">
 <link rel="stylesheet" href="/css/components.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
 </head>
 <body>
 
@@ -143,6 +144,7 @@
       <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
       <button class="wt-b" onclick="anaSubTab('backtest',this)">Backtest</button>
       <button class="wt-b" onclick="anaSubTab('scoring',this)">Composite Score</button>
+      <button class="wt-b" onclick="anaSubTab('portbuilder',this)">Portfolio Builder</button>
     </div>
     <div class="wp on" id="ana-screener"><div id="scr-content"></div></div>
     <div class="wp" id="ana-sectors"><div id="sector-content"><div class="ne">Loading...</div></div></div>
@@ -150,6 +152,7 @@
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure backtest</div></div></div>
     <div class="wp" id="ana-scoring"><div id="scoring-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Configure scoring</div></div></div>
+    <div class="wp" id="ana-portbuilder"><div id="pb-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Portfolio Builder</div></div></div>
   </div>
 
   <!-- TAB 5: PORTFOLIO -->
@@ -212,6 +215,7 @@
 
 <!-- SCRIPTS -->
 <script src="/js/utils.js"></script>
+<script src="/js/echart-helper.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/compare.js"></script>
@@ -222,6 +226,7 @@
 <script src="/js/sector-intelligence.js"></script>
 <script src="/js/backtest.js"></script>
 <script src="/js/scoring.js"></script>
+<script src="/js/portfolio-builder.js"></script>
 <script src="/js/diary.js"></script>
 <script src="/js/watchlist.js"></script>
 <script src="/js/portfolio.js"></script>

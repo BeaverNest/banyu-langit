@@ -293,14 +293,13 @@ function renderTickerPage(d) {
       }
     }
 
-    // ─── ② SECTOR COMPARISON — Bullet Chart ───
+    // ─── ② SECTOR COMPARISON — Bullet Chart (ECharts) ───
     if (d.sector_peers && hasIdx) {
       var sp = d.sector_peers;
       var ip = d.industry_peers;
       h += '<div class="tp-section">vs ' + esc(sp.sector) + ' Sector (' + sp.count + ' stocks)';
       if (ip) h += ' · ' + esc(ip.industry) + ' (' + ip.count + ')';
       h += '</div>';
-      var W = 780, rowH = 28, padL = 50, padR = 60;
       var metrics = [
         {k:'per', label:'PER', val: fund.per, fmt:function(v){return v.toFixed(1);}},
         {k:'pbv', label:'PBV', val: fund.pbv, fmt:function(v){return v.toFixed(2);}},
@@ -308,49 +307,17 @@ function renderTickerPage(d) {
         {k:'der', label:'DER', val: fund.der, fmt:function(v){return v.toFixed(2);}},
         {k:'npm', label:'NPM', val: fund.npm, fmt:function(v){return v.toFixed(1)+'%';}}
       ].filter(function(m){return m.val && sp[m.k];});
-      var svgH = metrics.length * rowH + 8;
-      var svg = '<svg width="100%" viewBox="0 0 ' + W + ' ' + svgH + '" style="display:block">';
-      metrics.forEach(function(m, i) {
-        var y = i * rowH + 14;
-        var s = sp[m.k];
-        var rangeMin = Math.min(s.p25, m.val) * 0.8;
-        var rangeMax = Math.max(s.p75, m.val) * 1.2;
-        if (rangeMax <= rangeMin) rangeMax = rangeMin + 1;
-        var barW = W - padL - padR;
-        function xPos(v) { return padL + Math.max(0, Math.min(barW, (v - rangeMin) / (rangeMax - rangeMin) * barW)); }
-        // Label
-        svg += '<text x="' + (padL - 6) + '" y="' + (y + 4) + '" fill="var(--t2)" font-size="10" font-family="var(--fm)" text-anchor="end" font-weight="600">' + m.label + '</text>';
-        // Background bar (full range)
-        svg += '<rect x="' + padL + '" y="' + (y - 5) + '" width="' + barW + '" height="10" fill="var(--b1)" rx="2"/>';
-        // P25-P75 range (sector)
-        var x25 = xPos(s.p25), x75 = xPos(s.p75);
-        svg += '<rect x="' + x25 + '" y="' + (y - 5) + '" width="' + Math.max(2, x75 - x25) + '" height="10" fill="var(--blB)" rx="2" stroke="var(--bl)" stroke-width="0.5" opacity="0.6"/>';
-        // Median line
-        svg += '<line x1="' + xPos(s.median) + '" y1="' + (y - 7) + '" x2="' + xPos(s.median) + '" y2="' + (y + 7) + '" stroke="var(--t3)" stroke-width="1.5"/>';
-        // Industry median (if available)
-        if (ip && ip[m.k]) {
-          var imx = xPos(ip[m.k].median);
-          svg += '<line x1="' + imx + '" y1="' + (y - 6) + '" x2="' + imx + '" y2="' + (y + 6) + '" stroke="var(--am)" stroke-width="1.5" stroke-dasharray="2,1"/>';
-        }
-        // Stock position dot
-        var sx = xPos(m.val);
-        var dotColor = 'var(--bl)';
-        if (m.k === 'roe' || m.k === 'npm') dotColor = m.val > s.median ? 'var(--gn)' : 'var(--rd)';
-        else if (m.k === 'per' || m.k === 'pbv' || m.k === 'der') dotColor = m.val < s.median ? 'var(--gn)' : m.val > s.p75 ? 'var(--rd)' : 'var(--am)';
-        svg += '<circle cx="' + sx + '" cy="' + y + '" r="5" fill="' + dotColor + '" stroke="var(--bg0)" stroke-width="1.5"/>';
-        // Value label
-        svg += '<text x="' + (W - padR + 6) + '" y="' + (y + 4) + '" fill="' + dotColor + '" font-size="10" font-family="var(--fm)" font-weight="700">' + m.fmt(m.val) + '</text>';
-      });
-      svg += '</svg>';
-      h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);padding:4px 0">' + svg + '</div>';
+      h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);padding:4px 0">' + BL.container('gs-bullet-chart', metrics.length * 32 + 16) + '</div>';
       h += '<div style="display:flex;gap:12px;font-size:8px;color:var(--t3);margin-top:3px;padding:0 4px">';
       h += '<span>● Stock</span><span style="color:var(--t3)">│ Sector Median</span>';
       if (ip) h += '<span style="color:var(--am)">╎ Industry Median</span>';
       h += '<span style="color:var(--bl);opacity:.5">█ Sector P25–P75</span>';
       h += '</div>';
+      // Store data for deferred render
+      window._gsBulletData = {metrics:metrics,sp:sp,ip:ip,code:code,fund:fund};
     }
 
-    // ─── ③ INDUSTRY PER/PBV BAND — Time Series ───
+    // ─── ③ INDUSTRY PER/PBV BAND — Time Series (ECharts) ───
     if (d.industry_ts && d.industry_ts.data.length >= 5) {
       var its = d.industry_ts.data;
       window._fundBandMetric = window._fundBandMetric || 'pbv';
@@ -366,54 +333,9 @@ function renderTickerPage(d) {
         var variance = vals.reduce(function(a, b) { return a + (b - mean) * (b - mean); }, 0) / vals.length;
         var stddev = Math.sqrt(variance);
         var stockVal = hasIdx ? (bm === 'pbv' ? fund.pbv : fund.per) : 0;
-        var dates = its.map(function(r) { return r.trade_date; });
-        var W2 = 780, H2 = 160;
-        var pad2 = {t: 16, r: 55, b: 22, l: 45};
-        var cW2 = W2 - pad2.l - pad2.r, cH2 = H2 - pad2.t - pad2.b;
-        var allVals = vals.slice();
-        if (stockVal) allVals.push(stockVal);
-        var minY = Math.min(mean - 2 * stddev, Math.min.apply(null, allVals)) * 0.95;
-        var maxY = Math.max(mean + 2 * stddev, Math.max.apply(null, allVals)) * 1.05;
-        var rngY = maxY - minY || 1;
-        function bxS(i) { return pad2.l + i / (its.length - 1) * cW2; }
-        function byS(v) { return pad2.t + (1 - (v - minY) / rngY) * cH2; }
-        var svg2 = '<svg width="100%" viewBox="0 0 ' + W2 + ' ' + H2 + '" style="display:block">';
-        // ±1σ band
-        var bandTop = byS(mean + stddev), bandBot = byS(mean - stddev);
-        svg2 += '<rect x="' + pad2.l + '" y="' + bandTop + '" width="' + cW2 + '" height="' + (bandBot - bandTop) + '" fill="var(--bl)" opacity="0.07" rx="2"/>';
-        // ±2σ band (lighter)
-        var band2Top = byS(mean + 2 * stddev), band2Bot = byS(mean - 2 * stddev);
-        svg2 += '<rect x="' + pad2.l + '" y="' + band2Top + '" width="' + cW2 + '" height="' + (band2Bot - band2Top) + '" fill="var(--bl)" opacity="0.03"/>';
-        // Mean line
-        svg2 += '<line x1="' + pad2.l + '" y1="' + byS(mean) + '" x2="' + (W2 - pad2.r) + '" y2="' + byS(mean) + '" stroke="var(--t3)" stroke-width="1" stroke-dasharray="4,3"/>';
-        svg2 += '<text x="' + (W2 - pad2.r + 4) + '" y="' + (byS(mean) + 3) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)">μ ' + mean.toFixed(1) + '</text>';
-        // +1σ / -1σ labels
-        svg2 += '<text x="' + (W2 - pad2.r + 4) + '" y="' + (bandTop + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">+1σ</text>';
-        svg2 += '<text x="' + (W2 - pad2.r + 4) + '" y="' + (bandBot + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">-1σ</text>';
-        // Industry PER/PBV line
-        var pts = [];
-        its.forEach(function(r, i) { if (r[bm] > 0) pts.push(bxS(i) + ',' + byS(r[bm])); });
-        svg2 += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--bl)" stroke-width="1.5" opacity="0.7"/>';
-        // Stock current value — horizontal dashed line + dot
-        if (stockVal > 0) {
-          var sy = byS(stockVal);
-          svg2 += '<line x1="' + pad2.l + '" y1="' + sy + '" x2="' + (W2 - pad2.r) + '" y2="' + sy + '" stroke="var(--gn)" stroke-width="1" stroke-dasharray="3,2"/>';
-          svg2 += '<circle cx="' + (W2 - pad2.r - 3) + '" cy="' + sy + '" r="4" fill="var(--gn)" stroke="var(--bg0)" stroke-width="1.5"/>';
-          svg2 += '<text x="' + (W2 - pad2.r + 4) + '" y="' + (sy + 3) + '" fill="var(--gn)" font-size="9" font-family="var(--fm)" font-weight="700">' + stockVal.toFixed(bm === 'pbv' ? 2 : 1) + '</text>';
-        }
-        // X-axis date labels
-        var step2 = Math.max(1, Math.floor(its.length / 6));
-        for (var di2 = 0; di2 < its.length; di2 += step2) {
-          svg2 += '<text x="' + bxS(di2) + '" y="' + (H2 - 4) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + dates[di2].substring(5) + '</text>';
-        }
-        // Grid lines
-        for (var g2 = 0; g2 <= 4; g2++) {
-          var gy2 = pad2.t + g2 / 4 * cH2; var gv2 = maxY - g2 / 4 * rngY;
-          svg2 += '<line x1="' + pad2.l + '" y1="' + gy2 + '" x2="' + (W2 - pad2.r) + '" y2="' + gy2 + '" stroke="var(--b1)" stroke-width="0.5"/>';
-          svg2 += '<text x="' + (pad2.l - 4) + '" y="' + (gy2 + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="end">' + gv2.toFixed(1) + '</text>';
-        }
-        svg2 += '</svg>';
-        h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2)">' + svg2 + '</div>';
+        h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2)">' + BL.container('gs-band-chart', 160) + '</div>';
+        // Store for deferred render
+        window._gsBandData = {its:its,bm:bm,mean:mean,stddev:stddev,stockVal:stockVal};
         // Insight
         var zscore = stddev > 0 ? (stockVal - mean) / stddev : 0;
         var zLabel = zscore > 1.5 ? 'Expensive' : zscore > 0.5 ? 'Above Avg' : zscore > -0.5 ? 'Fair' : zscore > -1.5 ? 'Below Avg' : 'Cheap';
@@ -427,7 +349,7 @@ function renderTickerPage(d) {
       }
     }
 
-    // ─── ④ HISTORICAL PBV BAND — approx from adj_chart ───
+    // ─── ④ HISTORICAL PBV BAND — approx from adj_chart (ECharts) ───
     if (hasIdx && fund.pbv > 0 && d.adj_chart && d.adj_chart.length >= 30) {
       var bv = Math.round(d.price.close / fund.pbv); // approximate book value per share
       if (bv > 0) {
@@ -437,39 +359,8 @@ function renderTickerPage(d) {
         var pbvVar = pbvVals.reduce(function(a, b) { return a + (b - pbvMean) * (b - pbvMean); }, 0) / pbvVals.length;
         var pbvStd = Math.sqrt(pbvVar);
         h += '<div class="tp-section">Historical PBV (approx, BV=' + bv.toLocaleString() + ')</div>';
-        var W3 = 780, H3 = 130;
-        var pad3 = {t: 14, r: 50, b: 20, l: 40};
-        var cW3 = W3 - pad3.l - pad3.r, cH3 = H3 - pad3.t - pad3.b;
-        var minP = Math.max(0, pbvMean - 2.5 * pbvStd);
-        var maxP = pbvMean + 2.5 * pbvStd;
-        var rngP = maxP - minP || 1;
-        function pxS(i) { return pad3.l + i / (pbvHist.length - 1) * cW3; }
-        function pyS(v) { return pad3.t + (1 - (v - minP) / rngP) * cH3; }
-        var svg3 = '<svg width="100%" viewBox="0 0 ' + W3 + ' ' + H3 + '" style="display:block">';
-        // ±1σ band
-        var bt3 = pyS(pbvMean + pbvStd), bb3 = pyS(pbvMean - pbvStd);
-        svg3 += '<rect x="' + pad3.l + '" y="' + bt3 + '" width="' + cW3 + '" height="' + Math.max(1, bb3 - bt3) + '" fill="var(--am)" opacity="0.08"/>';
-        // Mean
-        svg3 += '<line x1="' + pad3.l + '" y1="' + pyS(pbvMean) + '" x2="' + (W3 - pad3.r) + '" y2="' + pyS(pbvMean) + '" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,2"/>';
-        svg3 += '<text x="' + (W3 - pad3.r + 4) + '" y="' + (pyS(pbvMean) + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">μ ' + pbvMean.toFixed(2) + '</text>';
-        // PBV line
-        var pts3 = pbvHist.map(function(r, i) { return pxS(i) + ',' + pyS(r.pbv); });
-        svg3 += '<polyline points="' + pts3.join(' ') + '" fill="none" stroke="var(--am)" stroke-width="1.5"/>';
-        // End dot
-        svg3 += '<circle cx="' + pxS(pbvHist.length - 1) + '" cy="' + pyS(pbvHist[pbvHist.length - 1].pbv) + '" r="3" fill="var(--am)"/>';
-        // Date labels
-        var step3 = Math.max(1, Math.floor(pbvHist.length / 6));
-        for (var di3 = 0; di3 < pbvHist.length; di3 += step3) {
-          svg3 += '<text x="' + pxS(di3) + '" y="' + (H3 - 4) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + pbvHist[di3].date.substring(5) + '</text>';
-        }
-        // Y grid
-        for (var g3 = 0; g3 <= 4; g3++) {
-          var gy3 = pad3.t + g3 / 4 * cH3; var gv3 = maxP - g3 / 4 * rngP;
-          svg3 += '<line x1="' + pad3.l + '" y1="' + gy3 + '" x2="' + (W3 - pad3.r) + '" y2="' + gy3 + '" stroke="var(--b1)" stroke-width="0.5"/>';
-          svg3 += '<text x="' + (pad3.l - 4) + '" y="' + (gy3 + 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="end">' + gv3.toFixed(1) + '</text>';
-        }
-        svg3 += '</svg>';
-        h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2)">' + svg3 + '</div>';
+        h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2)">' + BL.container('gs-histpbv-chart', 170) + '</div>';
+        window._gsHistPBVData = {pbvHist:pbvHist,pbvMean:pbvMean,pbvStd:pbvStd};
       }
     }
 
@@ -592,6 +483,8 @@ function renderTickerPage(d) {
   h += '</div>';
   pg.innerHTML = h;
   window._tpData = d;
+  // Deferred ECharts renders
+  setTimeout(function() { gsRenderCharts(); }, 80);
 }
 
 // ═══ Price Chart with Timeframe Selector ═══
@@ -638,140 +531,18 @@ function tpChartWithRange(fullData, cas, code) {
   return h;
 }
 
-// ═══ SVG Price Chart Renderer ═══
+// ═══ SVG Price Chart Renderer → ECharts ═══
 function tpDrawPriceChart(data, cas) {
-  var W = 820, H = 180;
-  var pad = { t: 16, r: 55, b: 24, l: 50 };
-  var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
-
-  var hasAdj = data.some(function(r) { return r.adjusted; });
-  var closes = data.map(function(r) { return r.adj_close; });
-  var rawCloses = data.map(function(r) { return r.close; });
-  var dates = data.map(function(r) { return r.trade_date; });
-
-  var minC = Math.min.apply(null, closes);
-  var maxC = Math.max.apply(null, closes);
-  if (hasAdj) {
-    minC = Math.min(minC, Math.min.apply(null, rawCloses));
-    maxC = Math.max(maxC, Math.max.apply(null, rawCloses));
-  }
-  var rng = maxC - minC || 1; minC -= rng * .05; maxC += rng * .05; rng = maxC - minC;
-
-  function xS(i) { return pad.l + i / (data.length - 1) * cW; }
-  function yS(v) { return pad.t + (1 - (v - minC) / rng) * cH; }
-
-  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;border:1px solid var(--b1);border-radius:8px;background:var(--bg2)">';
-
-  // Grid
-  for (var g = 0; g <= 4; g++) {
-    var gy = pad.t + g / 4 * cH; var gv = maxC - g / 4 * rng;
-    svg += '<line x1="' + pad.l + '" y1="' + gy + '" x2="' + (W - pad.r) + '" y2="' + gy + '" stroke="var(--b1)" stroke-width="1"/>';
-    svg += '<text x="' + (W - pad.r + 4) + '" y="' + (gy + 3) + '" fill="var(--t3)" font-size="9" font-family="var(--fm)">' + Math.round(gv).toLocaleString() + '</text>';
-  }
-
-  // Date labels
-  var ls = Math.max(1, Math.floor(data.length / 6));
-  for (var di = 0; di < data.length; di += ls) {
-    svg += '<text x="' + xS(di) + '" y="' + (H - 4) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">' + dates[di].substring(5) + '</text>';
-  }
-
-  // Raw price line (gray dashed) — only if adjusted
-  if (hasAdj) {
-    var rawPts = [];
-    rawCloses.forEach(function(c, i) { rawPts.push(xS(i) + ',' + yS(c)); });
-    svg += '<polyline points="' + rawPts.join(' ') + '" fill="none" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
-  }
-
-  // Adjusted/main price line
-  var adjPts = [];
-  closes.forEach(function(c, i) { adjPts.push(xS(i) + ',' + yS(c)); });
-  svg += '<polyline points="' + adjPts.join(' ') + '" fill="none" stroke="var(--bl)" stroke-width="2" stroke-linejoin="round"/>';
-
-  // End dot
-  svg += '<circle cx="' + xS(data.length - 1) + '" cy="' + yS(closes[closes.length - 1]) + '" r="3" fill="var(--bl)"/>';
-
-  // CA markers
-  if (cas && cas.length) {
-    cas.forEach(function(ca) {
-      var idx = -1;
-      for (var j = 0; j < dates.length; j++) {
-        if (dates[j] >= ca.ex_date) { idx = j; break; }
-      }
-      if (idx >= 0 && idx < data.length) {
-        var cx = xS(idx);
-        svg += '<line x1="' + cx + '" y1="' + pad.t + '" x2="' + cx + '" y2="' + (H - pad.b) + '" stroke="var(--am)" stroke-width="1" stroke-dasharray="4,2"/>';
-        var typeLbl = { split: 'S', reverse: 'R', rights_or_bonus: 'RB', manual: 'M' }[ca.action_type] || '?';
-        svg += '<text x="' + cx + '" y="' + (pad.t - 3) + '" fill="var(--am)" font-size="8" font-family="var(--fm)" text-anchor="middle" font-weight="700">⚡' + typeLbl + ' ' + ca.ratio.toFixed(1) + 'x</text>';
-      }
-    });
-  }
-
-  // Legend
-  if (hasAdj) {
-    svg += '<text x="' + pad.l + '" y="' + (pad.t - 4) + '" fill="var(--bl)" font-size="8" font-family="var(--fm)">── Adjusted</text>';
-    svg += '<text x="' + (pad.l + 65) + '" y="' + (pad.t - 4) + '" fill="var(--t3)" font-size="8" font-family="var(--fm)">╌╌ Raw</text>';
-  }
-
-  svg += '</svg>';
-  return '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px">' + svg + '</div>';
+  // Store data for deferred render
+  window._gsPriceData = {data:data, cas:cas};
+  return '<div style="border-radius:8px;overflow:hidden;margin-bottom:8px;border:1px solid var(--b1);background:var(--bg2)">' + BL.container('gs-price-chart', 260) + '</div>';
 }
 
-// ═══ Bid vs Offer Volume Chart — stacked bars ═══
+// ═══ Bid vs Offer Volume Chart — ECharts stacked bars ═══
 function tpDrawBidOfferChart(data) {
   var h = '<div class="tp-section">Volume (Bid vs Offer)</div>';
-
-  var W = 780, H = 120;
-  var pad = {t: 10, r: 50, b: 20, l: 10};
-  var cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
-  var n = data.length;
-  var barW = Math.max(2, Math.min(12, cW / n - 1));
-
-  // Find max volume for scaling
-  var maxVol = 0;
-  data.forEach(function(r) {
-    var total = (r.bid_vol || 0) + (r.offer_vol || 0);
-    if (total > maxVol) maxVol = total;
-  });
-  if (!maxVol) maxVol = 1;
-
-  var svg = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" style="display:block">';
-
-  // Bars
-  data.forEach(function(r, i) {
-    var x = pad.l + (i + 0.5) * (cW / n) - barW / 2;
-    var bid = r.bid_vol || 0;
-    var offer = r.offer_vol || 0;
-    var total = bid + offer;
-    var totalH = Math.max(1, (total / maxVol) * cH);
-    var bidH = total > 0 ? (bid / total) * totalH : 0;
-    var offerH = totalH - bidH;
-
-    // Offer (red) on top
-    var offerY = pad.t + (cH - totalH);
-    svg += '<rect x="' + x + '" y="' + offerY + '" width="' + barW + '" height="' + offerH + '" fill="var(--rd)" opacity="0.7" rx="1"/>';
-    // Bid (green) below
-    svg += '<rect x="' + x + '" y="' + (offerY + offerH) + '" width="' + barW + '" height="' + bidH + '" fill="var(--gn)" opacity="0.7" rx="1"/>';
-  });
-
-  // X-axis labels (every ~10 bars)
-  var step = Math.max(1, Math.floor(n / 8));
-  for (var i = 0; i < n; i += step) {
-    var x = pad.l + (i + 0.5) * (cW / n);
-    var lbl = data[i].trade_date.substring(5).replace('-', '/');
-    svg += '<text x="' + x + '" y="' + (H - 3) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="middle">' + lbl + '</text>';
-  }
-
-  // Right-side max label
-  svg += '<text x="' + (W - pad.r + 4) + '" y="' + (pad.t + 8) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)" text-anchor="start">' + fmtNum(maxVol) + '</text>';
-
-  // Legend
-  svg += '<rect x="' + (W - pad.r + 4) + '" y="' + (H - pad.b - 18) + '" width="8" height="8" fill="var(--gn)" opacity="0.7" rx="1"/>';
-  svg += '<text x="' + (W - pad.r + 15) + '" y="' + (H - pad.b - 11) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">Bid</text>';
-  svg += '<rect x="' + (W - pad.r + 4) + '" y="' + (H - pad.b - 8) + '" width="8" height="8" fill="var(--rd)" opacity="0.7" rx="1"/>';
-  svg += '<text x="' + (W - pad.r + 15) + '" y="' + (H - pad.b - 1) + '" fill="var(--t3)" font-size="7" font-family="var(--fm)">Offer</text>';
-
-  svg += '</svg>';
-  h += '<div style="border-radius:8px;overflow:hidden;margin-bottom:4px">' + svg + '</div>';
+  window._gsVolumeData = data;
+  h += '<div style="border-radius:8px;overflow:hidden;margin-bottom:4px">' + BL.container('gs-volume-chart', 150) + '</div>';
   return h;
 }
 
@@ -830,5 +601,159 @@ async function loadTickerNews(code) {
     el.innerHTML = h;
   } catch (e) {
     el.innerHTML = '<div class="ne">Error: ' + e.message + '</div>';
+  }
+}
+// ═══ DEFERRED ECHARTS RENDERS — Ticker Page Charts ═══
+function gsRenderCharts() {
+  // ② Bullet chart
+  if (window._gsBulletData) {
+    var bd = window._gsBulletData;
+    var el = document.getElementById('gs-bullet-chart'); if (el) {
+      var c = BL.init(el, 'gs-bullet'); if (c) {
+        var cats = bd.metrics.map(function(m){ return m.label; }).reverse();
+        var stockVals = bd.metrics.map(function(m){ return m.val; }).reverse();
+        var medians = bd.metrics.map(function(m){ return bd.sp[m.k].median; }).reverse();
+        var p25s = bd.metrics.map(function(m){ return bd.sp[m.k].p25; }).reverse();
+        var p75s = bd.metrics.map(function(m){ return bd.sp[m.k].p75; }).reverse();
+        var indMed = bd.ip ? bd.metrics.map(function(m){ return bd.ip[m.k] ? bd.ip[m.k].median : null; }).reverse() : null;
+        var dotColors = bd.metrics.map(function(m){
+          if (m.k === 'roe' || m.k === 'npm') return m.val > bd.sp[m.k].median ? BL.colors.green : BL.colors.red;
+          if (m.k === 'per' || m.k === 'pbv' || m.k === 'der') return m.val < bd.sp[m.k].median ? BL.colors.green : m.val > bd.sp[m.k].p75 ? BL.colors.red : BL.colors.amber;
+          return BL.colors.blue;
+        }).reverse();
+        var series = [
+          {name:'P25-P75',type:'bar',data:p75s.map(function(v,i){return v-p25s[i];}),stack:'range',barWidth:10,itemStyle:{color:BL.colors.blueBg,borderColor:BL.colors.blue,borderWidth:0.5,borderRadius:2},silent:true},
+          {name:'_base',type:'bar',data:p25s,stack:'range',barWidth:10,itemStyle:{color:'transparent'},silent:true,tooltip:{show:false}},
+          {name:'Sector Med',type:'scatter',data:medians.map(function(v,i){return[v,i];}),symbolSize:2,symbol:'rect',itemStyle:{color:BL.colors.textDim},encode:{x:0,y:1}},
+          {name:'Stock',type:'scatter',data:stockVals.map(function(v,i){return{value:[v,i],itemStyle:{color:dotColors[i]}};}),symbolSize:10,encode:{x:0,y:1}}
+        ];
+        if (indMed) {
+          series.push({name:'Ind Med',type:'scatter',data:indMed.map(function(v,i){return v!=null?[v,i]:null;}).filter(function(v){return v;}),symbolSize:6,symbol:'diamond',itemStyle:{color:BL.colors.amber},encode:{x:0,y:1}});
+        }
+        c.setOption({
+          tooltip:{trigger:'item',formatter:function(p){if(!p.seriesName||p.seriesName.charAt(0)==='_')return'';return p.seriesName+': '+p.value[0];}},
+          grid:{left:50,right:55,top:4,bottom:4,containLabel:false},
+          xAxis:{type:'value',axisLabel:{fontSize:8},splitLine:{lineStyle:{color:'#1e2836'}}},
+          yAxis:{type:'category',data:cats,axisLabel:{fontSize:10,fontWeight:600}},
+          series:series
+        });
+      }
+    }
+    window._gsBulletData = null;
+  }
+  // ③ Band chart
+  if (window._gsBandData) {
+    var bd2 = window._gsBandData;
+    var el2 = document.getElementById('gs-band-chart'); if (el2) {
+      var c2 = BL.init(el2, 'gs-band'); if (c2) {
+        var dates = bd2.its.map(function(r){return r.trade_date;});
+        var vals2 = bd2.its.map(function(r){return r[bd2.bm]||null;});
+        var markLines = [{yAxis:bd2.mean,name:'μ '+bd2.mean.toFixed(1),lineStyle:{color:'#6b7a8d',type:'dashed',width:1}},
+          {yAxis:bd2.mean+bd2.stddev,name:'+1σ',lineStyle:{color:'#3a4a5a',type:'dotted'}},
+          {yAxis:bd2.mean-bd2.stddev,name:'-1σ',lineStyle:{color:'#3a4a5a',type:'dotted'}}];
+        var markAreas = [[{yAxis:bd2.mean-bd2.stddev},{yAxis:bd2.mean+bd2.stddev}]];
+        var opt = {
+          tooltip:{trigger:'axis',formatter:function(p){return'<b>'+p[0].axisValue+'</b><br>'+bd2.bm.toUpperCase()+': <b>'+((p[0].value||0).toFixed(2))+'</b>';}},
+          grid:BL.grid({top:12,bottom:36,left:40,right:50}),
+          dataZoom:BL.dataZoom(),
+          xAxis:{type:'category',data:dates,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
+          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(1);}}},
+          series:[{type:'line',data:vals2,symbol:'none',lineStyle:{width:1.5,color:BL.colors.blue,opacity:0.7},
+            markLine:{silent:true,symbol:'none',label:{fontSize:7,color:'#6b7a8d',formatter:function(p){return p.name;}},data:markLines},
+            markArea:{silent:true,itemStyle:{color:'rgba(84,112,198,0.06)'},data:markAreas}}]
+        };
+        if (bd2.stockVal > 0) {
+          opt.series[0].markLine.data.push({yAxis:bd2.stockVal,name:bd2.stockVal.toFixed(2),lineStyle:{color:BL.colors.green,type:'dashed',width:1},label:{color:BL.colors.green,fontWeight:700}});
+        }
+        c2.setOption(opt);
+      }
+    }
+    window._gsBandData = null;
+  }
+  // ④ Historical PBV
+  if (window._gsHistPBVData) {
+    var bd3 = window._gsHistPBVData;
+    var el3 = document.getElementById('gs-histpbv-chart'); if (el3) {
+      var c3 = BL.init(el3, 'gs-histpbv'); if (c3) {
+        var dates3 = bd3.pbvHist.map(function(r){return r.date;});
+        var vals3 = bd3.pbvHist.map(function(r){return r.pbv;});
+        c3.setOption({
+          tooltip:{trigger:'axis',formatter:function(p){return'<b>'+p[0].axisValue+'</b><br>PBV: <b>'+p[0].value.toFixed(2)+'</b>';}},
+          grid:BL.grid({top:10,bottom:36,left:40,right:50}),
+          dataZoom:BL.dataZoom(),
+          xAxis:{type:'category',data:dates3,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
+          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(1);}}},
+          series:[{type:'line',data:vals3,symbol:'none',lineStyle:{width:1.5,color:BL.colors.amber},
+            markLine:{silent:true,symbol:'none',label:{fontSize:7,color:'#6b7a8d'},data:[
+              {yAxis:bd3.pbvMean,name:'μ '+bd3.pbvMean.toFixed(2),lineStyle:{color:'#6b7a8d',type:'dashed',width:1}}
+            ]},
+            markArea:{silent:true,itemStyle:{color:'rgba(245,158,11,0.06)'},data:[[{yAxis:bd3.pbvMean-bd3.pbvStd},{yAxis:bd3.pbvMean+bd3.pbvStd}]]}}]
+        });
+      }
+    }
+    window._gsHistPBVData = null;
+  }
+  // ⑤ Price Chart
+  if (window._gsPriceData) {
+    var pd = window._gsPriceData;
+    var el5 = document.getElementById('gs-price-chart'); if (el5) {
+      var c5 = BL.init(el5, 'gs-price'); if (c5) {
+        var data5 = pd.data, cas5 = pd.cas;
+        var hasAdj = data5.some(function(r){return r.adjusted;});
+        var dates5 = data5.map(function(r){return r.trade_date;});
+        var closes5 = data5.map(function(r){return r.adj_close;});
+        var rawCloses5 = data5.map(function(r){return r.close;});
+        var seriesArr = [];
+        if (hasAdj) {
+          seriesArr.push({name:'Raw',type:'line',data:rawCloses5,symbol:'none',lineStyle:{width:1,color:BL.colors.textDim,type:'dashed',opacity:0.5},itemStyle:{color:BL.colors.textDim}});
+        }
+        seriesArr.push({name:hasAdj?'Adjusted':'Close',type:'line',data:closes5,symbol:'none',lineStyle:{width:2,color:BL.colors.amber},
+          areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(245,158,11,0.10)'},{offset:1,color:'transparent'}]}},
+          itemStyle:{color:BL.colors.amber},
+          markPoint:{symbol:'circle',symbolSize:6,data:[{coord:[dates5[dates5.length-1],closes5[closes5.length-1]],itemStyle:{color:BL.colors.amber}}]}
+        });
+        // CA markers as markLine
+        if (cas5 && cas5.length) {
+          var caLines = cas5.map(function(ca){
+            var typeLbl = {split:'S',reverse:'R',rights_or_bonus:'RB',manual:'M'}[ca.action_type]||'?';
+            return {xAxis:ca.ex_date,label:{formatter:'⚡'+typeLbl+' '+ca.ratio.toFixed(1)+'x',fontSize:8,color:BL.colors.amber,fontWeight:700,position:'start'},lineStyle:{color:BL.colors.amber,type:'dashed',width:1}};
+          });
+          seriesArr[seriesArr.length-1].markLine = {silent:true,symbol:'none',data:caLines};
+        }
+        c5.setOption({
+          tooltip:{trigger:'axis',formatter:function(p){var h='<b>'+p[0].axisValue+'</b>';p.forEach(function(s){h+='<br><span style="color:'+s.color+'">●</span> '+s.seriesName+': <b>'+Math.round(s.value).toLocaleString()+'</b>';});return h;}},
+          legend:hasAdj?{data:['Adjusted','Raw'],top:0,left:0,textStyle:{fontSize:8}}:undefined,
+          grid:BL.grid({top:hasAdj?22:12,bottom:36,left:50,right:55}),
+          dataZoom:BL.dataZoom(),
+          xAxis:{type:'category',data:dates5,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
+          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return Math.round(v).toLocaleString();}}},
+          series:seriesArr
+        });
+      }
+    }
+    window._gsPriceData = null;
+  }
+  // ⑥ Volume (Bid vs Offer)
+  if (window._gsVolumeData) {
+    var vd = window._gsVolumeData;
+    var el6 = document.getElementById('gs-volume-chart'); if (el6) {
+      var c6 = BL.init(el6, 'gs-volume'); if (c6) {
+        var dates6 = vd.map(function(r){return r.trade_date;});
+        var bids = vd.map(function(r){return r.bid_vol||0;});
+        var offers = vd.map(function(r){return r.offer_vol||0;});
+        c6.setOption({
+          tooltip:{trigger:'axis',formatter:function(p){var h='<b>'+p[0].axisValue+'</b>';p.forEach(function(s){h+='<br><span style="color:'+s.color+'">●</span> '+s.seriesName+': <b>'+BL.fmtRp(s.value)+'</b>';});return h;}},
+          legend:{data:['Bid','Offer'],top:0,right:10,textStyle:{fontSize:8}},
+          grid:{left:10,right:50,top:18,bottom:22,containLabel:false},
+          xAxis:{type:'category',data:dates6,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5).replace('-','/');}}},
+          yAxis:{type:'value',axisLabel:{fontSize:7,formatter:function(v){return BL.fmtRp(v);}},splitLine:{lineStyle:{color:'#1e2836'}}},
+          series:[
+            {name:'Bid',type:'bar',stack:'vol',data:bids,itemStyle:{color:BL.colors.green,opacity:0.75},barMaxWidth:12},
+            {name:'Offer',type:'bar',stack:'vol',data:offers,itemStyle:{color:BL.colors.red,opacity:0.75},barMaxWidth:12}
+          ]
+        });
+      }
+    }
+    window._gsVolumeData = null;
   }
 }

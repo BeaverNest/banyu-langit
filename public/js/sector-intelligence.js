@@ -561,8 +561,6 @@ function renderTimeline(){
   if(!chartEl)return;
 
   var W=chartEl.offsetWidth||700,H=350;
-  var pad={t:20,r:60,b:30,l:65};
-  var cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
 
   var allV=[];
   visible.forEach(function(n){series[n].forEach(function(v){allV.push(v);});});
@@ -572,37 +570,36 @@ function renderTimeline(){
     return;
   }
 
-  var minV=Math.min.apply(null,allV),maxV=Math.max.apply(null,allV);
-  var rng=maxV-minV||1;minV-=rng*.05;maxV+=rng*.05;rng=maxV-minV;
-  function xS(i){return pad.l+i/(n2-1)*cW;}
-  function yS(v){return pad.t+(1-(v-minV)/rng)*cH;}
-
-  var svg='<svg width="'+W+'" height="'+H+'" style="display:block">';
-  for(var g=0;g<=5;g++){
-    var gy=pad.t+g/5*cH;var gv=maxV-g/5*rng;
-    svg+='<line x1="'+pad.l+'" y1="'+gy+'" x2="'+(W-pad.r)+'" y2="'+gy+'" stroke="var(--b1)" stroke-width="1"/>';
-    var label=secTimeMetric==='avg_chg'?(gv>0?'+':'')+gv.toFixed(1)+'%':fmtRp(gv);
-    svg+='<text x="'+(W-pad.r+4)+'" y="'+(gy+3)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)">'+label+'</text>';
-  }
-  if(minV<0&&maxV>0){var zy=yS(0);svg+='<line x1="'+pad.l+'" y1="'+zy+'" x2="'+(W-pad.r)+'" y2="'+zy+'" stroke="var(--t3)" stroke-width="1" stroke-dasharray="3,3"/>';}
-  var ls=Math.max(1,Math.floor(n2/8));
-  for(var di=0;di<n2;di+=ls){
-    svg+='<text x="'+xS(di)+'" y="'+(H-4)+'" fill="var(--t3)" font-size="8" font-family="var(--fm)" text-anchor="middle">'+weeks[di].week_start.substring(5)+'</text>';
-  }
-
+  // ECharts render
+  chartEl.style.height=H+'px';
+  var c=BL.init(chartEl,'sec-timeline');if(!c){return;}
+  var cats=weeks.map(function(w){return w.week_start;});
+  var seriesArr=[];
   visible.forEach(function(name){
     var ci=sorted.indexOf(name);
     var clr=colors[ci%colors.length];
-    var pts=[];
-    series[name].forEach(function(v,i){pts.push(xS(i)+','+yS(v));});
-    if(pts.length>=2){
-      svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+clr+'" stroke-width="2" stroke-linejoin="round" opacity="0.85"/>';
-      var last=series[name][n2-1];
-      svg+='<circle cx="'+xS(n2-1)+'" cy="'+yS(last)+'" r="3" fill="'+clr+'"/>';
-    }
+    var isChg=secTimeMetric==='avg_chg';
+    seriesArr.push({
+      name:name.replace('IDX Sector ',''),type:'line',data:series[name],symbol:'none',
+      lineStyle:{width:2,color:clr},itemStyle:{color:clr},
+      emphasis:{lineStyle:{width:3}}
+    });
   });
-  svg+='</svg>';
-  chartEl.innerHTML=svg;
+  c.setOption({
+    tooltip:{trigger:'axis',formatter:function(p){
+      var h='<b>'+p[0].axisValue.substring(5)+'</b>';
+      p.sort(function(a,b){return(b.value||0)-(a.value||0);});
+      p.forEach(function(s){
+        var v=s.value;var fmt=secTimeMetric==='avg_chg'?((v>0?'+':'')+v.toFixed(1)+'%'):BL.fmtRp(v);
+        h+='<br><span style="color:'+s.color+'">●</span> '+s.seriesName+': <b>'+fmt+'</b>';
+      });return h;
+    }},
+    grid:BL.grid({top:16,bottom:40,left:65,right:60}),
+    dataZoom:BL.dataZoom(),
+    xAxis:{type:'category',data:cats,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
+    yAxis:{type:'value',axisLabel:{fontSize:8,formatter:function(v){return secTimeMetric==='avg_chg'?v.toFixed(1)+'%':BL.fmtRp(v);}}},
+    series:seriesArr
+  },true);
 
   renderTimelineLegend(legEl,sorted,series,colors,n2);
 }

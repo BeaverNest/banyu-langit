@@ -799,11 +799,13 @@ module.exports = function(upload) {
   // ═══ COMPOSITE SCORE — Multi-factor ranking engine ═══
   router.post('/composite-score', (req, res) => {
     try {
-      const { w_fundamental, w_valuation, w_momentum } = req.body || {};
-      const wF = parseFloat(w_fundamental) || 30;
-      const wV = parseFloat(w_valuation) || 25;
-      const wM = parseFloat(w_momentum) || 30;
-      const wTotal = wF + wV + wM || 85;
+      const { w_fundamental, w_valuation, w_momentum, w_demand, w_foreign } = req.body || {};
+      const wF = parseFloat(w_fundamental) || 25;
+      const wV = parseFloat(w_valuation) || 20;
+      const wM = parseFloat(w_momentum) || 20;
+      const wD = parseFloat(w_demand) || 20;
+      const wFR = parseFloat(w_foreign) || 15;
+      const wTotal = wF + wV + wM + wD + wFR || 100;
 
       const td = latestIdxDate();
       if (!td) return res.json({ error: 'No trade data' });
@@ -861,7 +863,7 @@ module.exports = function(upload) {
       const histMap = {};
       if (codes.length && allDates.length >= 20) {
         const ph = codes.map(() => '?').join(',');
-        const rows = db.prepare(`SELECT code, trade_date, close, foreign_buy, foreign_sell FROM idx_daily WHERE code IN (${ph}) ORDER BY code, trade_date`).all(...codes);
+        const rows = db.prepare(`SELECT code, trade_date, close, foreign_buy, foreign_sell, bid_vol, offer_vol, value, frequency, volume FROM idx_daily WHERE code IN (${ph}) ORDER BY code, trade_date`).all(...codes);
         rows.forEach(r => {
           if (!histMap[r.code]) histMap[r.code] = [];
           histMap[r.code].push(r);
@@ -947,6 +949,61 @@ module.exports = function(upload) {
         const fnetBuyDays = fnet5d.filter(v => v > 0).length;
         const fnetDir = fnetBuyDays >= 4 ? 'strong_buy' : fnetBuyDays >= 3 ? 'buy' : fnetBuyDays <= 1 ? 'strong_sell' : fnetBuyDays <= 2 ? 'sell' : 'neutral';
 
+        // ── NEW: Demand/Supply metrics ──
+        const bidVols = hist.map(r => r.bid_vol || 0);
+        const offerVols = hist.map(r => r.offer_vol || 0);
+        const volumes = hist.map(r => r.volume || 0);
+        const values = hist.map(r => r.value || 0);
+        const freqs = hist.map(r => r.frequency || 0);
+
+        // Bid/Offer ratio (today)
+        const todayBid = bidVols.length > 0 ? bidVols[bidVols.length - 1] : 0;
+        const todayOffer = offerVols.length > 0 ? offerVols[offerVols.length - 1] : 0;
+        const totalBO = todayBid + todayOffer;
+        const bidOfferRatio = totalBO > 0 ? Math.round(todayBid / totalBO * 1000) / 1000 : 0.5;
+
+        // Bid/Offer 5d avg ratio
+        const bo5d = bidVols.slice(-5).map((b, i) => {
+          const o = offerVols.slice(-5)[i] || 0;
+          return (b + o) > 0 ? b / (b + o) : 0.5;
+        });
+        const bidOffer5d = bo5d.length > 0 ? Math.round(bo5d.reduce((a, b) => a + b, 0) / bo5d.length * 1000) / 1000 : 0.5;
+
+        // RelVol (volume vs 20d avg)
+        const avgVol20 = volumes.length >= 21 ? volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+        const relVol = avgVol20 > 0 ? Math.round(volumes[volumes.length - 1] / avgVol20 * 100) / 100 : 1;
+
+        // Freq spike (frequency vs 20d avg)
+        const avgFreq20 = freqs.length >= 21 ? freqs.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+        const freqSpike = avgFreq20 > 0 ? Math.round(freqs[freqs.length - 1] / avgFreq20 * 100) / 100 : 1;
+
+        // Value spike (value vs 20d avg)
+        const avgVal20 = values.length >= 21 ? values.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+        const valSpike = avgVal20 > 0 ? Math.round(values[values.length - 1] / avgVal20 * 100) / 100 : 1;
+
+        // ── NEW: Foreign Smart Money metrics ──
+        // FNet 10d & 20d
+        const fnet10 = fnets.slice(-10).reduce((a, b) => a + b, 0);
+        const fnet20 = fnets.slice(-20).reduce((a, b) => a + b, 0);
+
+        // Foreign % of value (proxy: abs foreign activity / total value, last 5 days)
+        const fBuys5 = hist.slice(-5).map(r => (r.foreign_buy || 0) * r.close);
+        const fSells5 = hist.slice(-5).map(r => (r.foreign_sell || 0) * r.close);
+        const vals5 = hist.slice(-5).map(r => r.value || 0);
+        const totForeign5 = fBuys5.reduce((a, b) => a + b, 0) + fSells5.reduce((a, b) => a + b, 0);
+        const totVal5 = vals5.reduce((a, b) => a + b, 0);
+        const foreignPctVal = totVal5 > 0 ? Math.round(totForeign5 / totVal5 * 1000) / 10 : 0;
+
+        // Foreign accumulation streak (consecutive days net buy)
+        let accumStreak = 0;
+        for (let fi = fnets.length - 1; fi >= 0; fi--) {
+          if (fnets[fi] > 0) accumStreak++; else break;
+        }
+
+        // FNet vs 20d average (spike detection)
+        const avgFnet20 = fnets.length >= 21 ? fnets.slice(-21, -1).reduce((a, b) => a + Math.abs(b), 0) / 20 : 0;
+        const fnetVsAvg = avgFnet20 > 0 ? Math.round(fnets[fnets.length - 1] / avgFnet20 * 100) / 100 : 0;
+
         // Valuation vs industry
         const indM = fund.industry ? (indMedian[fund.industry] || {}) : {};
         const per_vs = fund.per > 0 && indM.avg_per > 0 ? Math.round((fund.per / indM.avg_per - 1) * 10000) / 100 : 0;
@@ -964,7 +1021,13 @@ module.exports = function(upload) {
           ma5, ma10, ma20, ma50, ma200,
           ma5_pct, ma10_pct, ma20_pct, ma50_pct, ma200_pct,
           rsi14, macd: macd.macd, macd_signal: macd.signal, macd_hist: macd.hist,
-          ret_5d, ret_20d, fnet_5d: fnet5, fnet_dir: fnetDir
+          ret_5d, ret_20d, fnet_5d: fnet5, fnet_dir: fnetDir,
+          // Demand/Supply raw (NEW)
+          bid_offer_ratio: bidOfferRatio, bid_offer_5d: bidOffer5d,
+          rel_vol: relVol, freq_spike: freqSpike, val_spike: valSpike,
+          // Foreign Smart Money raw (NEW)
+          fnet_10d: fnet10, fnet_20d: fnet20,
+          foreign_pct_val: foreignPctVal, foreign_accum_streak: accumStreak, fnet_vs_avg: fnetVsAvg
         });
       });
 
@@ -995,12 +1058,28 @@ module.exports = function(upload) {
       rankPercentile(results, 'rsi14', true); // higher RSI = stronger momentum
       rankPercentile(results, 'fnet_5d', true);
 
+      // Demand/Supply ranks (NEW)
+      rankPercentile(results, 'bid_offer_ratio', true);  // higher bid ratio = more demand
+      rankPercentile(results, 'bid_offer_5d', true);
+      rankPercentile(results, 'rel_vol', true);           // higher relative volume = unusual activity
+      rankPercentile(results, 'freq_spike', true);
+      rankPercentile(results, 'val_spike', true);
+
+      // Foreign Smart Money ranks (NEW)
+      rankPercentile(results, 'fnet_10d', true);
+      rankPercentile(results, 'fnet_20d', true);
+      rankPercentile(results, 'foreign_pct_val', true);   // higher = more foreign driven
+      rankPercentile(results, 'foreign_accum_streak', true);
+      rankPercentile(results, 'fnet_vs_avg', true);       // positive spike = bullish
+
       // ── 9. Compute sub-scores and composite ──
       results.forEach(r => {
         r.score_fundamental = Math.round((r._r_roe * 0.3 + r._r_roa * 0.2 + r._r_npm * 0.3 + r._r_der * 0.2) * 10) / 10;
         r.score_valuation = Math.round((r._r_per_vs_ind * 0.35 + r._r_pbv_vs_ind * 0.35 + r._r_div_yield * 0.3) * 10) / 10;
         r.score_momentum = Math.round((r._r_ma20_pct * 0.2 + r._r_ma200_pct * 0.15 + r._r_ret_20d * 0.25 + r._r_rsi14 * 0.15 + r._r_fnet_5d * 0.25) * 10) / 10;
-        r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM) / wTotal * 10) / 10;
+        r.score_demand = Math.round((r._r_bid_offer_ratio * 0.25 + r._r_bid_offer_5d * 0.25 + r._r_rel_vol * 0.2 + r._r_freq_spike * 0.15 + r._r_val_spike * 0.15) * 10) / 10;
+        r.score_foreign = Math.round((r._r_fnet_10d * 0.2 + r._r_fnet_20d * 0.2 + r._r_foreign_pct_val * 0.2 + r._r_foreign_accum_streak * 0.2 + r._r_fnet_vs_avg * 0.2) * 10) / 10;
+        r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal * 10) / 10;
         // Cleanup rank keys
         Object.keys(r).filter(k => k.startsWith('_r_')).forEach(k => delete r[k]);
       });
@@ -1011,26 +1090,30 @@ module.exports = function(upload) {
 
       // ── 10. Save to daily_scores ──
       const insScore = db.prepare(`INSERT OR REPLACE INTO daily_scores(calc_date,code,name,close,change_pct,sector,industry,market_cap,
-        score_fundamental,score_valuation,score_momentum,score_composite,
+        score_fundamental,score_valuation,score_momentum,score_demand,score_foreign,score_composite,
         roe,roa,npm,der,per,pbv,per_vs_ind,pbv_vs_ind,div_yield,
         ma5,ma10,ma20,ma50,ma200,ma5_pct,ma10_pct,ma20_pct,ma50_pct,ma200_pct,
         rsi14,macd,macd_signal,macd_hist,ret_5d,ret_20d,fnet_5d,fnet_dir,
-        w_fundamental,w_valuation,w_momentum)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        bid_offer_ratio,bid_offer_5d,rel_vol,freq_spike,val_spike,
+        fnet_10d,fnet_20d,foreign_pct_val,foreign_accum_streak,fnet_vs_avg,
+        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign)
+        VALUES(${Array(56).fill('?').join(',')})`);
       db.transaction(() => {
         top.forEach(r => {
           insScore.run(td, r.code, r.name, r.close, r.change_pct, r.sector, r.industry, r.market_cap,
-            r.score_fundamental, r.score_valuation, r.score_momentum, r.score_composite,
+            r.score_fundamental, r.score_valuation, r.score_momentum, r.score_demand, r.score_foreign, r.score_composite,
             r.roe, r.roa, r.npm, r.der, r.per, r.pbv, r.per_vs_ind, r.pbv_vs_ind, r.div_yield,
             r.ma5, r.ma10, r.ma20, r.ma50, r.ma200, r.ma5_pct, r.ma10_pct, r.ma20_pct, r.ma50_pct, r.ma200_pct,
             r.rsi14, r.macd, r.macd_signal, r.macd_hist, r.ret_5d, r.ret_20d, r.fnet_5d, r.fnet_dir,
-            wF, wV, wM);
+            r.bid_offer_ratio, r.bid_offer_5d, r.rel_vol, r.freq_spike, r.val_spike,
+            r.fnet_10d, r.fnet_20d, r.foreign_pct_val, r.foreign_accum_streak, r.fnet_vs_avg,
+            wF, wV, wM, wD, wFR);
         });
       })();
 
       res.json({
         ok: true, trade_date: td, total_liquid: liquid.length, total_scored: top.length,
-        weights: { fundamental: wF, valuation: wV, momentum: wM },
+        weights: { fundamental: wF, valuation: wV, momentum: wM, demand: wD, foreign: wFR },
         data: top
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1050,12 +1133,14 @@ module.exports = function(upload) {
   // ═══ BACKFILL SCORES — calculate for historical dates ═══
   router.post('/composite-score/backfill', (req, res) => {
     try {
-      const { from, to, w_fundamental, w_valuation, w_momentum } = req.body || {};
+      const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign } = req.body || {};
       if (!from || !to) return res.status(400).json({ error: 'from and to required (YYYY-MM-DD)' });
-      const wF = parseFloat(w_fundamental) || 30;
-      const wV = parseFloat(w_valuation) || 25;
-      const wM = parseFloat(w_momentum) || 30;
-      const wTotal = wF + wV + wM || 85;
+      const wF = parseFloat(w_fundamental) || 25;
+      const wV = parseFloat(w_valuation) || 20;
+      const wM = parseFloat(w_momentum) || 20;
+      const wD = parseFloat(w_demand) || 20;
+      const wFR = parseFloat(w_foreign) || 15;
+      const wTotal = wF + wV + wM + wD + wFR || 100;
 
       // Get all trade dates in range
       const tradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily WHERE trade_date>=? AND trade_date<=? ORDER BY trade_date').all(from, to).map(r => r.trade_date);
@@ -1110,23 +1195,25 @@ module.exports = function(upload) {
 
       // Pre-load ALL historical data for efficiency
       const allHist = {};
-      const histRows = db.prepare('SELECT code, trade_date, close, prev_close, foreign_buy, foreign_sell, listed_shares, frequency FROM idx_daily WHERE trade_date>=? ORDER BY code, trade_date')
+      const histRows = db.prepare('SELECT code, trade_date, close, prev_close, foreign_buy, foreign_sell, listed_shares, frequency, bid_vol, offer_vol, value, volume FROM idx_daily WHERE trade_date>=? ORDER BY code, trade_date')
         .all(tradeDates.length > 210 ? tradeDates[0] : from);
       histRows.forEach(r => { if (!allHist[r.code]) allHist[r.code] = []; allHist[r.code].push(r); });
 
       // Also load data before range for MA lookback
       const lookbackDate = new Date(new Date(from).getTime() - 220 * 86400000).toISOString().split('T')[0];
-      const preRows = db.prepare('SELECT code, trade_date, close, foreign_buy, foreign_sell FROM idx_daily WHERE trade_date>=? AND trade_date<? ORDER BY code, trade_date').all(lookbackDate, from);
+      const preRows = db.prepare('SELECT code, trade_date, close, foreign_buy, foreign_sell, bid_vol, offer_vol, value, volume, frequency FROM idx_daily WHERE trade_date>=? AND trade_date<? ORDER BY code, trade_date').all(lookbackDate, from);
       const preHist = {};
       preRows.forEach(r => { if (!preHist[r.code]) preHist[r.code] = []; preHist[r.code].push(r); });
 
       const insScore = db.prepare(`INSERT OR REPLACE INTO daily_scores(calc_date,code,name,close,change_pct,sector,industry,market_cap,
-        score_fundamental,score_valuation,score_momentum,score_composite,
+        score_fundamental,score_valuation,score_momentum,score_demand,score_foreign,score_composite,
         roe,roa,npm,der,per,pbv,per_vs_ind,pbv_vs_ind,div_yield,
         ma5,ma10,ma20,ma50,ma200,ma5_pct,ma10_pct,ma20_pct,ma50_pct,ma200_pct,
         rsi14,macd,macd_signal,macd_hist,ret_5d,ret_20d,fnet_5d,fnet_dir,
-        w_fundamental,w_valuation,w_momentum)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        bid_offer_ratio,bid_offer_5d,rel_vol,freq_spike,val_spike,
+        fnet_10d,fnet_20d,foreign_pct_val,foreign_accum_streak,fnet_vs_avg,
+        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign)
+        VALUES(${Array(56).fill('?').join(',')})`);
 
       let totalScored = 0;
 
@@ -1151,6 +1238,13 @@ module.exports = function(upload) {
             const cur = series.slice(0, idx + 1);
             const allCloses = [...pre.map(x => x.close), ...cur.map(x => x.close)];
             const allFnets = [...pre.map(x => (x.foreign_buy - x.foreign_sell) * x.close), ...cur.map(x => (x.foreign_buy - x.foreign_sell) * x.close)];
+            const allBidVols = [...pre.map(x => x.bid_vol || 0), ...cur.map(x => x.bid_vol || 0)];
+            const allOfferVols = [...pre.map(x => x.offer_vol || 0), ...cur.map(x => x.offer_vol || 0)];
+            const allVolumes = [...pre.map(x => x.volume || 0), ...cur.map(x => x.volume || 0)];
+            const allValues = [...pre.map(x => x.value || 0), ...cur.map(x => x.value || 0)];
+            const allFreqs = [...pre.map(x => x.frequency || 0), ...cur.map(x => x.frequency || 0)];
+            const allFBuys = [...pre.map(x => (x.foreign_buy || 0) * x.close), ...cur.map(x => (x.foreign_buy || 0) * x.close)];
+            const allFSells = [...pre.map(x => (x.foreign_sell || 0) * x.close), ...cur.map(x => (x.foreign_sell || 0) * x.close)];
 
             const fund = fundMap[code] || {};
             const chgPct = r.prev_close > 0 ? Math.round((r.close - r.prev_close) / r.prev_close * 10000) / 100 : 0;
@@ -1172,6 +1266,32 @@ module.exports = function(upload) {
             const pbvVs = fund.pbv > 0 && indM.avg_pbv > 0 ? Math.round((fund.pbv / indM.avg_pbv - 1) * 10000) / 100 : 0;
             const divYield = divMap[code] && r.close > 0 ? Math.round(divMap[code] / r.close * 10000) / 100 : 0;
 
+            // ── Demand/Supply metrics ──
+            const tBid = allBidVols.length > 0 ? allBidVols[allBidVols.length - 1] : 0;
+            const tOff = allOfferVols.length > 0 ? allOfferVols[allOfferVols.length - 1] : 0;
+            const tBO = tBid + tOff;
+            const bidOfferRatio = tBO > 0 ? Math.round(tBid / tBO * 1000) / 1000 : 0.5;
+            const bo5 = allBidVols.slice(-5).map((b, bi) => { const o = allOfferVols.slice(-5)[bi] || 0; return (b + o) > 0 ? b / (b + o) : 0.5; });
+            const bidOffer5d = bo5.length > 0 ? Math.round(bo5.reduce((a, b) => a + b, 0) / bo5.length * 1000) / 1000 : 0.5;
+            const avgV20 = allVolumes.length >= 21 ? allVolumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+            const relVol = avgV20 > 0 ? Math.round(allVolumes[allVolumes.length - 1] / avgV20 * 100) / 100 : 1;
+            const avgF20 = allFreqs.length >= 21 ? allFreqs.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+            const freqSpike = avgF20 > 0 ? Math.round(allFreqs[allFreqs.length - 1] / avgF20 * 100) / 100 : 1;
+            const avgVl20 = allValues.length >= 21 ? allValues.slice(-21, -1).reduce((a, b) => a + b, 0) / 20 : 0;
+            const valSpike = avgVl20 > 0 ? Math.round(allValues[allValues.length - 1] / avgVl20 * 100) / 100 : 1;
+
+            // ── Foreign Smart Money metrics ──
+            const fnet10 = allFnets.slice(-10).reduce((a, b) => a + b, 0);
+            const fnet20 = allFnets.slice(-20).reduce((a, b) => a + b, 0);
+            const fb5 = allFBuys.slice(-5).reduce((a, b) => a + b, 0);
+            const fs5 = allFSells.slice(-5).reduce((a, b) => a + b, 0);
+            const tv5 = allValues.slice(-5).reduce((a, b) => a + b, 0);
+            const foreignPctVal = tv5 > 0 ? Math.round((fb5 + fs5) / tv5 * 1000) / 10 : 0;
+            let accumStreak = 0;
+            for (let fi2 = allFnets.length - 1; fi2 >= 0; fi2--) { if (allFnets[fi2] > 0) accumStreak++; else break; }
+            const avgFn20 = allFnets.length >= 21 ? allFnets.slice(-21, -1).reduce((a, b) => a + Math.abs(b), 0) / 20 : 0;
+            const fnetVsAvg = avgFn20 > 0 ? Math.round(allFnets[allFnets.length - 1] / avgFn20 * 100) / 100 : 0;
+
             dayStocks.push({
               code, name: r.name || fund.name || '', close: r.close, change_pct: chgPct,
               sector: fund.sector || '', industry: fund.industry || '', market_cap: mktCap,
@@ -1184,7 +1304,11 @@ module.exports = function(upload) {
               ma50_pct: ma50 > 0 ? Math.round((r.close - ma50) / ma50 * 10000) / 100 : 0,
               ma200_pct: ma200 > 0 ? Math.round((r.close - ma200) / ma200 * 10000) / 100 : 0,
               rsi14, macd: macd.macd, macd_signal: macd.signal, macd_hist: macd.hist,
-              ret_5d: ret5, ret_20d: ret20, fnet_5d: fnet5, fnet_dir: fnetDir
+              ret_5d: ret5, ret_20d: ret20, fnet_5d: fnet5, fnet_dir: fnetDir,
+              bid_offer_ratio: bidOfferRatio, bid_offer_5d: bidOffer5d,
+              rel_vol: relVol, freq_spike: freqSpike, val_spike: valSpike,
+              fnet_10d: fnet10, fnet_20d: fnet20,
+              foreign_pct_val: foreignPctVal, foreign_accum_streak: accumStreak, fnet_vs_avg: fnetVsAvg
             });
           });
 
@@ -1198,23 +1322,35 @@ module.exports = function(upload) {
           rankPercentile(dayStocks, 'ma20_pct', true); rankPercentile(dayStocks, 'ma200_pct', true);
           rankPercentile(dayStocks, 'ret_20d', true); rankPercentile(dayStocks, 'rsi14', true);
           rankPercentile(dayStocks, 'fnet_5d', true);
+          // Demand/Supply ranks
+          rankPercentile(dayStocks, 'bid_offer_ratio', true); rankPercentile(dayStocks, 'bid_offer_5d', true);
+          rankPercentile(dayStocks, 'rel_vol', true); rankPercentile(dayStocks, 'freq_spike', true);
+          rankPercentile(dayStocks, 'val_spike', true);
+          // Foreign Smart Money ranks
+          rankPercentile(dayStocks, 'fnet_10d', true); rankPercentile(dayStocks, 'fnet_20d', true);
+          rankPercentile(dayStocks, 'foreign_pct_val', true); rankPercentile(dayStocks, 'foreign_accum_streak', true);
+          rankPercentile(dayStocks, 'fnet_vs_avg', true);
 
           dayStocks.forEach(r => {
             r.score_fundamental = Math.round((r._r_roe * 0.3 + r._r_roa * 0.2 + r._r_npm * 0.3 + r._r_der * 0.2) * 10) / 10;
             r.score_valuation = Math.round((r._r_per_vs_ind * 0.35 + r._r_pbv_vs_ind * 0.35 + r._r_div_yield * 0.3) * 10) / 10;
             r.score_momentum = Math.round((r._r_ma20_pct * 0.2 + r._r_ma200_pct * 0.15 + r._r_ret_20d * 0.25 + r._r_rsi14 * 0.15 + r._r_fnet_5d * 0.25) * 10) / 10;
-            r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM) / wTotal * 10) / 10;
+            r.score_demand = Math.round((r._r_bid_offer_ratio * 0.25 + r._r_bid_offer_5d * 0.25 + r._r_rel_vol * 0.2 + r._r_freq_spike * 0.15 + r._r_val_spike * 0.15) * 10) / 10;
+            r.score_foreign = Math.round((r._r_fnet_10d * 0.2 + r._r_fnet_20d * 0.2 + r._r_foreign_pct_val * 0.2 + r._r_foreign_accum_streak * 0.2 + r._r_fnet_vs_avg * 0.2) * 10) / 10;
+            r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal * 10) / 10;
           });
 
           dayStocks.sort((a, b) => b.score_composite - a.score_composite);
           const top = dayStocks.slice(0, 100);
           top.forEach(r => {
             insScore.run(td, r.code, r.name, r.close, r.change_pct, r.sector, r.industry, r.market_cap,
-              r.score_fundamental, r.score_valuation, r.score_momentum, r.score_composite,
+              r.score_fundamental, r.score_valuation, r.score_momentum, r.score_demand, r.score_foreign, r.score_composite,
               r.roe, r.roa, r.npm, r.der, r.per, r.pbv, r.per_vs_ind, r.pbv_vs_ind, r.div_yield,
               r.ma5, r.ma10, r.ma20, r.ma50, r.ma200, r.ma5_pct, r.ma10_pct, r.ma20_pct, r.ma50_pct, r.ma200_pct,
               r.rsi14, r.macd, r.macd_signal, r.macd_hist, r.ret_5d, r.ret_20d, r.fnet_5d, r.fnet_dir,
-              wF, wV, wM);
+              r.bid_offer_ratio, r.bid_offer_5d, r.rel_vol, r.freq_spike, r.val_spike,
+              r.fnet_10d, r.fnet_20d, r.foreign_pct_val, r.foreign_accum_streak, r.fnet_vs_avg,
+              wF, wV, wM, wD, wFR);
           });
           totalScored += top.length;
         });
@@ -1248,7 +1384,7 @@ module.exports = function(upload) {
         const fwdDate = allTradeDates[fwdIdx];
 
         // Get scores for this date
-        const scores = db.prepare('SELECT code, score_composite, score_fundamental, score_valuation, score_momentum, close FROM daily_scores WHERE calc_date=?').all(sd);
+        const scores = db.prepare('SELECT code, score_composite, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign, close FROM daily_scores WHERE calc_date=?').all(sd);
         if (scores.length < 20) return;
 
         // Get forward prices
@@ -1264,7 +1400,7 @@ module.exports = function(upload) {
           const fwdClose = fwdPrices[s.code];
           if (!fwdClose || !s.close) return;
           const ret = (fwdClose - s.close) / s.close * 100;
-          pairs.push({ code: s.code, score: s.score_composite, scoreFund: s.score_fundamental, scoreVal: s.score_valuation, scoreMom: s.score_momentum, ret });
+          pairs.push({ code: s.code, score: s.score_composite, scoreFund: s.score_fundamental, scoreVal: s.score_valuation, scoreMom: s.score_momentum, scoreDem: s.score_demand || 0, scoreFor: s.score_foreign || 0, ret });
         });
 
         if (pairs.length < 15) return;
@@ -1293,6 +1429,8 @@ module.exports = function(upload) {
           ic_fundamental: spearmanIC(pairs, 'scoreFund'),
           ic_valuation: spearmanIC(pairs, 'scoreVal'),
           ic_momentum: spearmanIC(pairs, 'scoreMom'),
+          ic_demand: spearmanIC(pairs, 'scoreDem'),
+          ic_foreign: spearmanIC(pairs, 'scoreFor'),
           hit_rate: hitRate,
           avg_ret_top20: avgRetTop20,
           avg_ret_bot20: avgRetBot20,
