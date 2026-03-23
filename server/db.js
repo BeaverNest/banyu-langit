@@ -159,6 +159,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ca_code ON corporate_actions(code);
   CREATE INDEX IF NOT EXISTS idx_ca_date ON corporate_actions(ex_date);
 
+  CREATE TABLE IF NOT EXISTS custom_tickers (
+    code TEXT PRIMARY KEY,
+    name TEXT DEFAULT '',
+    category TEXT DEFAULT 'custom',
+    source TEXT DEFAULT 'manual',
+    rows INTEGER DEFAULT 0,
+    first_date TEXT DEFAULT '',
+    last_date TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS custom_ohlc (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    open REAL DEFAULT 0,
+    high REAL DEFAULT 0,
+    low REAL DEFAULT 0,
+    close REAL DEFAULT 0,
+    volume REAL DEFAULT 0,
+    UNIQUE(trade_date, code)
+  );
+  CREATE INDEX IF NOT EXISTS idx_cohlc_code ON custom_ohlc(code);
+  CREATE INDEX IF NOT EXISTS idx_cohlc_date ON custom_ohlc(trade_date);
+
   CREATE TABLE IF NOT EXISTS quarterly_financials (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -712,6 +738,13 @@ try {
     }
   });
 } catch (e) { console.error('Migration daily_scores:', e.message); }
+
+// Auto-migrate custom_tickers for Market Regime (role + linked_sector)
+try {
+  const ctCols = db.prepare("PRAGMA table_info(custom_tickers)").all().map(c => c.name);
+  if (!ctCols.includes('role')) db.exec("ALTER TABLE custom_tickers ADD COLUMN role TEXT DEFAULT ''");
+  if (!ctCols.includes('linked_sector')) db.exec("ALTER TABLE custom_tickers ADD COLUMN linked_sector TEXT DEFAULT ''");
+} catch (e) { console.error('Migration custom_tickers:', e.message); }
 
 // ═══ Helper functions ═══
 function latestSnap() {

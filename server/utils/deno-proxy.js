@@ -5,6 +5,7 @@
  * 1. Forward sync commands to Deno server (localhost:3456)
  * 2. Poll Deno status until done
  * 3. Auto-run bridge import after Deno finishes
+ * 4. Custom sync: user picks modules + date range
  * 
  * Add to idx.js:  require('../utils/deno-proxy')(router, db, idxBridge, logSync);
  */
@@ -94,6 +95,74 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
 
       // Bridge import
       const bridgeResult = runBridgeImport(db, idxBridge, logSync);
+
+      res.json({
+        ok: true,
+        deno: pollResult,
+        bridge: bridgeResult
+      });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // ═══ CUSTOM SYNC — user picks modules + date range ═══
+  // ═══════════════════════════════════════════════════════════════
+  router.post('/sync/custom', async (req, res) => {
+    const { modules, from, to } = req.body || {};
+    if (!modules || !Array.isArray(modules) || !modules.length) {
+      return res.json({ ok: false, error: 'No modules selected' });
+    }
+    if (!from || !to) {
+      return res.json({ ok: false, error: 'Date range required (from, to)' });
+    }
+
+    try {
+      // Forward to Deno custom sync endpoint
+      const denoRes = await fetch(`${DENO_URL}/sync/custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modules, from, to })
+      });
+      const denoData = await denoRes.json();
+      if (!denoData.ok && denoData.error === 'busy') {
+        return res.json({ ok: false, error: 'busy', message: denoData.message || 'Deno is busy with another sync' });
+      }
+      if (!denoData.ok) {
+        return res.json({ ok: false, step: 'deno', error: denoData.error || denoData.message });
+      }
+
+      // Return immediately — frontend will poll /sync/deno-status
+      res.json({ ok: true, message: 'Custom sync started', modules, from, to });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, hint: 'Is Deno server running? Start: start-deno.ps1' });
+    }
+  });
+
+  // ═══ Custom sync: blocking version (waits for completion + bridge) ═══
+  router.post('/sync/custom-blocking', async (req, res) => {
+    const { modules, from, to } = req.body || {};
+    if (!modules || !Array.isArray(modules) || !modules.length) {
+      return res.json({ ok: false, error: 'No modules selected' });
+    }
+
+    try {
+      const denoRes = await fetch(`${DENO_URL}/sync/custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modules, from: from || '', to: to || '' })
+      });
+      const denoData = await denoRes.json();
+      if (!denoData.ok) {
+        return res.json({ ok: false, step: 'deno', error: denoData.error || denoData.message });
+      }
+
+      // Poll until done (custom can be very long for big ranges)
+      const pollResult = await pollDeno(1800); // 30 min max
+
+      // Auto bridge import — only import modules that were synced
+      const bridgeResult = runSelectiveBridgeImport(db, idxBridge, logSync, modules);
 
       res.json({
         ok: true,
@@ -247,6 +316,64 @@ function runBridgeImport(db, idxBridge, logSync) {
     return { ok: true, total_rows: totalRows, detail: results };
   } catch (e) {
     if (logSync) logSync('1click_bridge', '', 0, 'error', e.message);
+    return { ok: false, error: e.message, partial: results };
+  }
+}
+
+// ═══ Helper: Run selective bridge imports (only for synced modules) ═══
+function runSelectiveBridgeImport(db, idxBridge, logSync, modules) {
+  const results = {};
+  const moduleMap = {
+    stock_summary: ['importStockSummary'],
+    index_summary: ['importIndexSummary'],
+    screener: ['importStockScreener'],
+    financial_ratio: ['importFinancialRatios', 'importFinancialRatiosFull'],
+    dividends: ['importDividends'],
+    stock_split: ['importStockSplits'],
+    company_profile: ['importCompanyProfiles', 'importCompanyDetails'],
+    broker_summary: ['importBrokerSummary'],
+    announcements: ['importCompanyAnnouncement'],
+    foreign_trading: ['importForeignTrading'],
+    domestic_trading: ['importDomesticTrading'],
+    industry_trading: ['importIndustryTrading'],
+    sectoral: ['importSectoralMovement'],
+    daily_index: ['importDailyIndex'],
+    top_movers: ['importTopMovers'],
+    active_stocks: ['importActiveStocks'],
+    suspends: ['importCompanySuspend'],
+    market_calendar: ['importMarketCalendar'],
+    index_list: ['importIndexList'],
+    index_chart: ['importIndexChart'],
+    all_tables: null // special: run all
+  };
+
+  try {
+    // If 'all_tables' selected, run everything
+    if (modules.includes('all_tables')) {
+      return runBridgeImport(db, idxBridge, logSync);
+    }
+
+    for (const mod of modules) {
+      const fns = moduleMap[mod];
+      if (!fns) continue;
+      for (const fn of fns) {
+        if (typeof idxBridge[fn] === 'function') {
+          try {
+            const opts = (fn === 'importStockSummary' || fn === 'importIndexSummary') ? {} : undefined;
+            results[fn] = opts !== undefined ? idxBridge[fn](db, opts) : idxBridge[fn](db);
+          } catch (e) { results[fn] = { rows: 0, error: e.message }; }
+        }
+      }
+    }
+
+    const totalRows = Object.values(results).reduce((s, r) => s + (r?.rows || 0), 0);
+    if (logSync) {
+      logSync('custom_bridge', modules.join(','), totalRows, 'ok',
+        JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v?.rows || 0]))));
+    }
+    return { ok: true, total_rows: totalRows, detail: results };
+  } catch (e) {
+    if (logSync) logSync('custom_bridge', '', 0, 'error', e.message);
     return { ok: false, error: e.message, partial: results };
   }
 }

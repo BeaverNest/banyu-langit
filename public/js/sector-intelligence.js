@@ -4,18 +4,22 @@ var secIntLevel='sector'; // sector | industry
 var secIntMetric='fnet'; // fnet | avg_chg | value
 var secIntWeeks=12;
 var secIntCache={};
+var secIntEmbedded = false; // true when loaded inside Market Intel (hide sub-nav)
 
 // ── Main entry: replaces loadSectorView ──
 async function loadSectorView(){
   var el=$('sector-content');if(!el)return;
 
-  // Sub-navigation
-  var h='<div style="display:flex;align-items:center;gap:3px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap">';
+  var h='';
+  // Sub-navigation — only show when standalone (not embedded in Market Intel)
+  if(!secIntEmbedded){
+  h+='<div style="display:flex;align-items:center;gap:3px;padding:8px 12px;border-bottom:1px solid var(--b1);flex-wrap:wrap">';
   [{k:'overview',l:'📊 Overview'},{k:'rotation',l:'🔥 Rotation'},{k:'timeline',l:'📈 Flow Timeline'}].forEach(function(v){
     h+='<button class="bei-sort-btn'+(secIntView===v.k?' on':'')+'" onclick="secIntView=\''+v.k+'\';loadSectorView()" style="padding:5px 12px;font-size:11px">'+v.l+'</button>';
   });
   h+='</div>';
-  h+='<div id="sec-int-body" style="overflow-y:auto;height:calc(100% - 40px)"></div>';
+  }
+  h+='<div id="sec-int-body" style="overflow-y:auto;height:calc(100% - '+(secIntEmbedded?'0':'40')+'px)"></div>';
   el.innerHTML=h;
 
   var body=$('sec-int-body');
@@ -443,10 +447,10 @@ function renderRotationHeatmap(){
     var totalCls=total>0?'up':total<0?'dn':'';
     var displayName=titleCase(name);
 
-    // Clickable name → drill to sector overview or show stock list
+    // Clickable name → go to Stock List filtered by sector/industry
     var clickAction=secIntLevel==='sector'?
-      'sectorDrillSector=\''+esc(name).replace(/'/g,"\\'")+'\';sectorDrillIndustry=\'\';secIntView=\'overview\';loadSectorView()':
-      'sectorDrillIndustry=\''+esc(name).replace(/'/g,"\\'")+'\';secIntView=\'overview\';loadSectorView()';
+      'miGoStockList(\''+esc(name).replace(/'/g,"\\'")+'\')'
+      :'miGoStockList(\'\',\''+esc(name).replace(/'/g,"\\'")+'\')';
 
     h+='<tr>';
     h+='<td style="padding:4px 8px;font-weight:600;font-size:11px;border-bottom:1px solid var(--b1);position:sticky;left:0;background:var(--bg1);z-index:2;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;color:var(--bl)" title="'+esc(name)+'" onclick="'+clickAction+'">'+esc(displayName)+'</td>';

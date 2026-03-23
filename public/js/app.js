@@ -48,7 +48,7 @@ function stab(n,el){
 
   // Lazy load — only load content on first visit
   if(n==='mkt'&&!tabLoaded.mkt){tabLoaded.mkt=true;loadMktOverview();}
-  if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadIdxDaily==='function')loadIdxDaily();}
+  if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;if(typeof loadScreener==='function')loadScreener();}
   if(n==='pf'&&!tabLoaded.pf){tabLoaded.pf=true;if(typeof loadPortfolio==='function')loadPortfolio();}
@@ -56,8 +56,8 @@ function stab(n,el){
 
   // Re-trigger load for tabs that need refresh
   if(n==='mkt')loadMktOverview();
-  if(n==='idx'&&typeof loadIdxDaily==='function')loadIdxDaily();
-  if(n==='analysis'&&typeof loadScreener==='function')loadScreener();
+  if(n==='idx'&&typeof loadMarketIntel==='function')loadMarketIntel();
+  if(n==='analysis'&&typeof loadMarketRegime==='function')loadMarketRegime();
   if(n==='pf'&&typeof loadPortfolio==='function')loadPortfolio();
   if(n==='ins'&&typeof chkIns==='function')chkIns();
 }
@@ -82,6 +82,7 @@ function anaSubTab(n,b){
   b.classList.add('on');
   panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
   $('ana-'+n).classList.add('on');
+  if(n==='regime'&&typeof loadMarketRegime==='function')loadMarketRegime();
   if(n==='screener'&&typeof loadScreener==='function')loadScreener();
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
@@ -89,6 +90,8 @@ function anaSubTab(n,b){
   if(n==='backtest'&&typeof loadBacktest==='function')loadBacktest();
   if(n==='scoring'&&typeof loadScoring==='function')loadScoring();
   if(n==='portbuilder'&&typeof loadPortfolioBuilder==='function')loadPortfolioBuilder();
+  if(n==='stockdetail'&&typeof loadStockDetail==='function')loadStockDetail();
+  if(n==='tearsheet'&&typeof loadTearsheet==='function')loadTearsheet();
 }
 
 // Insider sub-tabs (compat)

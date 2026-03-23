@@ -60,6 +60,43 @@ module.exports = function(upload) {
     res.json({ trade_date: td, data: rows });
   });
 
+  // ═══ AUTOCOMPLETE — ticker search for chart panel / global search ═══
+  router.get('/autocomplete', (req, res) => {
+    try {
+      const q = (req.query.q || '').toUpperCase().trim();
+      const limit = Math.min(parseInt(req.query.limit) || 10, 20);
+      if (!q) return res.json([]);
+      const td = latestIdxDate();
+      if (!td) return res.json([]);
+      // Stock tickers
+      const stocks = db.prepare(
+        `SELECT DISTINCT code, name, 'stock' as type FROM idx_daily
+         WHERE trade_date=? AND close>0 AND (code LIKE ? OR name LIKE ?)
+         ORDER BY CASE WHEN code LIKE ? THEN 0 ELSE 1 END, value DESC
+         LIMIT ?`
+      ).all(td, q + '%', '%' + q + '%', q + '%', limit);
+      // Index tickers from idx_indices
+      let indices = [];
+      try {
+        indices = db.prepare(
+          `SELECT DISTINCT index_code as code, index_code as name, 'index' as type FROM idx_indices
+           WHERE index_code LIKE ? GROUP BY index_code ORDER BY index_code LIMIT 5`
+        ).all('%' + q + '%');
+      } catch(e) {}
+      // Custom tickers
+      let customs = [];
+      try {
+        customs = db.prepare(
+          `SELECT code, name, 'custom' as type FROM custom_tickers
+           WHERE code LIKE ? OR name LIKE ? ORDER BY code LIMIT 5`
+        ).all(q + '%', '%' + q + '%');
+      } catch(e) {}
+      // Merge: indices first, then stocks, then custom
+      const merged = [...indices, ...stocks, ...customs].slice(0, limit);
+      res.json(merged.map(r => ({ code: r.code, name: r.name || '', type: r.type || 'stock' })));
+    } catch (e) { res.json([]); }
+  });
+
   // Summary
   router.get('/summary', (req, res) => {
     try {
@@ -118,16 +155,46 @@ module.exports = function(upload) {
     const code = (req.query.code || '').toUpperCase().trim();
     if (!code) return res.json({ error: 'No code' });
     const rows = db.prepare('SELECT * FROM idx_daily WHERE code=? ORDER BY trade_date').all(code);
-    let acc = 0, accVal = 0;
-    rows.forEach(r => {
-      r.foreign_net = r.foreign_buy - r.foreign_sell;
-      r.foreign_buy_val = r.foreign_buy * r.close;
-      r.foreign_sell_val = r.foreign_sell * r.close;
-      r.foreign_net_val = r.foreign_net * r.close;
-      acc += r.foreign_net; r.foreign_acc = acc;
-      accVal += r.foreign_net_val; r.foreign_acc_val = accVal;
-    });
-    res.json({ code, data: rows });
+    if (rows.length) {
+      let acc = 0, accVal = 0;
+      rows.forEach(r => {
+        r.foreign_net = r.foreign_buy - r.foreign_sell;
+        r.foreign_buy_val = r.foreign_buy * r.close;
+        r.foreign_sell_val = r.foreign_sell * r.close;
+        r.foreign_net_val = r.foreign_net * r.close;
+        acc += r.foreign_net; r.foreign_acc = acc;
+        accVal += r.foreign_net_val; r.foreign_acc_val = accVal;
+      });
+      return res.json({ code, data: rows });
+    }
+    // Fallback: custom_ohlc (for custom tickers like XAUUSD, commodities, etc.)
+    try {
+      const custom = db.prepare('SELECT trade_date, code, open as open_price, high, low, close, volume, 0 as prev_close, 0 as value, 0 as frequency, 0 as foreign_buy, 0 as foreign_sell, 0 as bid_vol, 0 as offer_vol, 0 as listed_shares, 0 as tradeable_shares FROM custom_ohlc WHERE code=? ORDER BY trade_date').all(code);
+      if (custom.length) {
+        custom.forEach((r, i) => {
+          r.prev_close = i > 0 ? custom[i - 1].close : r.close;
+          r.change = r.close - r.prev_close;
+          r.foreign_net = 0; r.foreign_buy_val = 0; r.foreign_sell_val = 0;
+          r.foreign_net_val = 0; r.foreign_acc = 0; r.foreign_acc_val = 0;
+          r.name = '';
+        });
+        return res.json({ code, data: custom, custom: true });
+      }
+    } catch (e) { /* custom_ohlc table might not exist */ }
+    // Also check idx_indices for index codes
+    try {
+      const idxRows = db.prepare('SELECT trade_date, index_code as code, previous as prev_close, close, highest as high, lowest as low, volume, value, frequency, 0 as foreign_buy, 0 as foreign_sell, 0 as open_price, 0 as bid_vol, 0 as offer_vol, 0 as listed_shares, 0 as tradeable_shares FROM idx_indices WHERE index_code=? ORDER BY trade_date').all(code);
+      if (idxRows.length) {
+        idxRows.forEach(r => {
+          r.change = r.close - (r.prev_close || 0);
+          r.foreign_net = 0; r.foreign_buy_val = 0; r.foreign_sell_val = 0;
+          r.foreign_net_val = 0; r.foreign_acc = 0; r.foreign_acc_val = 0;
+          r.name = code;
+        });
+        return res.json({ code, data: idxRows, index: true });
+      }
+    } catch (e) { /* idx_indices might not have this code */ }
+    res.json({ code, data: [] });
   });
 
   // Foreign accumulation ranking
@@ -418,14 +485,51 @@ module.exports = function(upload) {
 
       const ohlc = db.prepare(
         `SELECT trade_date, code, name, open_price, high, low, close, volume, prev_close,
-                value, frequency, foreign_buy, foreign_sell, listed_shares
+                value, frequency, foreign_buy, foreign_sell, listed_shares, bid_vol, offer_vol
          FROM idx_daily WHERE code=? ORDER BY trade_date`
       ).all(code);
 
-      if (!ohlc.length) return res.json({ code, data: [], actions: [] });
+      if (!ohlc.length) {
+        // Fallback: check custom_ohlc table
+        try {
+          const custom = db.prepare(
+            `SELECT trade_date, code, open as open_price, high, low, close, volume, 0 as prev_close,
+                    0 as value, 0 as frequency, 0 as foreign_buy, 0 as foreign_sell,
+                    0 as listed_shares, 0 as bid_vol, 0 as offer_vol
+             FROM custom_ohlc WHERE code=? ORDER BY trade_date`
+          ).all(code);
+          if (custom.length) {
+            // Add prev_close
+            const data = custom.map((r, i) => {
+              const pc = i > 0 ? custom[i-1].close : r.open_price || r.close;
+              return { ...r, prev_close: pc, name: '', change: 0,
+                adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
+                adj_volume: r.volume, cum_factor: 1, _custom: true };
+            });
+            return res.json({ code, data, actions: [], custom: true });
+          }
+        } catch(e2) { /* custom table might not exist yet */ }
+        return res.json({ code, data: [], actions: [] });
+      }
+
+      // ── Fix bad OHLC data from IDX API ──
+      // Some rows have open_price=0 or close=0. Fix: fallback to prev_close/close.
+      // Filter out rows where close=0 (completely invalid).
+      const cleaned = ohlc.filter(r => r.close > 0).map(r => {
+        // If open_price is 0 or missing, use prev_close (or close as last resort)
+        if (!r.open_price || r.open_price <= 0) r.open_price = r.prev_close || r.close;
+        // If high is 0 or less than close, fix it
+        if (!r.high || r.high <= 0) r.high = Math.max(r.open_price, r.close);
+        // If low is 0 or greater than close, fix it
+        if (!r.low || r.low <= 0) r.low = Math.min(r.open_price, r.close);
+        // Ensure high >= max(open, close) and low <= min(open, close)
+        r.high = Math.max(r.high, r.open_price, r.close);
+        r.low = Math.min(r.low, r.open_price, r.close);
+        return r;
+      });
 
       if (!actions.length) {
-        const data = ohlc.map(r => ({
+        const data = cleaned.map(r => ({
           ...r, adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
           adj_volume: r.volume, cum_factor: 1
         }));
@@ -436,7 +540,7 @@ module.exports = function(upload) {
       // factor = 1/ratio (ratio = new_shares/old_shares)
       // Split 1:5 → ratio=5, factor=0.2 → old prices shrink
       // Reverse 10:1 → ratio=0.1, factor=10 → old prices grow
-      const data = ohlc.map(r => {
+      const data = cleaned.map(r => {
         let cumFactor = 1;
         for (const ca of actions) {
           if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
@@ -636,6 +740,7 @@ module.exports = function(upload) {
           change_pct: s.change_pct, value: s.value, volume: s.volume, frequency: s.frequency,
           foreign_buy: s.foreign_buy, foreign_sell: s.foreign_sell,
           fnet_val: s.fnet_val, foreign_buy_val: s.foreign_buy_val, foreign_sell_val: s.foreign_sell_val,
+          bid_vol: s.bid_vol || 0, offer_vol: s.offer_vol || 0,
           market_cap: s.market_cap, score, val_spike, freq_spike, vol_spike, fnet_spike,
           ma20: ma.ma20 || 0, ma200: ma.ma200 || 0,
           sector: fund.sector || '', industry: fund.industry || ''
@@ -836,7 +941,7 @@ module.exports = function(upload) {
       const fm = latestFundDate();
       const fundMap = {};
       if (fm) {
-        db.prepare('SELECT code, sector, industry, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(fm)
+        db.prepare('SELECT code, name, sector, industry, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(fm)
           .forEach(f => { fundMap[f.code] = f; });
       }
 
@@ -1011,7 +1116,7 @@ module.exports = function(upload) {
         const divYield = divMap[s.code] && s.close > 0 ? Math.round(divMap[s.code] / s.close * 10000) / 100 : 0;
 
         results.push({
-          code: s.code, name: s.name, close: s.close, change_pct: s.change_pct,
+          code: s.code, name: s.name || fund.name || '', close: s.close, change_pct: s.change_pct,
           sector: fund.sector || '', industry: fund.industry || '', market_cap: s.market_cap,
           // Fundamental raw
           roe: fund.roe || 0, roa: fund.roa || 0, npm: fund.npm || 0, der: fund.der || 0,
@@ -1151,7 +1256,7 @@ module.exports = function(upload) {
       const fm = latestFundDate();
       const fundMap = {};
       if (fm) {
-        db.prepare('SELECT code, sector, industry, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(fm)
+        db.prepare('SELECT code, name, sector, industry, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(fm)
           .forEach(f => { fundMap[f.code] = f; });
       }
       const indMedian = {};
@@ -1459,6 +1564,236 @@ module.exports = function(upload) {
     } catch (e) { res.json({ dates: [] }); }
   });
 
+  // ═══ IC DECAY + INFORMATION RATIO ═══
+  // Computes IC at multiple horizons to show signal decay curve
+  router.get('/ic-decay', (req, res) => {
+    try {
+      const horizons = [1, 2, 3, 5, 7, 10, 15, 20, 30];
+      const limit = Math.min(parseInt(req.query.limit) || 60, 250);
+
+      const scoreDates = db.prepare('SELECT DISTINCT calc_date FROM daily_scores ORDER BY calc_date DESC LIMIT ?').all(limit).map(r => r.calc_date);
+      if (scoreDates.length < 5) return res.json({ error: 'Need at least 5 days of scores', data: [] });
+      scoreDates.reverse();
+
+      const allTradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+      const tdIndex = {};
+      allTradeDates.forEach((d, i) => { tdIndex[d] = i; });
+
+      // Spearman rank correlation
+      function spearmanIC(pairs, scoreKey) {
+        const n = pairs.length;
+        if (n < 10) return null;
+        const byScore = pairs.slice().sort((a, b) => a[scoreKey] - b[scoreKey]);
+        const byRet = pairs.slice().sort((a, b) => a.ret - b.ret);
+        const scoreRank = {}; byScore.forEach((r, i) => { scoreRank[r.code] = i + 1; });
+        const retRank = {}; byRet.forEach((r, i) => { retRank[r.code] = i + 1; });
+        let d2sum = 0;
+        pairs.forEach(r => { const d = (scoreRank[r.code] || 0) - (retRank[r.code] || 0); d2sum += d * d; });
+        return Math.round((1 - 6 * d2sum / (n * (n * n - 1))) * 10000) / 10000;
+      }
+
+      // For each horizon, compute IC across all scored dates
+      const decayCurve = horizons.map(h => {
+        const ics = { composite: [], fundamental: [], valuation: [], momentum: [], demand: [], foreign: [] };
+
+        for (const sd of scoreDates) {
+          const fwdIdx = (tdIndex[sd] || 0) + h;
+          if (fwdIdx >= allTradeDates.length) continue;
+          const fwdDate = allTradeDates[fwdIdx];
+
+          const scores = db.prepare('SELECT code, score_composite, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign, close FROM daily_scores WHERE calc_date=?').all(sd);
+          if (scores.length < 20) continue;
+
+          const fwdPrices = {};
+          const codes = scores.map(s => s.code);
+          const ph = codes.map(() => '?').join(',');
+          db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+            .forEach(r => { fwdPrices[r.code] = r.close; });
+
+          const pairs = [];
+          scores.forEach(s => {
+            const fp = fwdPrices[s.code];
+            if (!fp || !s.close) return;
+            pairs.push({ code: s.code, ret: (fp - s.close) / s.close * 100,
+              composite: s.score_composite, fundamental: s.score_fundamental,
+              valuation: s.score_valuation, momentum: s.score_momentum,
+              demand: s.score_demand || 0, foreign: s.score_foreign || 0 });
+          });
+
+          if (pairs.length < 15) continue;
+
+          for (const key of Object.keys(ics)) {
+            const ic = spearmanIC(pairs, key);
+            if (ic !== null) ics[key].push(ic);
+          }
+        }
+
+        // Compute avg IC, std IC, IR for each factor
+        const result = { horizon: h };
+        for (const [key, arr] of Object.entries(ics)) {
+          if (arr.length < 3) {
+            result[key] = { avg_ic: 0, std_ic: 0, ir: 0, n: 0 };
+            continue;
+          }
+          const avg = arr.reduce((s, v) => s + v, 0) / arr.length;
+          const variance = arr.reduce((s, v) => s + Math.pow(v - avg, 2), 0) / arr.length;
+          const std = Math.sqrt(variance);
+          const ir = std > 0 ? avg / std : 0; // Information Ratio = avg IC / std IC
+          result[key] = {
+            avg_ic: Math.round(avg * 10000) / 10000,
+            std_ic: Math.round(std * 10000) / 10000,
+            ir: Math.round(ir * 1000) / 1000,
+            n: arr.length
+          };
+        }
+        return result;
+      });
+
+      // Find optimal horizon (highest IR for composite)
+      let bestHorizon = 5, bestIR = 0;
+      decayCurve.forEach(d => {
+        if (d.composite.ir > bestIR) { bestIR = d.composite.ir; bestHorizon = d.horizon; }
+      });
+
+      res.json({
+        decay: decayCurve,
+        best_horizon: bestHorizon,
+        best_ir: bestIR,
+        scored_dates: scoreDates.length,
+        factors: ['composite', 'fundamental', 'valuation', 'momentum', 'demand', 'foreign']
+      });
+    } catch (e) { res.json({ error: e.message, data: [] }); }
+  });
+
+  // ═══ OPTIMIZE WEIGHTS — Grid Search ═══
+  // Exhaustive search over all weight combinations (step=5, sum=100)
+  // For each combo, compute weighted composite score → Spearman IC vs forward return → IR
+  router.get('/optimize-weights', (req, res) => {
+    try {
+      const horizon = parseInt(req.query.horizon) || 5;
+      const step = parseInt(req.query.step) || 5;
+      const limit = Math.min(parseInt(req.query.limit) || 60, 250);
+
+      // Get scored dates
+      const scoreDates = db.prepare('SELECT DISTINCT calc_date FROM daily_scores ORDER BY calc_date DESC LIMIT ?').all(limit).map(r => r.calc_date);
+      if (scoreDates.length < 5) return res.json({ error: 'Need at least 5 scored dates. Run Backfill first.' });
+      scoreDates.reverse();
+
+      // Trade date index for forward lookup
+      const allTradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+      const tdIndex = {};
+      allTradeDates.forEach((d, i) => { tdIndex[d] = i; });
+
+      // Pre-load all score data + forward returns per date
+      const dateData = []; // [{scores: [{code, fund, val, mom, dem, for, fwdRet}], ...}]
+      for (const sd of scoreDates) {
+        const fwdIdx = (tdIndex[sd] || 0) + horizon;
+        if (fwdIdx >= allTradeDates.length) continue;
+        const fwdDate = allTradeDates[fwdIdx];
+
+        const scores = db.prepare('SELECT code, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign, close FROM daily_scores WHERE calc_date=?').all(sd);
+        if (scores.length < 20) continue;
+
+        const fwdPrices = {};
+        const codes = scores.map(s => s.code);
+        const ph = codes.map(() => '?').join(',');
+        db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+          .forEach(r => { fwdPrices[r.code] = r.close; });
+
+        const pairs = [];
+        for (const s of scores) {
+          const fp = fwdPrices[s.code];
+          if (!fp || !s.close || s.close <= 0) continue;
+          pairs.push({
+            code: s.code,
+            f: s.score_fundamental || 0,
+            v: s.score_valuation || 0,
+            m: s.score_momentum || 0,
+            d: s.score_demand || 0,
+            r: s.score_foreign || 0,
+            ret: (fp - s.close) / s.close * 100
+          });
+        }
+        if (pairs.length >= 15) dateData.push(pairs);
+      }
+
+      if (dateData.length < 3) return res.json({ error: 'Not enough valid date data (' + dateData.length + '). Need 3+ dates with forward returns.' });
+
+      // Spearman IC helper
+      function spearmanIC(pairs, compositeScores) {
+        const n = pairs.length;
+        const indexed = pairs.map((p, i) => ({ i, score: compositeScores[i], ret: p.ret }));
+        const byScore = indexed.slice().sort((a, b) => a.score - b.score);
+        const byRet = indexed.slice().sort((a, b) => a.ret - b.ret);
+        const scoreRank = new Array(n);
+        const retRank = new Array(n);
+        byScore.forEach((r, rank) => { scoreRank[r.i] = rank + 1; });
+        byRet.forEach((r, rank) => { retRank[r.i] = rank + 1; });
+        let d2sum = 0;
+        for (let i = 0; i < n; i++) { const dd = scoreRank[i] - retRank[i]; d2sum += dd * dd; }
+        return 1 - 6 * d2sum / (n * (n * n - 1));
+      }
+
+      // Generate all weight combinations (step%, sum=100%)
+      const combos = [];
+      for (let wF = 0; wF <= 100; wF += step) {
+        for (let wV = 0; wV <= 100 - wF; wV += step) {
+          for (let wM = 0; wM <= 100 - wF - wV; wM += step) {
+            for (let wD = 0; wD <= 100 - wF - wV - wM; wD += step) {
+              const wR = 100 - wF - wV - wM - wD;
+              combos.push([wF, wV, wM, wD, wR]);
+            }
+          }
+        }
+      }
+
+      // Evaluate each combo
+      let bestCombo = [20, 20, 20, 20, 20], bestIR = -999, bestAvgIC = 0;
+      const topResults = [];
+
+      for (const [wF, wV, wM, wD, wR] of combos) {
+        const ics = [];
+        for (const pairs of dateData) {
+          const composites = pairs.map(p => p.f * wF + p.v * wV + p.m * wM + p.d * wD + p.r * wR);
+          const ic = spearmanIC(pairs, composites);
+          if (!isNaN(ic)) ics.push(ic);
+        }
+        if (ics.length < 3) continue;
+        const avg = ics.reduce((s, v) => s + v, 0) / ics.length;
+        const variance = ics.reduce((s, v) => s + (v - avg) ** 2, 0) / ics.length;
+        const std = Math.sqrt(variance);
+        const ir = std > 0 ? avg / std : 0;
+
+        if (ir > bestIR) {
+          bestIR = ir;
+          bestCombo = [wF, wV, wM, wD, wR];
+          bestAvgIC = avg;
+        }
+        topResults.push({ w: [wF, wV, wM, wD, wR], ir: Math.round(ir * 1000) / 1000, ic: Math.round(avg * 10000) / 10000 });
+      }
+
+      // Sort top results and return top 10
+      topResults.sort((a, b) => b.ir - a.ir);
+
+      res.json({
+        best: {
+          fundamental: bestCombo[0], valuation: bestCombo[1], momentum: bestCombo[2],
+          demand: bestCombo[3], foreign: bestCombo[4],
+          ir: Math.round(bestIR * 1000) / 1000,
+          avg_ic: Math.round(bestAvgIC * 10000) / 10000
+        },
+        horizon,
+        step,
+        combos_tested: combos.length,
+        dates_used: dateData.length,
+        top10: topResults.slice(0, 10).map(r => ({
+          fundamental: r.w[0], valuation: r.w[1], momentum: r.w[2], demand: r.w[3], foreign: r.w[4],
+          ir: r.ir, avg_ic: r.ic
+        }))
+      });
+    } catch (e) { res.json({ error: e.message }); }
+  });
+
   // ═══ INDEX SUMMARY (BEI Index Data) ═══
   // Index summary stats
   router.get('/indices/stats', (req, res) => {
@@ -1738,6 +2073,1345 @@ module.exports = function(upload) {
     console.log('[IDX] Deno proxy routes registered');
   } catch (e) {
     console.warn('[IDX] Deno proxy not loaded:', e.message);
+  }
+
+  // ═══════════════════════════════════════════════
+  // CUSTOM TICKERS — Add/Update/Delete external data
+  // ═══════════════════════════════════════════════
+
+  // List all custom tickers
+  router.get('/custom/tickers', (req, res) => {
+    try {
+      const rows = db.prepare('SELECT * FROM custom_tickers ORDER BY code').all();
+      res.json(rows);
+    } catch (e) { res.json([]); }
+  });
+
+  // Delete custom ticker + its OHLC data
+  router.delete('/custom/tickers/:code', (req, res) => {
+    try {
+      const code = req.params.code.toUpperCase().trim();
+      db.prepare('DELETE FROM custom_ohlc WHERE code=?').run(code);
+      db.prepare('DELETE FROM custom_tickers WHERE code=?').run(code);
+      res.json({ ok: true, deleted: code });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ EOD AUTO-FETCH — Alpha Vantage + CoinGecko ═══
+  let eodFetcher;
+  try { eodFetcher = require('./eod-fetcher'); } catch (e) { /* module not available */ }
+
+  router.post('/custom/fetch-eod', async (req, res) => {
+    if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found. Place eod-fetcher.js in server/routes/' });
+    try {
+      const code = (req.body.code || '').toUpperCase().trim();
+      const category = (req.body.category || '').trim();
+      const fullHistory = !!req.body.full_history;
+      if (!code) return res.status(400).json({ error: 'Missing code' });
+
+      const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
+      const det = eodFetcher.detectSource(code, category);
+
+      const result = await eodFetcher.fetchEOD(code, category, apiKey, fullHistory);
+      const rows = result.rows;
+      if (!rows.length) return res.json({ ok: true, code, inserted: 0, updated: 0, message: 'No data returned' });
+
+      const upsert = db.prepare(
+        `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
+         VALUES(?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(trade_date, code) DO UPDATE SET
+         open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
+      );
+      let inserted = 0, updated = 0;
+      db.transaction(() => {
+        for (const r of rows) {
+          if (!r.date || !r.close) continue;
+          const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, code);
+          upsert.run(r.date, code, r.open, r.high, r.low, r.close, r.volume);
+          if (existing) updated++; else inserted++;
+        }
+      })();
+
+      const totalRows = db.prepare('SELECT COUNT(*) as c FROM custom_ohlc WHERE code=?').get(code)?.c || 0;
+      const dateRange = db.prepare('SELECT MIN(trade_date) as first, MAX(trade_date) as last FROM custom_ohlc WHERE code=?').get(code);
+      const name = req.body.name || code;
+      db.prepare(
+        `INSERT INTO custom_tickers(code, name, category, source, rows, first_date, last_date, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(code) DO UPDATE SET
+         rows=excluded.rows, first_date=excluded.first_date, last_date=excluded.last_date,
+         source=excluded.source, updated_at=datetime('now')`
+      ).run(code, name, category || 'custom', result.source, totalRows, dateRange?.first || '', dateRange?.last || '');
+
+      res.json({ ok: true, code, source: result.source, inserted, updated, total_rows: totalRows,
+        date_range: { first: dateRange?.first, last: dateRange?.last } });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/custom/sync-stale', async (req, res) => {
+    if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
+    try {
+      const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
+      const staleDays = parseInt(req.body.stale_days) || 7;
+      const today = new Date().toISOString().split('T')[0];
+      const all = db.prepare('SELECT code, name, category, last_date FROM custom_tickers ORDER BY code').all();
+      const stale = all.filter(r => {
+        if (!r.last_date) return true;
+        return Math.floor((new Date(today) - new Date(r.last_date)) / 86400000) > staleDays;
+      });
+      if (!stale.length) return res.json({ ok: true, synced: 0, message: 'All tickers up to date' });
+
+      const results = [];
+      for (const ticker of stale) {
+        try {
+          const det = eodFetcher.detectSource(ticker.code, ticker.category);
+
+          const data = await eodFetcher.fetchEOD(ticker.code, ticker.category, apiKey, false);
+          let inserted = 0, updated = 0;
+          const upsert = db.prepare(
+            `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
+             VALUES(?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(trade_date, code) DO UPDATE SET
+             open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
+          );
+          db.transaction(() => {
+            for (const r of data.rows) {
+              if (!r.date || !r.close) continue;
+              const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, ticker.code);
+              upsert.run(r.date, ticker.code, r.open, r.high, r.low, r.close, r.volume);
+              if (existing) updated++; else inserted++;
+            }
+          })();
+
+          const totalRows = db.prepare('SELECT COUNT(*) as c FROM custom_ohlc WHERE code=?').get(ticker.code)?.c || 0;
+          const dateRange = db.prepare('SELECT MIN(trade_date) as first, MAX(trade_date) as last FROM custom_ohlc WHERE code=?').get(ticker.code);
+          db.prepare('UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime(\'now\') WHERE code=?')
+            .run(totalRows, dateRange?.first || '', dateRange?.last || '', ticker.code);
+          results.push({ code: ticker.code, inserted, updated, source: data.source });
+
+          // Rate limit: 2s between requests
+          await new Promise(r => setTimeout(r, 2000));
+        } catch (e) { results.push({ code: ticker.code, error: e.message }); }
+      }
+      res.json({ ok: true, synced: results.length, results });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Upload CSV — auto-detect Investing.com / Yahoo / generic format
+  const multer = require('multer');
+  const csvUpload = multer({ dest: '/tmp/csv-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+
+  router.post('/custom/upload', csvUpload.single('file'), (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+      const code = (req.body.code || '').toUpperCase().trim();
+      const name = (req.body.name || code).trim();
+      const category = (req.body.category || 'custom').trim();
+      const linkedSector = (req.body.linked_sector || '').trim();
+
+      if (!code) return res.status(400).json({ error: 'Ticker code required' });
+
+      // Read file
+      const fs = require('fs');
+      let raw = fs.readFileSync(req.file.path, 'utf-8');
+      fs.unlinkSync(req.file.path); // cleanup
+
+      // Strip BOM
+      if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+      if (raw.startsWith('\xEF\xBB\xBF')) raw = raw.slice(3);
+
+      // Check if frontend sent column mapping
+      let colMap = null;
+      try { colMap = JSON.parse(req.body.col_map || 'null'); } catch(e) {}
+      const userSep = req.body.separator || null;
+      const skipLines = parseInt(req.body.skip_lines) || 0;
+
+      // Determine separator
+      const sep = userSep === '\\t' ? '\t' : (userSep || null);
+
+      const allLines = raw.split(/\r?\n/).filter(l => l.trim());
+      const lines = allLines.slice(skipLines);
+      if (lines.length < 2) return res.status(400).json({ error: 'File too short (after skipping ' + skipLines + ' lines)' });
+
+      let rows = [];
+
+      if (colMap && colMap.length && colMap.includes('Date') && colMap.includes('Close')) {
+        // ── MODE: User-defined column mapping (AmiBroker-style) ──
+        const dateIdx = colMap.indexOf('Date');
+        const closeIdx = colMap.indexOf('Close');
+        const openIdx = colMap.indexOf('Open');
+        const highIdx = colMap.indexOf('High');
+        const lowIdx = colMap.indexOf('Low');
+        const volIdx = colMap.indexOf('Volume');
+
+        // Parse numbers (handle various formats + strip % suffix)
+        function parseNum(s) {
+          if (!s || s === '-' || s === 'null') return 0;
+          s = String(s).replace(/"/g, '').replace(/%/g, '').trim();
+          if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+          else s = s.replace(/,/g, '');
+          return parseFloat(s) || 0;
+        }
+        function parseVol(s) {
+          if (!s || s === '-' || s === 'null') return 0;
+          s = String(s).replace(/"/g, '').replace(/%/g, '').trim();
+          let mult = 1;
+          if (s.endsWith('B') || s.endsWith('b')) { mult = 1e9; s = s.slice(0, -1); }
+          else if (s.endsWith('M') || s.endsWith('m')) { mult = 1e6; s = s.slice(0, -1); }
+          else if (s.endsWith('K') || s.endsWith('k')) { mult = 1e3; s = s.slice(0, -1); }
+          return parseNum(s) * mult;
+        }
+        function parseDate(d) {
+          d = d.replace(/"/g, '').trim();
+          // DD/MM/YYYY
+          if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d)) { const [dd, mm, yyyy] = d.split('/'); return `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`; }
+          // YYYY-MM-DD
+          if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.substring(0, 10);
+          // YYYY/MM/DD
+          if (/^\d{4}\/\d{2}\/\d{2}/.test(d)) return d.substring(0, 10).replace(/\//g, '-');
+          // DD-MM-YYYY
+          if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(d)) { const [dd, mm, yyyy] = d.split('-'); return `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`; }
+          // "Februari 2026" / "March 2025" (month name + year)
+          const monthMap = {januari:'01',februari:'02',maret:'03',april:'04',mei:'05',juni:'06',juli:'07',agustus:'08',september:'09',oktober:'10',november:'11',desember:'12',
+            january:'01',february:'02',march:'03',may:'05',june:'06',july:'07',august:'08',october:'10',december:'12'};
+          const mMatch = d.match(/^(\w+)\s+(\d{4})$/i);
+          if (mMatch) {
+            const mKey = mMatch[1].toLowerCase();
+            const mm = monthMap[mKey];
+            if (mm) return `${mMatch[2]}-${mm}-01`;
+          }
+          // "Q1 2025", "Q2 2026" (quarterly)
+          const qMatch = d.match(/^Q(\d)\s+(\d{4})$/i);
+          if (qMatch) {
+            const qm = {'1':'01','2':'04','3':'07','4':'10'}[qMatch[1]] || '01';
+            return `${qMatch[2]}-${qm}-01`;
+          }
+          // "2025" (year only)
+          if (/^\d{4}$/.test(d)) return `${d}-01-01`;
+          // Fallback: JS Date parse
+          const dt = new Date(d); if (!isNaN(dt)) return dt.toISOString().slice(0, 10);
+          return '';
+        }
+
+        // Quote-aware CSV line splitter for specific separator
+        function splitCSV(line, s) {
+          const result = []; let current = '', inQ = false;
+          for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (c === '"') { inQ = !inQ; continue; }
+            if (c === s && !inQ) { result.push(current.trim()); current = ''; continue; }
+            current += c;
+          }
+          result.push(current.trim());
+          return result;
+        }
+
+        // Skip header row if it looks like text
+        const startRow = /[a-zA-Z]/.test(splitCSV(lines[0], sep || ',')[dateIdx] || '') ? 1 : 0;
+
+        for (let i = startRow; i < lines.length; i++) {
+          const cols = splitCSV(lines[i], sep || ',');
+          if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
+          const date = parseDate(cols[dateIdx] || '');
+          const close = parseNum(cols[closeIdx] || '');
+          if (!date || close <= 0) continue;
+          rows.push({
+            date,
+            open: openIdx >= 0 ? parseNum(cols[openIdx] || '') : close,
+            high: highIdx >= 0 ? parseNum(cols[highIdx] || '') : close,
+            low: lowIdx >= 0 ? parseNum(cols[lowIdx] || '') : close,
+            close,
+            volume: volIdx >= 0 ? parseVol(cols[volIdx] || '') : 0
+          });
+        }
+      } else {
+        // ── MODE: Legacy auto-detect (existing behavior) ──
+        const header = parseCSVLine(lines[0]).map(h => h.replace(/[^\x20-\x7E]/g, '').replace(/"/g, '').trim().toLowerCase());
+        const fmt = detectCSVFormat(header);
+        if (!fmt) return res.status(400).json({
+          error: 'Cannot detect CSV format. Use the column mapper to assign columns manually.',
+          headers: header
+        });
+
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseCSVLine(lines[i]);
+          if (cols.length < 4) continue;
+          const parsed = parseRow(cols, fmt, header);
+          if (parsed && parsed.date && parsed.close > 0) rows.push(parsed);
+        }
+      }
+
+      if (!rows.length) return res.status(400).json({ error: 'No valid rows parsed' });
+
+      // Sort by date ascending
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+
+      // Upsert into custom_ohlc
+      const upsert = db.prepare(
+        `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
+         VALUES(?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(trade_date, code) DO UPDATE SET
+         open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
+      );
+
+      let inserted = 0, updated = 0;
+      db.transaction(() => {
+        for (const r of rows) {
+          const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, code);
+          upsert.run(r.date, code, r.open, r.high, r.low, r.close, r.volume);
+          if (existing) updated++; else inserted++;
+        }
+      })();
+
+      // Update custom_tickers metadata (with linked_sector)
+      const totalRows = db.prepare('SELECT COUNT(*) as c FROM custom_ohlc WHERE code=?').get(code)?.c || 0;
+      const dateRange = db.prepare('SELECT MIN(trade_date) as first, MAX(trade_date) as last FROM custom_ohlc WHERE code=?').get(code);
+
+      db.prepare(
+        `INSERT INTO custom_tickers(code, name, category, source, rows, first_date, last_date, role, linked_sector, updated_at)
+         VALUES(?, ?, ?, 'csv', ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(code) DO UPDATE SET
+         name=excluded.name, category=excluded.category, rows=excluded.rows,
+         first_date=excluded.first_date, last_date=excluded.last_date,
+         role=CASE WHEN excluded.role!='' THEN excluded.role ELSE role END,
+         linked_sector=CASE WHEN excluded.linked_sector!='' THEN excluded.linked_sector ELSE linked_sector END,
+         updated_at=datetime('now')`
+      ).run(code, name, category, totalRows, dateRange?.first || '', dateRange?.last || '', (req.body.role || '').trim(), linkedSector);
+
+      res.json({
+        ok: true, code, name, category,
+        format: colMap ? 'custom_mapped' : 'auto_detect',
+        inserted, updated,
+        total_rows: totalRows,
+        date_range: { first: dateRange?.first, last: dateRange?.last }
+      });
+
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Get custom ticker OHLC data (for preview)
+  router.get('/custom/ohlc/:code', (req, res) => {
+    try {
+      const code = req.params.code.toUpperCase().trim();
+      const limit = parseInt(req.query.limit) || 0;
+      let sql = 'SELECT * FROM custom_ohlc WHERE code=? ORDER BY trade_date';
+      if (limit) sql += ' LIMIT ' + limit;
+      const rows = db.prepare(sql).all(code);
+      res.json(rows);
+    } catch (e) { res.json([]); }
+  });
+
+  // ── CSV Format Detection ──
+  function detectCSVFormat(header) {
+    const h = header.join('|');
+    // Investing.com (Indonesian): Tanggal, Terakhir, Pembukaan, Tertinggi, Terendah, Vol.
+    if (h.includes('tanggal') && h.includes('terakhir')) {
+      return { type: 'investing_id',
+        date: header.indexOf('tanggal'), close: header.indexOf('terakhir'),
+        open: header.indexOf('pembukaan'), high: header.indexOf('tertinggi'),
+        low: header.indexOf('terendah'), vol: header.findIndex(h => h.startsWith('vol')) };
+    }
+    // Investing.com (English): Date, Price, Open, High, Low, Vol.
+    if (h.includes('date') && h.includes('price') && h.includes('open')) {
+      return { type: 'investing_en',
+        date: header.indexOf('date'), close: header.indexOf('price'),
+        open: header.indexOf('open'), high: header.indexOf('high'),
+        low: header.indexOf('low'), vol: header.findIndex(h => h.startsWith('vol')) };
+    }
+    // Yahoo Finance: Date, Open, High, Low, Close, Adj Close, Volume
+    if (h.includes('date') && h.includes('close') && h.includes('adj close')) {
+      return { type: 'yahoo',
+        date: header.indexOf('date'), close: header.indexOf('adj close') >= 0 ? header.indexOf('adj close') : header.indexOf('close'),
+        open: header.indexOf('open'), high: header.indexOf('high'),
+        low: header.indexOf('low'), vol: header.indexOf('volume') };
+    }
+    // Generic: Date, Open, High, Low, Close, Volume
+    if (h.includes('date') && h.includes('close')) {
+      return { type: 'generic',
+        date: header.indexOf('date'), close: header.indexOf('close'),
+        open: header.indexOf('open'), high: header.indexOf('high'),
+        low: header.indexOf('low'), vol: header.indexOf('volume') >= 0 ? header.indexOf('volume') : header.findIndex(h => h.startsWith('vol')) };
+    }
+    return null;
+  }
+
+  // ── Parse CSV line (handle quoted fields) ──
+  function parseCSVLine(line) {
+    const result = [];
+    let current = '', inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQuote = !inQuote; continue; }
+      if ((c === ',' || c === ';' || c === '\t') && !inQuote) { result.push(current.trim()); current = ''; continue; }
+      current += c;
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  // ── Parse row based on format ──
+  function parseRow(cols, fmt, header) {
+    try {
+      const raw = {
+        date: cols[fmt.date] || '',
+        open: cols[fmt.open] || '',
+        high: cols[fmt.high] || '',
+        low: cols[fmt.low] || '',
+        close: cols[fmt.close] || '',
+        vol: fmt.vol >= 0 ? (cols[fmt.vol] || '0') : '0'
+      };
+
+      // Parse date
+      let date = '';
+      const d = raw.date.replace(/"/g, '').trim();
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d)) {
+        // DD/MM/YYYY (Investing.com)
+        const [dd, mm, yyyy] = d.split('/');
+        date = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+      } else if (/^\d{4}-\d{2}-\d{2}/.test(d)) {
+        // YYYY-MM-DD (Yahoo, generic)
+        date = d.substring(0, 10);
+      } else if (/^\w+ \d{1,2}, \d{4}$/.test(d)) {
+        // "Mar 13, 2026" (Investing English)
+        const dt = new Date(d);
+        if (!isNaN(dt)) date = dt.toISOString().slice(0, 10);
+      } else {
+        // Try Date parse
+        const dt = new Date(d);
+        if (!isNaN(dt)) date = dt.toISOString().slice(0, 10);
+      }
+
+      if (!date) return null;
+
+      // Parse numbers (handle "1.234,56" Investing ID format + "1,234.56" EN format)
+      function parseNum(s) {
+        if (!s || s === '-' || s === 'null') return 0;
+        s = String(s).replace(/"/g, '').trim();
+        // Detect Investing ID format: dot as thousand sep, comma as decimal
+        // "15.690,50" or "15,52"
+        if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) {
+          // European/ID format: 1.234.567,89
+          s = s.replace(/\./g, '').replace(',', '.');
+        } else {
+          // EN format: 1,234,567.89
+          s = s.replace(/,/g, '');
+        }
+        return parseFloat(s) || 0;
+      }
+
+      // Parse volume (handle "1,03M", "870,54K", "1.03M", "870.54K")
+      function parseVol(s) {
+        if (!s || s === '-' || s === 'null') return 0;
+        s = String(s).replace(/"/g, '').trim();
+        let mult = 1;
+        if (s.endsWith('B') || s.endsWith('b')) { mult = 1e9; s = s.slice(0, -1); }
+        else if (s.endsWith('M') || s.endsWith('m')) { mult = 1e6; s = s.slice(0, -1); }
+        else if (s.endsWith('K') || s.endsWith('k')) { mult = 1e3; s = s.slice(0, -1); }
+        return parseNum(s) * mult;
+      }
+
+      return {
+        date,
+        open: parseNum(raw.open),
+        high: parseNum(raw.high),
+        low: parseNum(raw.low),
+        close: parseNum(raw.close),
+        volume: parseVol(raw.vol)
+      };
+    } catch (e) { return null; }
+  }
+
+  // ═══ MARKET REGIME — Top-Down Framework ═══
+  router.get('/market-regime', (req, res) => {
+    try {
+      const today = latestIdxDate();
+
+      // ── Level 1: Global Sentiment (custom_tickers with category=global_index) ──
+      let global = [];
+      try {
+        const globalTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='global_index' ORDER BY code").all();
+        global = globalTickers.map(t => {
+          const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
+          if (!rows.length) return { code: t.code, name: t.name || t.code };
+          const now = rows[0].close;
+          const d1 = rows[1] ? rows[1].close : now;
+          const d5 = rows[4] ? rows[4].close : now;
+          const d20 = rows[19] ? rows[19].close : now;
+          return {
+            code: t.code, name: t.name || t.code, close: now,
+            chg_pct: d1 > 0 ? Math.round((now - d1) / d1 * 10000) / 100 : 0,
+            chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
+            chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0
+          };
+        });
+      } catch (e) {}
+
+      // ── Level 2: Commodity Cycle (custom_tickers with category=commodity) ──
+      let commodities = [];
+      try {
+        const cmdTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
+        commodities = cmdTickers.map(t => {
+          const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
+          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '' };
+          const now = rows[0].close;
+          const d5 = rows[4] ? rows[4].close : now;
+          const d20 = rows[19] ? rows[19].close : now;
+          return {
+            code: t.code, name: t.name || t.code, close: now,
+            chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
+            chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
+            linked_sector: t.linked_sector || ''
+          };
+        });
+      } catch (e) {}
+
+      // ── Level 3: IDX Market ──
+      let idx = { ihsg: null, foreign_flow: null, breadth: null, breadth_history: [] };
+
+      // IHSG
+      try {
+        const ihsgRows = db.prepare("SELECT trade_date, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 60").all();
+        if (ihsgRows.length >= 20) {
+          const now = ihsgRows[0].close;
+          const d1 = ihsgRows[1] ? ihsgRows[1].close : now;
+          const d5 = ihsgRows[4] ? ihsgRows[4].close : now;
+          const d20 = ihsgRows[19] ? ihsgRows[19].close : now;
+          const chg1d = d1 > 0 ? Math.round((now - d1) / d1 * 10000) / 100 : 0;
+          const chg20 = d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0;
+          let regime = 'sideways';
+          if (chg20 > 5) regime = 'bull';
+          else if (chg20 < -5) regime = 'bear';
+          else if (chg20 > 2) regime = 'mild_bull';
+          else if (chg20 < -2) regime = 'mild_bear';
+          idx.ihsg = {
+            level: now, regime, date: ihsgRows[0].trade_date,
+            chg_1d: chg1d,
+            chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
+            chg_20d: chg20
+          };
+        }
+      } catch (e) {}
+
+      // Foreign flow aggregate
+      try {
+        const ffRows = db.prepare('SELECT trade_date, buy_value, sell_value FROM foreign_trading ORDER BY trade_date DESC LIMIT 20').all();
+        if (ffRows.length) {
+          const netToday = ffRows[0] ? (ffRows[0].buy_value - ffRows[0].sell_value) : 0;
+          const net5d = ffRows.slice(0, 5).reduce((s, r) => s + (r.buy_value - r.sell_value), 0);
+          const net20d = ffRows.reduce((s, r) => s + (r.buy_value - r.sell_value), 0);
+          idx.foreign_flow = { net_today: netToday, net_5d: net5d, net_20d: net20d };
+        }
+      } catch (e) {}
+
+      // Market breadth
+      try {
+        if (today) {
+          const stocks = db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close > 0 AND volume > 0').all(today);
+          let aboveMA20 = 0, aboveMA50 = 0, aboveMA200 = 0, total = 0, newHigh = 0, newLow = 0;
+
+          for (const s of stocks) {
+            const hist = db.prepare('SELECT close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 200').all(s.code);
+            if (hist.length < 20) continue;
+            total++;
+            const closes = hist.map(r => r.close).reverse();
+            const n = closes.length;
+            const price = closes[n - 1];
+            const ma20 = n >= 20 ? closes.slice(n - 20).reduce((a, b) => a + b, 0) / 20 : null;
+            const ma50 = n >= 50 ? closes.slice(n - 50).reduce((a, b) => a + b, 0) / 50 : null;
+            const ma200 = n >= 200 ? closes.slice(n - 200).reduce((a, b) => a + b, 0) / 200 : null;
+            if (ma20 && price > ma20) aboveMA20++;
+            if (ma50 && price > ma50) aboveMA50++;
+            if (ma200 && price > ma200) aboveMA200++;
+            const lookback = Math.min(n, 250);
+            const maxP = Math.max(...closes.slice(n - lookback));
+            const minP = Math.min(...closes.slice(n - lookback));
+            if (price >= maxP * 0.98) newHigh++;
+            if (price <= minP * 1.02) newLow++;
+          }
+
+          idx.breadth = {
+            total,
+            pct_above_ma20: total > 0 ? Math.round(aboveMA20 / total * 100) : 0,
+            pct_above_ma50: total > 0 ? Math.round(aboveMA50 / total * 100) : 0,
+            pct_above_ma200: total > 0 ? Math.round(aboveMA200 / total * 100) : 0,
+            new_high: newHigh, new_low: newLow
+          };
+        }
+      } catch (e) {}
+
+      // ── Level 4: Sector Ranking ──
+      let sectors = [];
+      try {
+        // Get last 2 dates from sectoral_movement to compute daily change
+        const smDates = db.prepare('SELECT DISTINCT trade_date FROM sectoral_movement ORDER BY trade_date DESC LIMIT 2').all();
+        // Also get ~20 trading days ago for 20D change
+        const smDates20 = db.prepare('SELECT DISTINCT trade_date FROM sectoral_movement ORDER BY trade_date DESC LIMIT 22').all();
+        const sm20Date = smDates20.length >= 20 ? smDates20[19].trade_date : (smDates20.length ? smDates20[smDates20.length - 1].trade_date : null);
+        const sm20 = {};
+        if (sm20Date) {
+          db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(sm20Date)
+            .forEach(r => { sm20[r.sector_name] = r.change_pct || 0; });
+        }
+
+        if (smDates.length >= 2) {
+          const latestSM = smDates[0].trade_date;
+          const prevSM = smDates[1].trade_date;
+          const smLatest = db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(latestSM);
+          const smPrev = {};
+          db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(prevSM)
+            .forEach(r => { smPrev[r.sector_name] = r.change_pct || 0; });
+
+          // Map: sectoral_movement (English) → company_profiles.sector (Indonesian)
+          const SECTOR_MAP = {
+            'IDX Sector Basic Materials': 'Barang Baku',
+            'IDX Sector Industrials': 'Perindustrian',
+            'IDX Sector Consumer Cyclicals': 'Barang Konsumen Non-Primer',
+            'IDX Sector Consumer Non-Cyclicals': 'Barang Konsumen Primer',
+            'IDX Sector Energy': 'Energi',
+            'IDX Sector Financials': 'Keuangan',
+            'IDX Sector Healthcare': 'Kesehatan',
+            'IDX Sector Infrastructures': 'Infrastruktur',
+            'IDX Sector Properties & Real Estate': 'Properti & Real Estat',
+            'IDX Sector Technology': 'Teknologi',
+            'IDX Sector Transportation & Logistic': 'Transportasi & Logistik'
+          };
+
+          const ihsgDailyChg = idx.ihsg ? idx.ihsg.chg_1d : 0;
+
+          sectors = smLatest.filter(sm => sm.sector_name !== 'Composite Index').map(sm => {
+            const todayVal = sm.change_pct || 0;
+            const prevVal = smPrev[sm.sector_name] || 0;
+            const dailyChg = prevVal > 0 ? Math.round((todayVal - prevVal) / prevVal * 10000) / 100 : 0;
+
+            // Map to Indonesian sector name in company_profiles
+            const cpSector = SECTOR_MAP[sm.sector_name] || '';
+
+            // Foreign flow per sector (last 20 days) — JOIN idx_daily with company_profiles
+            let fnet20d = 0;
+            if (cpSector) {
+              try {
+                const sfRow = db.prepare(
+                  `SELECT SUM((d.foreign_buy - d.foreign_sell) * d.close) as fnet
+                   FROM idx_daily d JOIN company_profiles cp ON d.code=cp.code
+                   WHERE cp.sector=? AND d.trade_date >= date(?, '-30 days') AND d.close > 0`
+                ).get(cpSector, latestSM);
+                fnet20d = sfRow?.fnet || 0;
+              } catch (e) {}
+            }
+
+            // Top stocks — by composite score if available, else by value
+            let topStocks = [];
+            if (cpSector) {
+              try {
+                // Try with scores first
+                let top = [];
+                try {
+                  top = db.prepare(
+                    `SELECT d.code FROM idx_daily d
+                     JOIN company_profiles cp ON d.code=cp.code
+                     LEFT JOIN daily_scores s ON d.code=s.code AND s.calc_date=(SELECT MAX(calc_date) FROM daily_scores)
+                     WHERE d.trade_date=? AND cp.sector=? AND d.close > 0
+                     ORDER BY COALESCE(s.score_composite, 0) DESC LIMIT 5`
+                  ).all(today, cpSector);
+                } catch (e) {}
+                // Fallback: order by trading value
+                if (!top.length) {
+                  top = db.prepare(
+                    `SELECT d.code FROM idx_daily d
+                     JOIN company_profiles cp ON d.code=cp.code
+                     WHERE d.trade_date=? AND cp.sector=? AND d.close > 0
+                     ORDER BY d.value DESC LIMIT 5`
+                  ).all(today, cpSector);
+                }
+                topStocks = top.map(r => r.code);
+              } catch (e) {}
+            }
+
+            // 20D change from sectoral_movement
+            const val20ago = sm20[sm.sector_name] || 0;
+            const chg20d = val20ago > 0 ? Math.round((todayVal - val20ago) / val20ago * 10000) / 100 : 0;
+
+            return {
+              sector: sm.sector_name, cp_sector: cpSector, chg_pct: dailyChg, chg_20d: chg20d,
+              rs_vs_ihsg: dailyChg - ihsgDailyChg,
+              fnet_20d: fnet20d, top_stocks: topStocks
+            };
+          }).sort((a, b) => (b.rs_vs_ihsg || 0) - (a.rs_vs_ihsg || 0));
+        }
+      } catch (e) {}
+
+      res.json({ date: today, global, commodities, idx, sectors });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ STOCK DETAIL — Phase Detection + AD Line + Deep Analytics ═══
+  router.get('/stock-detail/:code', (req, res) => {
+    try {
+      const code = req.params.code.toUpperCase().trim();
+      if (!code) return res.status(400).json({ error: 'No code' });
+
+      // Get full price history (adjusted)
+      const cas = db.prepare(`SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`).all(code);
+      const raw = db.prepare('SELECT trade_date,code,name,open_price,high,low,close,prev_close,volume,value,frequency,foreign_buy,foreign_sell,bid_vol,offer_vol,listed_shares FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date').all(code);
+      if (!raw.length) return res.json({ error: 'No data for ' + code, code });
+
+      // Adjust for corporate actions
+      const data = raw.map(r => {
+        let f = 1;
+        for (const ca of cas) { if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) f *= (1 / ca.ratio); }
+        const ac = Math.round(r.close * f), ah = Math.round((r.high || r.close) * f), al = Math.round((r.low || r.close) * f), ao = Math.round((r.open_price || r.close) * f);
+        return { ...r, ac, ah, al, ao, fnet: (r.foreign_buy - r.foreign_sell) * r.close, fnet_shares: r.foreign_buy - r.foreign_sell };
+      });
+
+      const closes = data.map(r => r.ac);
+      const n = data.length;
+
+      // ── 1. AD Line (Chaikin Accumulation/Distribution) ──
+      const adLine = [];
+      let adCum = 0;
+      data.forEach(r => {
+        const hl = r.ah - r.al;
+        const mfm = hl > 0 ? ((r.ac - r.al) - (r.ah - r.ac)) / hl : 0;
+        const mfv = mfm * (r.volume || 0);
+        adCum += mfv;
+        adLine.push({ date: r.trade_date, ad: Math.round(adCum), mfv: Math.round(mfv) });
+      });
+
+      // ── 2. Phase Detection (5-factor) ──
+      // Factors: price slope, AD line slope, volume ratio, frequency ratio, foreign flow direction
+      const phases = [];
+      let currentPhase = null;
+
+      for (let i = 20; i < n; i++) {
+        const slice = data.slice(i - 20, i + 1);
+        const c20 = slice.map(r => r.ac);
+        const v20 = slice.map(r => r.volume || 0);
+        const f20 = slice.map(r => r.frequency || 0);
+        const fn20 = slice.map(r => r.fnet || 0);
+        const ad20 = adLine.slice(i - 20, i + 1).map(r => r.ad);
+
+        // 1. Price slope (first 5 vs last 5 avg)
+        const priceFirst5 = c20.slice(0, 5).reduce((s, v) => s + v, 0) / 5;
+        const priceLast5 = c20.slice(-5).reduce((s, v) => s + v, 0) / 5;
+        const priceSlope = priceFirst5 > 0 ? priceLast5 / priceFirst5 - 1 : 0;
+
+        // 2. AD line slope
+        const adFirst5 = ad20.slice(0, 5).reduce((s, v) => s + v, 0) / 5;
+        const adLast5 = ad20.slice(-5).reduce((s, v) => s + v, 0) / 5;
+        const adSlope = adFirst5 !== 0 ? (adLast5 - adFirst5) / Math.abs(adFirst5) : (adLast5 > 0 ? 0.1 : -0.1);
+
+        // 3. Volume ratio (recent 5d vs prior 15d)
+        const avgVol = v20.slice(0, 15).reduce((s, v) => s + v, 0) / 15;
+        const recentVol = v20.slice(-5).reduce((s, v) => s + v, 0) / 5;
+        const volRatio = avgVol > 0 ? recentVol / avgVol : 1;
+
+        // 4. Frequency ratio (recent 5d vs prior 15d)
+        const avgFreq = f20.slice(0, 15).reduce((s, v) => s + v, 0) / 15;
+        const recentFreq = f20.slice(-5).reduce((s, v) => s + v, 0) / 5;
+        const freqRatio = avgFreq > 0 ? recentFreq / avgFreq : 1;
+
+        // 5. Foreign flow direction (last 10 days)
+        const fnet10 = fn20.slice(-10).reduce((s, v) => s + v, 0);
+        const fnetBuyDays = fn20.slice(-10).filter(v => v > 0).length;
+        const fnetDir = fnetBuyDays >= 7 ? 1 : fnetBuyDays <= 3 ? -1 : 0; // 1=buying, -1=selling, 0=neutral
+
+        // ── Scoring system: each signal votes ──
+        // Positive score = bullish (markup/accumulation), negative = bearish (markdown/distribution)
+        let bullScore = 0, bearScore = 0;
+        let isSideways = Math.abs(priceSlope) <= 0.02;
+
+        // Price direction (strongest weight)
+        if (priceSlope > 0.02) bullScore += 3;
+        else if (priceSlope < -0.02) bearScore += 3;
+
+        // AD line (accumulation signal)
+        if (adSlope > 0.03) bullScore += 2;
+        else if (adSlope < -0.03) bearScore += 2;
+
+        // Volume surge confirms direction
+        if (volRatio > 1.3) { if (priceSlope > 0) bullScore += 1; else if (priceSlope < 0) bearScore += 1; }
+
+        // Frequency surge (institutional activity)
+        if (freqRatio > 1.3) { if (isSideways) bullScore += 1; else if (priceSlope > 0) bullScore += 1; else bearScore += 1; }
+        if (freqRatio > 2.0 && isSideways) bullScore += 1; // strong accumulation signal
+
+        // Foreign flow
+        if (fnetDir > 0) bullScore += 1;
+        else if (fnetDir < 0) bearScore += 1;
+
+        // ── Determine phase ──
+        let phase;
+        const totalSignals = bullScore + bearScore;
+        if (isSideways) {
+          // Sideways: accumulation vs distribution based on AD + freq + foreign
+          phase = bullScore > bearScore ? 'accumulation' : bearScore > bullScore ? 'distribution' : 'accumulation';
+        } else if (priceSlope > 0.02) {
+          phase = 'markup';
+        } else {
+          phase = 'markdown';
+        }
+
+        // Confidence: how many signals agree (0-100%)
+        const maxScore = Math.max(bullScore, bearScore);
+        const confidence = totalSignals > 0 ? Math.round(maxScore / totalSignals * 100) : 50;
+
+        // Track phase transitions
+        if (!currentPhase || currentPhase.phase !== phase) {
+          if (currentPhase) currentPhase.end_idx = i - 1;
+          currentPhase = { phase, start_idx: i, end_idx: i, start_date: data[i].trade_date, confidence };
+          phases.push(currentPhase);
+        } else {
+          currentPhase.end_idx = i;
+          // Update confidence with running average
+          currentPhase.confidence = Math.round((currentPhase.confidence + confidence) / 2);
+        }
+      }
+
+      // Enrich phases with stats (minimum 5 days)
+      const phaseResult = phases.filter(p => (p.end_idx - p.start_idx) >= 4).map(p => {
+        const sd = data[p.start_idx], ed = data[p.end_idx];
+        const days = p.end_idx - p.start_idx + 1;
+        const chg = sd.ac > 0 ? Math.round((ed.ac - sd.ac) / sd.ac * 10000) / 100 : 0;
+        const phaseSlice = data.slice(p.start_idx, p.end_idx + 1);
+        const hi = Math.max(...phaseSlice.map(r => r.ah));
+        const lo = Math.min(...phaseSlice.map(r => r.al));
+        const totalFnet = phaseSlice.reduce((s, r) => s + r.fnet, 0);
+        const avgVol = Math.round(phaseSlice.reduce((s, r) => s + (r.volume || 0), 0) / days);
+        const avgFreq = Math.round(phaseSlice.reduce((s, r) => s + (r.frequency || 0), 0) / days);
+        return {
+          phase: p.phase, start: sd.trade_date, end: ed.trade_date, days,
+          open: sd.ac, close: ed.ac, high: hi, low: lo, change_pct: chg,
+          range: lo + ' - ' + hi, fnet: totalFnet, avg_vol: avgVol, avg_freq: avgFreq,
+          confidence: p.confidence || 50
+        };
+      });
+
+      // Current phase
+      const lastPhase = phaseResult.length ? phaseResult[phaseResult.length - 1] : null;
+
+      // ── 3. Key Statistics ──
+      const last = data[n - 1];
+      const peak52w = Math.max(...closes.slice(-252));
+      const low52w = Math.min(...closes.slice(-252));
+      const drawdownFromPeak = peak52w > 0 ? Math.round((last.ac - peak52w) / peak52w * 10000) / 100 : 0;
+      const pctFromLow = low52w > 0 ? Math.round((last.ac - low52w) / low52w * 10000) / 100 : 0;
+
+      // ATR 14
+      let atr = 0;
+      if (n >= 15) {
+        const trs = [];
+        for (let i = n - 14; i < n; i++) {
+          trs.push(Math.max(data[i].ah - data[i].al, Math.abs(data[i].ah - data[i - 1].ac), Math.abs(data[i].al - data[i - 1].ac)));
+        }
+        atr = Math.round(trs.reduce((s, v) => s + v, 0) / trs.length);
+      }
+
+      // Volatility (20d std dev of returns)
+      let volatility = 0;
+      if (n >= 21) {
+        const rets = [];
+        for (let i = n - 20; i < n; i++) rets.push((data[i].ac - data[i - 1].ac) / data[i - 1].ac);
+        const mean = rets.reduce((s, v) => s + v, 0) / rets.length;
+        const variance = rets.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / rets.length;
+        volatility = Math.round(Math.sqrt(variance) * Math.sqrt(252) * 10000) / 100; // annualized %
+      }
+
+      // RS vs IHSG (relative strength)
+      let rsVsIhsg = null;
+      try {
+        const ihsg = db.prepare('SELECT trade_date, close FROM idx_indices WHERE index_code=? ORDER BY trade_date').all('COMPOSITE');
+        if (ihsg.length >= 20 && n >= 20) {
+          const ihsgMap = {};
+          ihsg.forEach(r => { ihsgMap[r.trade_date] = r.close; });
+          const last20 = data.slice(-20);
+          const stockRet = last20.length >= 2 ? (last20[last20.length - 1].ac - last20[0].ac) / last20[0].ac : 0;
+          const ihsgStart = ihsgMap[last20[0].trade_date], ihsgEnd = ihsgMap[last20[last20.length - 1].trade_date];
+          const ihsgRet = ihsgStart && ihsgEnd ? (ihsgEnd - ihsgStart) / ihsgStart : 0;
+          rsVsIhsg = Math.round((stockRet - ihsgRet) * 10000) / 100;
+        }
+      } catch (e) {}
+
+      // ── 4. Bid/Offer Analysis ──
+      const bo20 = data.slice(-20);
+      const boData = bo20.map(r => ({
+        date: r.trade_date,
+        bid: r.bid_vol || 0, offer: r.offer_vol || 0,
+        ratio: (r.bid_vol || 0) + (r.offer_vol || 0) > 0 ? Math.round((r.bid_vol || 0) / ((r.bid_vol || 0) + (r.offer_vol || 0)) * 1000) / 10 : 50
+      }));
+      const avgBidRatio = boData.length ? Math.round(boData.reduce((s, r) => s + r.ratio, 0) / boData.length * 10) / 10 : 50;
+
+      // ── 5. Foreign Flow Summary ──
+      const fnet5 = data.slice(-5).reduce((s, r) => s + r.fnet, 0);
+      const fnet10 = data.slice(-10).reduce((s, r) => s + r.fnet, 0);
+      const fnet20 = data.slice(-20).reduce((s, r) => s + r.fnet, 0);
+      const fnetTotal = data.reduce((s, r) => s + r.fnet, 0);
+      let accumStreak = 0;
+      for (let i = n - 1; i >= 0; i--) { if (data[i].fnet > 0) accumStreak++; else break; }
+      let distribStreak = 0;
+      for (let i = n - 1; i >= 0; i--) { if (data[i].fnet < 0) distribStreak++; else break; }
+
+      // ── 6. Scoring Breakdown (from daily_scores) ──
+      let scoring = null;
+      try {
+        const latestScore = db.prepare('SELECT * FROM daily_scores WHERE code=? ORDER BY calc_date DESC LIMIT 1').get(code);
+        if (latestScore) scoring = latestScore;
+        // Score history (last 20 dates)
+        var scoreHist = db.prepare('SELECT calc_date, score_composite, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign FROM daily_scores WHERE code=? ORDER BY calc_date DESC LIMIT 30').all(code);
+        if (scoreHist.length) scoreHist.reverse();
+      } catch (e) {}
+
+      // ── 7. Fundamental snapshot ──
+      let fundamental = null;
+      try {
+        const { latestFundDate } = require('../db');
+        const fm = latestFundDate();
+        if (fm) fundamental = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(fm, code);
+      } catch (e) {}
+
+      // ── 8. MA Stage Detection ──
+      // Calculate MAs from adjusted close
+      function calcMA(period) {
+        if (n < period) return null;
+        return Math.round(closes.slice(-period).reduce((s, v) => s + v, 0) / period);
+      }
+      const mas = { ma5: calcMA(5), ma10: calcMA(10), ma20: calcMA(20), ma50: calcMA(50), ma100: calcMA(100), ma200: calcMA(200) };
+      const price = last.ac;
+
+      // Stage: count how many MAs price is above (short to long)
+      const maLevels = [
+        { key: 'ma5', val: mas.ma5 },
+        { key: 'ma10', val: mas.ma10 },
+        { key: 'ma20', val: mas.ma20 },
+        { key: 'ma50', val: mas.ma50 },
+        { key: 'ma200', val: mas.ma200 }
+      ].filter(m => m.val !== null);
+
+      let maAbove = 0, maBelow = 0;
+      const maDetail = [];
+      maLevels.forEach(m => {
+        const above = price >= m.val;
+        if (above) maAbove++; else maBelow++;
+        const dist = m.val > 0 ? Math.round((price - m.val) / m.val * 10000) / 100 : 0;
+        maDetail.push({ key: m.key, value: m.val, above, dist_pct: dist });
+      });
+
+      // Check MA alignment (bullish stacking: MA5 > MA10 > MA20 > MA50 > MA200)
+      let bullishStack = true, bearishStack = true;
+      for (let i = 0; i < maLevels.length - 1; i++) {
+        if (maLevels[i].val <= maLevels[i + 1].val) bullishStack = false;
+        if (maLevels[i].val >= maLevels[i + 1].val) bearishStack = false;
+      }
+
+      const stage = {
+        level: maAbove, // 0-5
+        total: maLevels.length,
+        label: maAbove === 0 ? 'Full Downtrend' :
+               maAbove === 1 ? 'First Bounce' :
+               maAbove === 2 ? 'Building Momentum' :
+               maAbove === 3 ? 'Swing Reversal' :
+               maAbove === 4 ? 'Trend Change' :
+               'Full Uptrend',
+        bullish_stack: bullishStack,
+        bearish_stack: bearishStack,
+        ma: maDetail,
+        mas: mas
+      };
+
+      // ── 8b. MA Respect Rate — historical bounce analysis ──
+      const maRespect = [];
+      try {
+        const touchThreshold = 0.025; // within 2.5% of MA = "approaching"
+        const bounceThreshold = 0.02; // 2% move after touch = bounce/breakdown
+        const lookForward = 5; // check 5 days after touch
+
+        [{ period: 20, label: 'MA20' }, { period: 50, label: 'MA50' }, { period: 100, label: 'MA100' }, { period: 200, label: 'MA200' }].forEach(maConf => {
+          if (n < maConf.period + 30) return; // need enough data
+
+          // Compute rolling MA for entire history
+          const maValues = [];
+          for (let i = 0; i < n; i++) {
+            if (i < maConf.period - 1) { maValues.push(null); continue; }
+            let sum = 0;
+            for (let j = i - maConf.period + 1; j <= i; j++) sum += closes[j];
+            maValues.push(sum / maConf.period);
+          }
+
+          // Scan for touch events from above
+          let touches = 0, bounces = 0, breakdowns = 0;
+          let lastTouchIdx = -10; // avoid double-counting nearby touches
+
+          for (let i = maConf.period + 5; i < n - lookForward; i++) {
+            const ma = maValues[i];
+            if (!ma || ma <= 0) continue;
+
+            const distPct = (closes[i] - ma) / ma;
+
+            // Touch from above: price was above MA recently, now within threshold
+            if (distPct >= -0.005 && distPct <= touchThreshold) {
+              // Verify was above MA in prior 5 days
+              let wasAbove = false;
+              for (let j = Math.max(0, i - 5); j < i; j++) {
+                if (maValues[j] && closes[j] > maValues[j] * 1.01) { wasAbove = true; break; }
+              }
+              if (!wasAbove) continue;
+              if (i - lastTouchIdx < 8) continue; // skip if too close to previous touch
+
+              lastTouchIdx = i;
+              touches++;
+
+              // Check outcome in next lookForward days
+              const touchPrice = closes[i];
+              let maxUp = 0, maxDown = 0;
+              for (let j = i + 1; j <= Math.min(i + lookForward, n - 1); j++) {
+                const chg = (closes[j] - touchPrice) / touchPrice;
+                if (chg > maxUp) maxUp = chg;
+                if (chg < maxDown) maxDown = chg;
+              }
+
+              if (maxUp >= bounceThreshold && maxUp > Math.abs(maxDown)) bounces++;
+              else if (Math.abs(maxDown) >= bounceThreshold) breakdowns++;
+              // else: inconclusive (small move), counted in touches but neither bounce nor breakdown
+            }
+          }
+
+          if (touches >= 3) { // minimum 3 events to be meaningful
+            const respectRate = Math.round(bounces / touches * 100);
+            const currentDist = maValues[n - 1] ? Math.round((closes[n - 1] - maValues[n - 1]) / maValues[n - 1] * 10000) / 100 : null;
+            const isNearNow = currentDist !== null && currentDist >= -1 && currentDist <= 3;
+            maRespect.push({
+              label: maConf.label, period: maConf.period,
+              touches, bounces, breakdowns,
+              inconclusive: touches - bounces - breakdowns,
+              respect_rate: respectRate,
+              current_dist: currentDist,
+              near_now: isNearNow
+            });
+          }
+        });
+      } catch (e) {}
+
+      // ── 9. Sector Context ──
+      let sectorContext = null;
+      try {
+        const sector = fundamental?.sector || raw[raw.length - 1]?.sector || '';
+        if (sector) {
+          const sectorFlow = db.prepare(`
+            SELECT SUM(CASE WHEN (foreign_buy - foreign_sell) * close > 0 THEN (foreign_buy - foreign_sell) * close ELSE 0 END) as inflow,
+                   SUM(CASE WHEN (foreign_buy - foreign_sell) * close < 0 THEN (foreign_buy - foreign_sell) * close ELSE 0 END) as outflow,
+                   SUM((foreign_buy - foreign_sell) * close) as net
+            FROM idx_daily WHERE sector=? AND trade_date >= date(?, '-20 days')
+          `).get(sector, last.trade_date);
+          sectorContext = { sector, fnet_20d: sectorFlow?.net || 0 };
+        }
+      } catch (e) {}
+
+      // ── 9b. Market Regime (IHSG trend) ──
+      let marketRegime = null;
+      try {
+        const ihsgRows = db.prepare('SELECT trade_date, close FROM idx_indices WHERE index_code=? ORDER BY trade_date DESC LIMIT 60').all('COMPOSITE');
+        if (ihsgRows.length >= 20) {
+          const ihsgNow = ihsgRows[0].close;
+          const ihsg5d = ihsgRows[4] ? ihsgRows[4].close : ihsgNow;
+          const ihsg20d = ihsgRows[19] ? ihsgRows[19].close : ihsgNow;
+          const ihsg60d = ihsgRows[ihsgRows.length - 1] ? ihsgRows[ihsgRows.length - 1].close : ihsgNow;
+          const chg5d = ihsg5d > 0 ? Math.round((ihsgNow - ihsg5d) / ihsg5d * 10000) / 100 : 0;
+          const chg20d = ihsg20d > 0 ? Math.round((ihsgNow - ihsg20d) / ihsg20d * 10000) / 100 : 0;
+          const chg60d = ihsg60d > 0 ? Math.round((ihsgNow - ihsg60d) / ihsg60d * 10000) / 100 : 0;
+          let regime = 'sideways';
+          if (chg20d > 5) regime = 'bull';
+          else if (chg20d < -5) regime = 'bear';
+          else if (chg20d > 2) regime = 'mild_bull';
+          else if (chg20d < -2) regime = 'mild_bear';
+          marketRegime = { level: ihsgNow, chg_5d: chg5d, chg_20d: chg20d, chg_60d: chg60d, regime, date: ihsgRows[0].trade_date };
+        }
+      } catch (e) {}
+
+      // ── 9c. Recent Announcements for this ticker ──
+      let announcements = [];
+      try {
+        announcements = db.prepare('SELECT ann_date, title, type, subject, attachments FROM company_announcements WHERE company_code=? ORDER BY ann_date DESC LIMIT 10').all(code);
+      } catch (e) {}
+
+      // ── 9d. Commodity Context (for commodity-linked stocks) ──
+      let commodityContext = null;
+      try {
+        const sector = fundamental?.sector || '';
+        const industry = fundamental?.industry || '';
+        const sectorLower = (sector + ' ' + industry).toLowerCase();
+        // Map sector/industry to commodity
+        let commodityCode = null, commodityLabel = null;
+        if (sectorLower.includes('palm') || sectorLower.includes('plantation') || sectorLower.includes('sawit')) { commodityCode = 'CPO'; commodityLabel = 'CPO (Crude Palm Oil)'; }
+        else if (sectorLower.includes('coal') || sectorLower.includes('batubara') || sectorLower.includes('mining') && sectorLower.includes('coal')) { commodityCode = 'COAL'; commodityLabel = 'Coal'; }
+        else if (sectorLower.includes('nickel') || sectorLower.includes('nikel')) { commodityCode = 'NICKEL'; commodityLabel = 'Nickel'; }
+        else if (sectorLower.includes('gold') || sectorLower.includes('emas')) { commodityCode = 'GOLD'; commodityLabel = 'Gold'; }
+        else if (sectorLower.includes('tin') || sectorLower.includes('timah')) { commodityCode = 'TIN'; commodityLabel = 'Tin'; }
+        else if (sectorLower.includes('oil') || sectorLower.includes('gas') || sectorLower.includes('minyak')) { commodityCode = 'OIL'; commodityLabel = 'Crude Oil'; }
+        // Also check by well-known ticker codes
+        const codeUpper = code.toUpperCase();
+        if (['AALI','LSIP','SIMP','TBLA','SSMS','DSNG','SGRO'].includes(codeUpper)) { commodityCode = 'CPO'; commodityLabel = 'CPO'; }
+        else if (['ADRO','PTBA','ITMG','BUMI','HRUM','BYAN','DSSA'].includes(codeUpper)) { commodityCode = 'COAL'; commodityLabel = 'Coal'; }
+        else if (['INCO','ANTM','NCKL','MBMA'].includes(codeUpper)) { commodityCode = 'NICKEL'; commodityLabel = 'Nickel'; }
+        else if (['MDKA','ARCI','BRMS','PSAB'].includes(codeUpper)) { commodityCode = 'GOLD'; commodityLabel = 'Gold'; }
+        else if (['TINS'].includes(codeUpper)) { commodityCode = 'TIN'; commodityLabel = 'Tin'; }
+        else if (['MEDC','ELSA'].includes(codeUpper)) { commodityCode = 'OIL'; commodityLabel = 'Crude Oil'; }
+
+        if (commodityCode) {
+          // Try custom_ohlc first, then commodities table
+          const cmdRows = db.prepare('SELECT date, close FROM custom_ohlc WHERE code=? ORDER BY date DESC LIMIT 30').all(commodityCode);
+          if (cmdRows.length >= 5) {
+            const now = cmdRows[0].close;
+            const d5 = cmdRows[4] ? cmdRows[4].close : now;
+            const d20 = cmdRows[Math.min(19, cmdRows.length - 1)] ? cmdRows[Math.min(19, cmdRows.length - 1)].close : now;
+            commodityContext = {
+              code: commodityCode, label: commodityLabel, price: now,
+              chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
+              chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0
+            };
+          }
+        }
+      } catch (e) {}
+
+      // ── 9e. Frequency Analysis — Block Trade / Retail Frenzy / Smart Accum / Dry Up ──
+      const freqAnalysis = [];
+      try {
+        if (n >= 40) {
+          const lookback = 20;
+          for (let i = lookback; i < n; i++) {
+            const d_i = data[i];
+            const slice = data.slice(i - lookback, i);
+            const avgVol = slice.reduce((s, r) => s + (r.volume || 0), 0) / lookback;
+            const avgFreq = slice.reduce((s, r) => s + (r.frequency || 0), 0) / lookback;
+            const avgVal = slice.reduce((s, r) => s + (r.value || 0), 0) / lookback;
+
+            const vol = d_i.volume || 0;
+            const freq = d_i.frequency || 0;
+            const val = d_i.value || 0;
+            const relVol = avgVol > 0 ? vol / avgVol : 1;
+            const relFreq = avgFreq > 0 ? freq / avgFreq : 1;
+            const avgTickSize = freq > 0 ? val / freq : 0;
+            const avgTickSizeHist = avgFreq > 0 ? avgVal / avgFreq : 0;
+            const tickRatio = avgTickSizeHist > 0 ? avgTickSize / avgTickSizeHist : 1;
+            const fnet = d_i.fnet || 0;
+
+            const isBlock = tickRatio > 2.5 && relVol > 1.5 && relFreq < 1.5;
+            const isRetailFrenzy = relFreq > 2.0 && tickRatio < 0.6 && relVol > 1.2;
+            const priceChg = d_i.ac && data[i - 1].ac > 0 ? (d_i.ac - data[i - 1].ac) / data[i - 1].ac : 0;
+            const isSmartAccum = relVol > 1.2 && relVol < 3.0 && relFreq >= 0.8 && relFreq <= 1.8 &&
+                                 Math.abs(priceChg) < 0.03 && fnet > 0 && tickRatio > 1.2;
+            const isDryUp = relVol < 0.4 && relFreq < 0.5;
+
+            if (isBlock || isRetailFrenzy || isSmartAccum || isDryUp) {
+              freqAnalysis.push({
+                date: d_i.trade_date,
+                type: isBlock ? 'block_trade' : isRetailFrenzy ? 'retail_frenzy' : isSmartAccum ? 'smart_accum' : 'dry_up',
+                vol, freq, val, relVol: Math.round(relVol * 100) / 100,
+                relFreq: Math.round(relFreq * 100) / 100,
+                tickRatio: Math.round(tickRatio * 100) / 100,
+                fnet, priceChg: Math.round(priceChg * 10000) / 100
+              });
+            }
+          }
+        }
+      } catch (e) {}
+
+      const freqRecent = freqAnalysis.filter(f => {
+        const d20ago = data[Math.max(0, n - 21)]?.trade_date || '';
+        return f.date >= d20ago;
+      });
+      const freqSummary = {
+        block_trade: freqRecent.filter(f => f.type === 'block_trade').length,
+        retail_frenzy: freqRecent.filter(f => f.type === 'retail_frenzy').length,
+        smart_accum: freqRecent.filter(f => f.type === 'smart_accum').length,
+        dry_up: freqRecent.filter(f => f.type === 'dry_up').length,
+        events: freqRecent.length,
+        recent: freqRecent.slice(-10)
+      };
+
+      // ── 10. Unified Verdict ──
+      // Helper for short value format
+      function fmtValShort(v) {
+        if (Math.abs(v) >= 1e12) return (v / 1e12).toFixed(1) + 'T';
+        if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+        if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+        return Math.round(v).toLocaleString();
+      }
+      // Score each signal dimension (0-2: bearish, neutral, bullish)
+      const signals = [];
+      let bullSignals = 0, bearSignals = 0, totalSignals = 0;
+
+      function addSignal(name, icon, value, isBull, isBear, detail) {
+        const direction = isBull ? 'bullish' : isBear ? 'bearish' : 'neutral';
+        signals.push({ name, icon, value, direction, detail });
+        totalSignals++;
+        if (isBull) bullSignals++;
+        if (isBear) bearSignals++;
+      }
+
+      // Phase
+      if (lastPhase) {
+        const p = lastPhase.phase;
+        addSignal('Phase', '🔄', lastPhase.phase,
+          p === 'accumulation' || p === 'markup',
+          p === 'distribution' || p === 'markdown',
+          lastPhase.days + 'd ' + (lastPhase.confidence || 50) + '%');
+      }
+
+      // MA Stage
+      addSignal('MA Stage', '📊', 'Stage ' + stage.level,
+        stage.level >= 4, stage.level <= 1,
+        stage.label + (stage.bullish_stack ? ' (aligned)' : ''));
+
+      // Composite Score
+      if (scoring && scoring.score_composite != null) {
+        addSignal('Score', '⭐', Math.round(scoring.score_composite),
+          scoring.score_composite >= 70, scoring.score_composite <= 30,
+          'F:' + Math.round(scoring.score_fundamental || 0) + ' V:' + Math.round(scoring.score_valuation || 0) + ' M:' + Math.round(scoring.score_momentum || 0));
+      }
+
+      // Foreign Flow
+      addSignal('Foreign', '🌍', fmtValShort(fnet20),
+        fnet20 > 0 && accumStreak >= 3, fnet20 < 0 && distribStreak >= 3,
+        accumStreak > 0 ? 'Accum ' + accumStreak + 'd' : distribStreak > 0 ? 'Dist ' + distribStreak + 'd' : 'Neutral');
+
+      // AD Line trend (last 10d)
+      if (adLine.length >= 10) {
+        const ad10ago = adLine[adLine.length - 10].ad;
+        const adNow = adLine[adLine.length - 1].ad;
+        const adTrend = adNow > ad10ago ? 'Rising' : adNow < ad10ago ? 'Falling' : 'Flat';
+        addSignal('AD Line', '📈', adTrend,
+          adTrend === 'Rising', adTrend === 'Falling', '');
+      }
+
+      // Bid/Offer Ratio
+      addSignal('Bid Ratio', '📊', avgBidRatio.toFixed(1) + '%',
+        avgBidRatio >= 55, avgBidRatio <= 40,
+        avgBidRatio >= 55 ? 'Buyers dominant' : avgBidRatio <= 40 ? 'Sellers dominant' : 'Balanced');
+
+      // Sector
+      if (sectorContext) {
+        addSignal('Sector', '🏢', sectorContext.sector,
+          sectorContext.fnet_20d > 0, sectorContext.fnet_20d < 0,
+          'F.Net 20d: ' + fmtValShort(sectorContext.fnet_20d));
+      }
+
+      // RS vs IHSG
+      if (rsVsIhsg !== null) {
+        addSignal('RS vs IHSG', '💪', (rsVsIhsg > 0 ? '+' : '') + rsVsIhsg + '%',
+          rsVsIhsg > 2, rsVsIhsg < -2,
+          rsVsIhsg > 0 ? 'Outperform' : 'Underperform');
+      }
+
+      // Freq Analysis signal
+      if (freqSummary.events > 0) {
+        const hasSmartAccum = freqSummary.smart_accum > 0;
+        const hasBlock = freqSummary.block_trade > 0;
+        const hasDryUp = freqSummary.dry_up > 0 && freqSummary.block_trade === 0 && freqSummary.smart_accum === 0;
+        const hasRetail = freqSummary.retail_frenzy > 0;
+        let freqLabel = hasSmartAccum ? 'Smart Accum' : hasBlock ? 'Block Trade' : hasDryUp ? 'Dry Up' : hasRetail ? 'Retail Frenzy' : 'Mixed';
+        let freqDetail = freqSummary.events + ' events (B:' + freqSummary.block_trade + ' R:' + freqSummary.retail_frenzy + ' S:' + freqSummary.smart_accum + ' D:' + freqSummary.dry_up + ')';
+        addSignal('Freq', '📊', freqLabel,
+          hasSmartAccum || hasBlock, hasDryUp || (hasRetail && !hasBlock),
+          freqDetail);
+      }
+
+      // Build verdict
+      const verdictScore = totalSignals > 0 ? Math.round(bullSignals / totalSignals * 100) : 50;
+      let verdictLabel, verdictColor;
+      if (verdictScore >= 75) { verdictLabel = 'STRONG BUY'; verdictColor = '#22c55e'; }
+      else if (verdictScore >= 60) { verdictLabel = 'BUY'; verdictColor = '#22c55e'; }
+      else if (verdictScore >= 45) { verdictLabel = 'NEUTRAL'; verdictColor = '#f59e0b'; }
+      else if (verdictScore >= 30) { verdictLabel = 'SELL'; verdictColor = '#ef4444'; }
+      else { verdictLabel = 'STRONG SELL'; verdictColor = '#ef4444'; }
+
+      // Warnings (conflicting signals)
+      const warnings = [];
+      if (stage.level >= 4 && lastPhase && lastPhase.phase === 'distribution') warnings.push('Price above MAs but distribution detected');
+      if (stage.level <= 1 && fnet20 > 0) warnings.push('Downtrend but foreign accumulating — watch for reversal');
+      if (avgBidRatio < 40 && lastPhase && lastPhase.phase === 'accumulation') warnings.push('Accumulation phase but bid ratio weak');
+      if (scoring && scoring.score_composite >= 70 && stage.level <= 2) warnings.push('High score but price still below key MAs');
+
+      const verdict = { score: verdictScore, label: verdictLabel, color: verdictColor, bull: bullSignals, bear: bearSignals, total: totalSignals, signals, warnings };
+
+      // ── Build chart data (last 500 for performance) ──
+      const chartData = data.slice(-500).map((r, i, arr) => ({
+        date: r.trade_date, open: r.ao, high: r.ah, low: r.al, close: r.ac,
+        volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0
+      }));
+
+      const adChartData = adLine.slice(-500).map(r => ({ date: r.date, ad: r.ad }));
+
+      res.json({
+        code, name: last.name || '',
+        current: { close: last.ac, prev_close: last.prev_close, change: last.ac - (data[n - 2]?.ac || last.ac), trade_date: last.trade_date, volume: last.volume, value: last.value, market_cap: last.ac * (last.listed_shares || 0) },
+        phase: lastPhase,
+        phases: phaseResult.slice(-30),
+        stage,
+        ma_respect: maRespect,
+        verdict,
+        sector_context: sectorContext,
+        market_regime: marketRegime,
+        announcements: announcements,
+        commodity_context: commodityContext,
+        freq_analysis: freqSummary,
+        freq_events: freqAnalysis.slice(-100),
+        stats: { peak_52w: peak52w, low_52w: low52w, drawdown_from_peak: drawdownFromPeak, pct_from_low: pctFromLow, atr, volatility_ann: volatility, rs_vs_ihsg: rsVsIhsg, total_days: n },
+        foreign: { fnet_5d: fnet5, fnet_10d: fnet10, fnet_20d: fnet20, fnet_total: fnetTotal, accum_streak: accumStreak, distrib_streak: distribStreak },
+        bid_offer: { data: boData, avg_ratio: avgBidRatio },
+        scoring, score_history: scoreHist || [],
+        fundamental,
+        chart: chartData,
+        ad_line: adChartData
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ Market News — Hot headlines for Market Regime ═══
+  router.get('/market-news', async (req, res) => {
+    try {
+      const { gNews } = require('../utils/news');
+      
+      const queries = [
+        { q: 'IHSG saham Indonesia hari ini', label: 'IDX Market', icon: '📊' },
+        { q: 'ekonomi Indonesia kebijakan BI rupiah', label: 'Ekonomi & BI', icon: '🏛' },
+        { q: 'harga minyak batu bara nikel emas komoditas', label: 'Komoditas', icon: '⛏' },
+        { q: 'geopolitik global trade war tariff', label: 'Geopolitik', icon: '🌍' },
+        { q: 'The Fed interest rate Wall Street S&P500', label: 'Global Markets', icon: '🇺🇸' },
+      ];
+
+      const results = await Promise.all(queries.map(async (cat) => {
+        try {
+          const items = await gNews(cat.q);
+          return { ...cat, items: items.slice(0, 8) };
+        } catch (e) {
+          return { ...cat, items: [] };
+        }
+      }));
+      
+      const now = Math.floor(Date.now() / 1000);
+      const categories = results.map(r => ({
+        label: r.label,
+        icon: r.icon,
+        items: r.items.map(item => ({
+          headline: item.headline,
+          source: item.source,
+          url: item.url,
+          datetime: item.datetime,
+          age: item.datetime > 0 ? _fmtAge(now - item.datetime) : ''
+        }))
+      }));
+
+      res.json({ categories, fetched_at: new Date().toISOString() });
+    } catch (e) {
+      res.json({ categories: [], error: e.message });
+    }
+  });
+
+  function _fmtAge(seconds) {
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    if (seconds < 604800) return Math.floor(seconds / 86400) + 'd ago';
+    return Math.floor(seconds / 604800) + 'w ago';
   }
 
   return router;

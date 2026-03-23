@@ -6,6 +6,8 @@ services:
       - "3003:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096
     volumes:
       - diary-uploads:/app/uploads
       - diary-data:/app/data

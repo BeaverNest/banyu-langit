@@ -63,7 +63,6 @@ function applyOp(val, op, target) {
 }
 
 // ═══ Load confirmed CAs and build adjustment lookup ═══
-// Returns { CODE: [ {ex_date, ratio}, ... ] } sorted ex_date DESC
 function loadConfirmedCAs() {
   const rows = db.prepare(`SELECT code, ex_date, ratio FROM corporate_actions WHERE status='confirmed' ORDER BY ex_date DESC`).all();
   const map = {};
@@ -74,8 +73,6 @@ function loadConfirmedCAs() {
   return map;
 }
 
-// Apply backward adjustment to a single row's OHLC
-// actions = array of {ex_date, ratio} for this ticker, sorted DESC
 function adjustRow(row, actions) {
   if (!actions || !actions.length) return row;
   let cumFactor = 1;
@@ -97,7 +94,7 @@ function adjustRow(row, actions) {
 router.post('/run', (req, res) => {
   try {
     const rules = req.body.rules || [];
-    const groups = req.body.groups || null; // [[rule1,rule2],[rule3]] — groups of AND, connected by OR
+    const groups = req.body.groups || null;
     const ruleLogic = req.body.logic || 'AND';
     const limit = Math.min(parseInt(req.body.limit) || 50, 9999);
     const alwaysTech = req.body.always_tech !== false;
@@ -106,14 +103,12 @@ router.post('/run', (req, res) => {
 
     let stocks = db.prepare(`SELECT *, (foreign_buy-foreign_sell) as foreign_net, ((foreign_buy-foreign_sell)*close) as foreign_net_val, CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as change_pct FROM idx_daily WHERE trade_date=? AND close>0`).all(td);
 
-    // Join fundamental data
     const { latestFundDate } = require('../db');
     const fm = latestFundDate();
     const fundMap = {};
     if (fm) { db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; }); }
     stocks = stocks.map(s => ({ ...s, fund: fundMap[s.code] || null }));
 
-    // ── Pre-compute activity spike averages ──
     const avgDays = 20;
     const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(avgDays + 1).map(r => r.trade_date);
     const avgDates = dates.slice(1);
@@ -127,11 +122,10 @@ router.post('/run', (req, res) => {
         .forEach(r => { avgMap[r.code] = r; });
     }
 
-    // ── Quarterly data for EPS/dividend ──
     const qtrMap = {};
     try {
       db.prepare('SELECT code, eps, dividend_per_share FROM quarterly_financials WHERE period_type=? ORDER BY period DESC').all('quarterly')
-        .forEach(r => { if (!qtrMap[r.code]) qtrMap[r.code] = r; }); // latest per code
+        .forEach(r => { if (!qtrMap[r.code]) qtrMap[r.code] = r; });
     } catch(e) {}
 
     const hasRules = (groups && groups.some(g => g && g.length > 0)) || rules.length > 0;
@@ -147,7 +141,6 @@ router.post('/run', (req, res) => {
     for (const stock of stocks) {
       let tech = {};
 
-      // ── Tech indicators ──
       const hist = db.prepare('SELECT trade_date,close,high,low,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
       if (hist.length >= 5) {
         const actions = caMap[stock.code];
@@ -162,7 +155,6 @@ router.post('/run', (req, res) => {
         if (actions && actions.length) tech.adjusted = true;
       }
 
-      // ── Activity spike ──
       const avg = avgMap[stock.code];
       if (avg) {
         tech.val_spike = avg.avg_val > 0 ? Math.round(stock.value / avg.avg_val * 10) / 10 : 0;
@@ -171,7 +163,6 @@ router.post('/run', (req, res) => {
         tech.activity_score = Math.round(((tech.val_spike || 0) * 0.3 + (tech.freq_spike || 0) * 0.3 + (tech.vol_ratio || 0) * 0.2 + (tech.fnet_spike || 0) * 0.2) * 10) / 10;
       }
 
-      // ── EPS / Dividend from quarterly ──
       const qtr = qtrMap[stock.code];
       if (qtr) {
         if (!stock.fund) stock.fund = {};
@@ -179,15 +170,12 @@ router.post('/run', (req, res) => {
         if (qtr.dividend_per_share && stock.close) stock.fund.div_yield = Math.round(qtr.dividend_per_share / stock.close * 10000) / 100;
       }
 
-      // ── Free float ──
       if (stock.tradeable_shares && stock.listed_shares) {
         if (!stock.fund) stock.fund = {};
         stock.fund.free_float = Math.round(stock.tradeable_shares / stock.listed_shares * 1000) / 10;
       }
 
-      // ── Apply rules: groups mode or legacy ──
       if (groups && groups.some(g => g && g.length > 0)) {
-        // Groups: (group1 AND) OR (group2 AND) OR ...
         const pass = groups.some(group => {
           if (!group || !group.length) return true;
           return group.every(rule => evalRule(rule, stock, tech));
@@ -213,20 +201,14 @@ router.post('/run', (req, res) => {
 
 
 // ═══ AFL-STYLE FORMULA SCREENER — OPTIMIZED ═══
-// Key optimization: bulk-load all history in ONE query, then split per code in memory
-
-// In-memory cache for bulk history (cleared on new trade date)
 let _histCache = { td: null, data: null };
 
 function bulkLoadHistory(td) {
   if (_histCache.td === td && _histCache.data) return _histCache.data;
-  // Single query: load last 210 days of history for ALL tickers
   const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 210').all().map(r => r.trade_date);
   if (!allDates.length) return {};
   const minDate = allDates[allDates.length - 1];
   const rows = db.prepare('SELECT code,trade_date,close,high,low,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date>=? ORDER BY code,trade_date').all(minDate);
-  
-  // Group by code
   const map = {};
   for (const r of rows) {
     if (!map[r.code]) map[r.code] = [];
@@ -236,7 +218,54 @@ function bulkLoadHistory(td) {
   return map;
 }
 
-// Detect which variable categories the formula needs
+// [PATCH 5] detectNeeds — added fund flag
+// Dynamic reverse map: company_profiles (Indonesian) → idx_fundamental (English)
+// Built from DB by JOINing company_profiles with idx_fundamental on code
+let _nameMapCache = null;
+function buildNameMap() {
+  if (_nameMapCache) return _nameMapCache;
+  const map = {};
+  try {
+    // Sector mapping: company_profiles.sector (ID) → idx_fundamental.sector (EN)
+    const sectorRows = db.prepare(`
+      SELECT DISTINCT cp.sector as id_name, f.sector as en_name 
+      FROM company_profiles cp 
+      JOIN idx_fundamental f ON cp.code = f.code 
+      WHERE cp.sector != '' AND f.sector != '' AND f.snapshot_month = (SELECT MAX(snapshot_month) FROM idx_fundamental)
+    `).all();
+    sectorRows.forEach(r => { if (r.id_name && r.en_name) map[r.id_name.toLowerCase()] = r.en_name; });
+
+    // Industry mapping: company_profiles.sub_sector (ID) → idx_fundamental.industry (EN)
+    const indRows = db.prepare(`
+      SELECT DISTINCT cp.sub_sector as id_name, f.industry as en_name 
+      FROM company_profiles cp 
+      JOIN idx_fundamental f ON cp.code = f.code 
+      WHERE cp.sub_sector != '' AND f.industry != '' AND f.snapshot_month = (SELECT MAX(snapshot_month) FROM idx_fundamental)
+    `).all();
+    indRows.forEach(r => { if (r.id_name && r.en_name) map[r.id_name.toLowerCase()] = r.en_name; });
+  } catch (e) { /* tables may not exist yet */ }
+  
+  // Hardcoded fallbacks (in case JOIN misses some)
+  const fallbacks = {
+    'energi':'Energy','keuangan':'Financials','teknologi':'Technology','kesehatan':'Healthcare',
+    'perindustrian':'Industrials','barang baku':'Basic Materials',
+    'barang konsumen non-primer':'Consumer Cyclicals','barang konsumen primer':'Consumer Non-Cyclicals',
+    'properti & real estat':'Properties & Real Estate','infrastruktur':'Infrastructures',
+    'transportasi & logistik':'Transportation & Logistic',
+  };
+  for (const [k, v] of Object.entries(fallbacks)) { if (!map[k]) map[k] = v; }
+  
+  _nameMapCache = map;
+  return map;
+}
+
+function normalizeSector(val) {
+  if (!val) return val;
+  const map = buildNameMap();
+  const lower = val.toLowerCase();
+  return map[lower] || val;
+}
+
 function detectNeeds(formula) {
   const f = formula.toUpperCase();
   return {
@@ -246,6 +275,8 @@ function detectNeeds(formula) {
     hhv: /HHV|LLV|ISBASE|ISNEARLOW|ISBREAKOUT|PREVHHV/i.test(formula),
     foreign: /FOREIGN|F0|F1|F2|F3|F4|FOREIGN_5D|FOREIGNNET|FOREIGNBUY|FOREIGNSELL/i.test(formula),
     relvol: /RELVOL/i.test(formula),
+    freq: /TICKRATIO|ISBLOCK|ISRETAIL|ISSMART|ISDRYUP|BLOCKTRADE|RETAILFRENZY|SMARTACCUM|DRYUP|RELFREQ/i.test(formula),
+    fund: /SECTOR|INDUSTRY|BOARD/i.test(formula),
   };
 }
 
@@ -262,20 +293,16 @@ router.post('/formula', (req, res) => {
     const tokens = tokenizeFormula(formula);
     if (tokens.error) return res.json({ error: 'Parse error: ' + tokens.error });
 
-    // Detect what the formula needs
     const needs = detectNeeds(formula);
 
-    // Get today's stocks
     let stocks = db.prepare(`SELECT *, (foreign_buy-foreign_sell) as foreign_net, ((foreign_buy-foreign_sell)*close) as foreign_net_val, CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as change_pct FROM idx_daily WHERE trade_date=? AND close>0`).all(td);
 
-    // Fundamental (single query)
     const { latestFundDate } = require('../db');
     const fm = latestFundDate();
     const fundMap = {};
     if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
 
-    // Bulk load history ONCE (the key optimization)
-    const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol) ? bulkLoadHistory(td) : {};
+    const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol || needs.freq) ? bulkLoadHistory(td) : {};
     const caMap = (needs.ma || needs.macd || needs.stoch) ? loadConfirmedCAs() : {};
     
     const results = [];
@@ -291,7 +318,6 @@ router.post('/formula', (req, res) => {
         const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
         const closes = adjusted.map(h => h.close);
         
-        // Only compute what's needed
         if (needs.ma) {
           const highs = adjusted.map(h => h.high || h.close);
           const lows = adjusted.map(h => h.low || h.close);
@@ -299,7 +325,6 @@ router.post('/formula', (req, res) => {
           tech.ma20 = calcMA(closes, 20); tech.ma30 = calcMA(closes, 30); tech.ma50 = calcMA(closes, 50);
           tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
           
-          // Composite trends
           const c = stock.close;
           extraCtx.ShortTrend = (c > (tech.ma10||0) && c > (tech.ma20||0)) ? 1 : 0;
           extraCtx.Intermediate = (c > (tech.ma20||0) && c > (tech.ma50||0)) ? 1 : 0;
@@ -367,6 +392,31 @@ router.post('/formula', (req, res) => {
             } else extraCtx['F' + fi] = 0;
           }
         }
+
+        if (needs.freq && hist.length >= 21) {
+          const h20 = hist.slice(-21, -1);
+          const today = hist[hist.length - 1];
+          const avgVol = h20.reduce((s, r) => s + (r.volume || 0), 0) / 20;
+          const avgFreq = h20.reduce((s, r) => s + (r.frequency || 0), 0) / 20;
+          const avgVal = h20.reduce((s, r) => s + (r.value || 0), 0) / 20;
+          const vol = today.volume || 0;
+          const freq = today.frequency || 0;
+          const val = today.value || 0;
+          const relVol = avgVol > 0 ? Math.round(vol / avgVol * 100) / 100 : 1;
+          const relFreq = avgFreq > 0 ? Math.round(freq / avgFreq * 100) / 100 : 1;
+          const avgTickHist = avgFreq > 0 ? avgVal / avgFreq : 0;
+          const tickSize = freq > 0 ? val / freq : 0;
+          const tickRatio = avgTickHist > 0 ? Math.round(tickSize / avgTickHist * 100) / 100 : 1;
+          const fnet = ((today.foreign_buy || 0) - (today.foreign_sell || 0)) * (today.close || 0);
+          const priceChg = closes.length >= 2 && closes[closes.length - 2] > 0 ? (closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2] : 0;
+
+          extraCtx.TickRatio = tickRatio;
+          extraCtx.RelFreq = relFreq;
+          extraCtx.isBlockTrade = (tickRatio > 2.5 && relVol > 1.5 && relFreq < 1.5) ? 1 : 0;
+          extraCtx.isRetailFrenzy = (relFreq > 2.0 && tickRatio < 0.6 && relVol > 1.2) ? 1 : 0;
+          extraCtx.isSmartAccum = (relVol > 1.2 && relVol < 3.0 && relFreq >= 0.8 && relFreq <= 1.8 && Math.abs(priceChg) < 0.03 && fnet > 0 && tickRatio > 1.2) ? 1 : 0;
+          extraCtx.isDryUp = (relVol < 0.4 && relFreq < 0.5) ? 1 : 0;
+        }
       }
 
       // Build variable context
@@ -389,8 +439,12 @@ router.post('/formula', (req, res) => {
         ForeignNet: stock.foreign_net_val || 0,
         ForeignBuy: (stock.foreign_buy||0) * stock.close,
         ForeignSell: (stock.foreign_sell||0) * stock.close,
+        BidVol: stock.bid_vol || 0, OfferVol: stock.offer_vol || 0,
+        BidRatio: (stock.bid_vol||0) + (stock.offer_vol||0) > 0 ? Math.round((stock.bid_vol||0) / ((stock.bid_vol||0) + (stock.offer_vol||0)) * 100 * 10) / 10 : 50,
         PER: fund.per||0, PBV: fund.pbv||0, ROE: fund.roe||0, ROA: fund.roa||0,
         DER: fund.der||0, NPM: fund.npm||0, MktCap: fund.mkt_cap||0, YTD: fund.ytd||0,
+        // [PATCH 4] String variables for sector/industry filtering
+        Sector: fund.sector || '', Industry: fund.industry || '', Board: fund.board || '',
         ...extraCtx,
       };
 
@@ -414,14 +468,11 @@ function tokenizeFormula(formula) {
   const s = formula.replace(/\s+/g, ' ').trim();
 
   while (i < s.length) {
-    // Skip whitespace
     if (s[i] === ' ') { i++; continue; }
 
-    // Parentheses
     if (s[i] === '(') { tokens.push({ type: 'LPAREN' }); i++; continue; }
     if (s[i] === ')') { tokens.push({ type: 'RPAREN' }); i++; continue; }
 
-    // Operators: >=, <=, ==, !=, >, <
     if (s[i] === '>' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '>=' }); i += 2; continue; }
     if (s[i] === '<' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '<=' }); i += 2; continue; }
     if (s[i] === '=' && s[i+1] === '=') { tokens.push({ type: 'OP', value: '==' }); i += 2; continue; }
@@ -439,6 +490,16 @@ function tokenizeFormula(formula) {
       let num = '';
       while (i < s.length && (s[i] >= '0' && s[i] <= '9' || s[i] === '.' || s[i] === 'e' || s[i] === 'E')) { num += s[i]; i++; }
       tokens.push({ type: 'NUM', value: parseFloat(num) }); continue;
+    }
+
+    // [PATCH 1] Quoted strings: "text" or 'text'
+    if (s[i] === '"' || s[i] === "'") {
+      const quote = s[i]; i++;
+      let str = '';
+      while (i < s.length && s[i] !== quote) { str += s[i]; i++; }
+      if (i >= s.length) return { error: 'Unterminated string at position ' + (i - str.length - 1) };
+      i++; // skip closing quote
+      tokens.push({ type: 'STRING', value: str }); continue;
     }
 
     // Words: AND, OR, variable names
@@ -468,11 +529,6 @@ function evalFormula(tokens, ctx) {
     return consume();
   }
 
-  // Grammar (left-to-right, AND/OR same priority):
-  // expr     = factor ((AND|OR) factor)*
-  // factor   = atom (OP atom)?
-  // atom     = NUM | VAR | LPAREN expr RPAREN
-
   function parseExpr() {
     let result = parseFactor();
     while (peek() && peek().type === 'LOGIC') {
@@ -484,12 +540,24 @@ function evalFormula(tokens, ctx) {
     return result;
   }
 
+  // [PATCH 3] String-aware comparison in parseFactor
   function parseFactor() {
     let left = parseAtom();
-    // Check if followed by comparison operator
     if (peek() && peek().type === 'OP') {
       const op = consume().value;
       const right = parseAtom();
+      // String comparison: if either side is a string, compare as strings (case-insensitive)
+      // Also normalize sector names (Indonesian → English via SECTOR_REVERSE)
+      if (typeof left === 'string' || typeof right === 'string') {
+        const ls = normalizeSector(String(left)).toLowerCase();
+        const rs = normalizeSector(String(right)).toLowerCase();
+        if (op === '==') return ls === rs ? 1 : 0;
+        if (op === '!=') return ls !== rs ? 1 : 0;
+        if (op === '>') return ls > rs ? 1 : 0;
+        if (op === '<') return ls < rs ? 1 : 0;
+        if (op === '>=') return ls >= rs ? 1 : 0;
+        if (op === '<=') return ls <= rs ? 1 : 0;
+      }
       const l = toNum(left), r = toNum(right);
       if (op === '>') return l > r ? 1 : 0;
       if (op === '<') return l < r ? 1 : 0;
@@ -498,7 +566,7 @@ function evalFormula(tokens, ctx) {
       if (op === '==') return l === r ? 1 : 0;
       if (op === '!=') return l !== r ? 1 : 0;
     }
-    return left; // standalone var or number — returned as-is
+    return left;
   }
 
   function parseAtom() {
@@ -507,28 +575,30 @@ function evalFormula(tokens, ctx) {
 
     if (t.type === 'NUM') { consume(); return t.value; }
 
+    // [PATCH 2] Handle STRING token
+    if (t.type === 'STRING') { consume(); return t.value; }
+
     if (t.type === 'VAR') {
       consume();
       if (ctx.hasOwnProperty(t.value)) return ctx[t.value];
-      // Try case-insensitive lookup
       const lower = t.value.toLowerCase();
       for (const k of Object.keys(ctx)) { if (k.toLowerCase() === lower) return ctx[k]; }
       throw new Error('Unknown variable: ' + t.value);
     }
 
     if (t.type === 'LPAREN') {
-      consume(); // eat (
+      consume();
       const result = parseExpr();
-      expect('RPAREN'); // eat )
+      expect('RPAREN');
       return result;
     }
 
     throw new Error('Unexpected: ' + t.type + (t.value ? ':' + t.value : ''));
   }
 
-  // Convert to number for comparisons (boolean true=1, false=0)
   function toNum(v) {
     if (typeof v === 'boolean') return v ? 1 : 0;
+    if (typeof v === 'string') return v.length > 0 ? 1 : 0; // non-empty string = truthy
     return v || 0;
   }
 
@@ -556,7 +626,6 @@ function evalRule(rule, stock, tech) {
   if (f === 'freq_spike') return tech.freq_spike ? applyOp(tech.freq_spike, op, val) : false;
   if (f === 'fnet_spike') return tech.fnet_spike ? applyOp(tech.fnet_spike, op, val) : false;
   if (f === 'activity_score') return tech.activity_score ? applyOp(tech.activity_score, op, val) : false;
-  // Fundamental
   if (f === 'per') return fund.per ? applyOp(fund.per, op, val) : false;
   if (f === 'pbv') return fund.pbv ? applyOp(fund.pbv, op, val) : false;
   if (f === 'roe') return applyOp(fund.roe || 0, op, val);
@@ -572,22 +641,18 @@ function evalRule(rule, stock, tech) {
   if (f === 'sector') return fund.sector === val;
   if (f === 'industry') return fund.industry ? fund.industry.toUpperCase().includes((val || '').toUpperCase()) : false;
   if (f === 'idx_index') return fund.idx_index && fund.idx_index.includes(val);
-  // MA compare
   if (f.startsWith('close_vs_ma')) { const p = parseInt(f.replace('close_vs_ma', '')); const ma = tech['ma' + p]; if (!ma) return false; return op === 'above' ? stock.close > ma : stock.close < ma; }
-  // MACD
   if (f === 'macd_hist') return tech.macd ? applyOp(tech.macd.histogram, op, val) : false;
   if (f === 'macd_cross') return tech.macd ? tech.macd.cross === val : false;
   if (f === 'macd_signal') { if (!tech.macd) return false; return op === 'above' ? tech.macd.macd > tech.macd.signal : tech.macd.macd < tech.macd.signal; }
-  // Stochastic
   if (f === 'stoch_k') return tech.stoch ? applyOp(tech.stoch.k, op, val) : false;
   if (f === 'stoch_d') return tech.stoch && tech.stoch.d ? applyOp(tech.stoch.d, op, val) : false;
   if (f === 'stoch_zone') return tech.stoch ? tech.stoch.zone === val : false;
-  // Foreign streak
   if (f === 'fnet_streak') { const days = Math.abs(parseInt(val) || 3); const dir = (parseFloat(val) || 0) >= 0 ? 'buy' : 'sell'; const recent = db.prepare('SELECT (foreign_buy-foreign_sell) as fn FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(stock.code, days); if (recent.length < days) return false; return dir === 'buy' ? recent.every(r => r.fn > 0) : recent.every(r => r.fn < 0); }
   return true;
 }
 
-// ═══ Sector Overview — aggregate fundamental + daily data by sector/industry ═══
+// ═══ Sector Overview ═══
 router.get('/sectors', (req, res) => {
   try {
     const { latestFundDate } = require('../db');
@@ -595,7 +660,6 @@ router.get('/sectors', (req, res) => {
     const sm = latestFundDate();
     if (!sm || !td) return res.json({ sectors: [], industries: [] });
 
-    // Join fundamental with latest daily for foreign flow
     const rows = db.prepare(`
       SELECT f.code, f.sector, f.industry, f.per, f.pbv, f.roe, f.roa, f.der, f.npm, f.mkt_cap, f.ytd,
              d.close, d.value, d.volume, d.frequency, d.foreign_buy, d.foreign_sell,
@@ -606,7 +670,6 @@ router.get('/sectors', (req, res) => {
       WHERE f.snapshot_month = ? AND f.sector != ''
     `).all(td, sm);
 
-    // Aggregate by sector
     const sectorMap = {};
     rows.forEach(r => {
       if (!sectorMap[r.sector]) sectorMap[r.sector] = { sector: r.sector, stocks: [], total_mcap: 0, total_fnet: 0, per_sum: 0, per_cnt: 0, roe_sum: 0, roe_cnt: 0, ytd_sum: 0, ytd_cnt: 0 };
@@ -620,16 +683,12 @@ router.get('/sectors', (req, res) => {
     });
 
     const sectors = Object.values(sectorMap).map(s => ({
-      sector: s.sector,
-      count: s.stocks.length,
-      total_mcap: s.total_mcap,
-      total_fnet: s.total_fnet,
+      sector: s.sector, count: s.stocks.length, total_mcap: s.total_mcap, total_fnet: s.total_fnet,
       avg_per: s.per_cnt ? Math.round(s.per_sum / s.per_cnt * 10) / 10 : 0,
       avg_roe: s.roe_cnt ? Math.round(s.roe_sum / s.roe_cnt * 10) / 10 : 0,
       avg_ytd: s.ytd_cnt ? Math.round(s.ytd_sum / s.ytd_cnt * 10) / 10 : 0,
     })).sort((a, b) => b.total_mcap - a.total_mcap);
 
-    // Aggregate by industry (within optional sector filter)
     const sectorFilter = (req.query.sector || '').trim();
     const indRows = sectorFilter ? rows.filter(r => r.sector === sectorFilter) : rows;
     const indMap = {};
@@ -646,28 +705,18 @@ router.get('/sectors', (req, res) => {
     });
 
     const industries = Object.values(indMap).map(s => ({
-      industry: s.industry,
-      sector: s.sector,
-      count: s.stocks.length,
-      total_mcap: s.total_mcap,
-      total_fnet: s.total_fnet,
+      industry: s.industry, sector: s.sector, count: s.stocks.length, total_mcap: s.total_mcap, total_fnet: s.total_fnet,
       avg_per: s.per_cnt ? Math.round(s.per_sum / s.per_cnt * 10) / 10 : 0,
       avg_roe: s.roe_cnt ? Math.round(s.roe_sum / s.roe_cnt * 10) / 10 : 0,
       avg_ytd: s.ytd_cnt ? Math.round(s.ytd_sum / s.ytd_cnt * 10) / 10 : 0,
     })).sort((a, b) => b.total_mcap - a.total_mcap);
 
-    // Stocks for drill-down (optional industry filter)
     const indFilter = (req.query.industry || '').trim();
     let stockList = [];
     if (indFilter) {
-      stockList = rows.filter(r => r.industry === indFilter)
-        .sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0))
-        .map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
+      stockList = rows.filter(r => r.industry === indFilter).sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0)).map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
     } else if (sectorFilter) {
-      stockList = rows.filter(r => r.sector === sectorFilter)
-        .sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0))
-        .slice(0, 30)
-        .map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
+      stockList = rows.filter(r => r.sector === sectorFilter).sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0)).slice(0, 30).map(r => ({ code: r.code, sector: r.sector, industry: r.industry, close: r.close, chg_pct: r.chg_pct, mkt_cap: r.mkt_cap, per: r.per, roe: r.roe, ytd: r.ytd, fnet_val: r.fnet_val, volume: r.volume }));
     }
 
     res.json({ trade_date: td, snapshot_month: sm, sectors, industries, stocks: stockList,
@@ -687,9 +736,8 @@ router.get('/activity-spike', (req, res) => {
     const td = latestIdxDate();
     if (!td) return res.json({ data: [], trade_date: null });
     const avgDays = parseInt(req.query.avg) || 20;
-    const minFreq = parseInt(req.query.min_freq) || 10; // min avg frequency to avoid penny stocks
+    const minFreq = parseInt(req.query.min_freq) || 10;
 
-    // Get all dates for avg period
     const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?').all(avgDays + 1).map(r => r.trade_date);
     if (dates.length < 5) return res.json({ data: [], error: 'Need more data' });
 
@@ -697,12 +745,10 @@ router.get('/activity-spike', (req, res) => {
     const avgDates = dates.slice(1);
     const ph = avgDates.map(() => '?').join(',');
 
-    // Today's data
     const todayData = {};
     db.prepare('SELECT code,name,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date=? AND close>0').all(today)
       .forEach(r => { todayData[r.code] = r; });
 
-    // Average over past N days
     const avgData = {};
     db.prepare(`SELECT code, AVG(volume) as avg_vol, AVG(value) as avg_val, AVG(frequency) as avg_freq,
       AVG(ABS((foreign_buy-foreign_sell)*close)) as avg_fnet_abs
@@ -710,7 +756,6 @@ router.get('/activity-spike', (req, res) => {
       GROUP BY code HAVING AVG(frequency)>=?`).all(...avgDates, minFreq)
       .forEach(r => { avgData[r.code] = r; });
 
-    // Calculate spikes
     const results = [];
     for (const [code, t] of Object.entries(todayData)) {
       const a = avgData[code];
@@ -721,8 +766,6 @@ router.get('/activity-spike', (req, res) => {
       const volSpike = a.avg_vol > 0 ? Math.round(t.volume / a.avg_vol * 10) / 10 : 0;
       const fnet = (t.foreign_buy - t.foreign_sell) * t.close;
       const fnetSpike = a.avg_fnet_abs > 0 ? Math.round(Math.abs(fnet) / a.avg_fnet_abs * 10) / 10 : 0;
-
-      // Combined score — weighted
       const score = Math.round((valSpike * 0.3 + freqSpike * 0.3 + volSpike * 0.2 + fnetSpike * 0.2) * 10) / 10;
 
       results.push({
@@ -730,14 +773,12 @@ router.get('/activity-spike', (req, res) => {
         volume: t.volume, value: t.value, frequency: t.frequency,
         fnet, fnet_val: fnet,
         avg_vol: Math.round(a.avg_vol), avg_val: Math.round(a.avg_val), avg_freq: Math.round(a.avg_freq),
-        val_spike: valSpike, freq_spike: freqSpike, vol_spike: volSpike, fnet_spike: fnetSpike,
-        score
+        val_spike: valSpike, freq_spike: freqSpike, vol_spike: volSpike, fnet_spike: fnetSpike, score
       });
     }
 
     results.sort((a, b) => b.score - a.score);
 
-    // Sector spike aggregation
     const { latestFundDate } = require('../db');
     const fm = latestFundDate();
     const sectorSpikes = {};
@@ -761,19 +802,16 @@ router.get('/activity-spike', (req, res) => {
       }
     }
 
-    // Dormant → Active: low avg freq (<30) but today freq spike > 3x
     const dormant = results.filter(r => r.avg_freq < 30 && r.freq_spike >= 3).sort((a, b) => b.freq_spike - a.freq_spike);
 
     res.json({
-      data: results,
-      dormant: dormant.slice(0, 30),
+      data: results, dormant: dormant.slice(0, 30),
       sector_spikes: Object.values(sectorSpikes).sort((a, b) => b.avg_score - a.avg_score),
       trade_date: today, avg_days: avgDays, total: results.length
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Activity history for a single ticker (for chart)
 router.get('/activity-history/:code', (req, res) => {
   try {
     const code = req.params.code.toUpperCase().trim();
@@ -784,10 +822,7 @@ router.get('/activity-history/:code', (req, res) => {
   } catch (e) { res.json({ code: req.params.code, data: [] }); }
 });
 
-
-// ═══ Sector Intelligence — rotation heatmap, flow timeline, correlation ═══
-
-// Weekly aggregated sector/industry data
+// ═══ Sector Intelligence ═══
 router.get('/sector-intelligence', (req, res) => {
   try {
     const { latestFundDate } = require('../db');
@@ -795,56 +830,39 @@ router.get('/sector-intelligence', (req, res) => {
     const sm = latestFundDate();
     if (!sm || !td) return res.json({ error: 'No data' });
     const weeks = parseInt(req.query.weeks) || 12;
-    const level = req.query.level || 'sector'; // sector | industry
+    const level = req.query.level || 'sector';
 
-    // Get all trade dates
     const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
     if (allDates.length < 5) return res.json({ error: 'Need more data' });
 
-    // Build week buckets (Mon-Fri groups)
     const weekBuckets = [];
     let currentWeek = [];
     for (const d of allDates) {
       const dow = new Date(d + 'T00:00:00').getDay();
-      if (dow === 1 && currentWeek.length > 0) { // Monday = new week
-        weekBuckets.push(currentWeek);
-        currentWeek = [];
-      }
+      if (dow === 1 && currentWeek.length > 0) { weekBuckets.push(currentWeek); currentWeek = []; }
       currentWeek.push(d);
     }
     if (currentWeek.length) weekBuckets.push(currentWeek);
 
-    // Take last N weeks
     const recentWeeks = weekBuckets.slice(-weeks);
 
-    // Build ticker → sector/industry map
     const fundMap = {};
     db.prepare("SELECT code, sector, industry FROM idx_fundamental WHERE snapshot_month=? AND sector!=''").all(sm)
       .forEach(f => { fundMap[f.code] = { sector: f.sector, industry: f.industry }; });
 
-    // For each week, aggregate by sector/industry
     const weeklyData = [];
     for (const wDates of recentWeeks) {
       if (!wDates.length) continue;
       const ph = wDates.map(() => '?').join(',');
       const rows = db.prepare(`
-        SELECT code, 
-               SUM((foreign_buy - foreign_sell) * close) as fnet_val,
-               SUM(value) as total_value,
-               SUM(volume) as total_volume,
-               MIN(close) as week_low, MAX(close) as week_high
-        FROM idx_daily WHERE trade_date IN (${ph}) AND close > 0
-        GROUP BY code
+        SELECT code, SUM((foreign_buy - foreign_sell) * close) as fnet_val, SUM(value) as total_value, SUM(volume) as total_volume, MIN(close) as week_low, MAX(close) as week_high
+        FROM idx_daily WHERE trade_date IN (${ph}) AND close > 0 GROUP BY code
       `).all(...wDates);
 
-      // Get first/last close for price change calc
       const firstDate = wDates[0], lastDate = wDates[wDates.length - 1];
-      const firstCloses = {};
-      const lastCloses = {};
-      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(firstDate)
-        .forEach(r => { firstCloses[r.code] = r.close; });
-      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(lastDate)
-        .forEach(r => { lastCloses[r.code] = r.close; });
+      const firstCloses = {}, lastCloses = {};
+      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(firstDate).forEach(r => { firstCloses[r.code] = r.close; });
+      db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close>0').all(lastDate).forEach(r => { lastCloses[r.code] = r.close; });
 
       const groups = {};
       for (const r of rows) {
@@ -854,43 +872,23 @@ router.get('/sector-intelligence', (req, res) => {
         if (!key) continue;
         if (!groups[key]) groups[key] = { name: key, sector: f.sector, fnet: 0, value: 0, volume: 0, stocks: 0, chg_sum: 0, chg_count: 0 };
         const g = groups[key];
-        g.fnet += r.fnet_val || 0;
-        g.value += r.total_value || 0;
-        g.volume += r.total_volume || 0;
-        g.stocks++;
-        // Price change for this stock this week
+        g.fnet += r.fnet_val || 0; g.value += r.total_value || 0; g.volume += r.total_volume || 0; g.stocks++;
         const fc = firstCloses[r.code], lc = lastCloses[r.code];
-        if (fc && lc && fc > 0) {
-          g.chg_sum += (lc - fc) / fc * 100;
-          g.chg_count++;
-        }
+        if (fc && lc && fc > 0) { g.chg_sum += (lc - fc) / fc * 100; g.chg_count++; }
       }
 
       weeklyData.push({
-        week_start: firstDate,
-        week_end: lastDate,
-        days: wDates.length,
-        groups: Object.values(groups).map(g => ({
-          name: g.name,
-          sector: g.sector,
-          fnet: g.fnet,
-          value: g.value,
-          volume: g.volume,
-          stocks: g.stocks,
-          avg_chg: g.chg_count ? Math.round(g.chg_sum / g.chg_count * 100) / 100 : 0
-        }))
+        week_start: firstDate, week_end: lastDate, days: wDates.length,
+        groups: Object.values(groups).map(g => ({ name: g.name, sector: g.sector, fnet: g.fnet, value: g.value, volume: g.volume, stocks: g.stocks, avg_chg: g.chg_count ? Math.round(g.chg_sum / g.chg_count * 100) / 100 : 0 }))
       });
     }
 
-    // Get unique group names for consistent ordering
     const groupNames = [...new Set(weeklyData.flatMap(w => w.groups.map(g => g.name)))].sort();
-
     res.json({ level, weeks: weeklyData, group_names: groupNames, trade_date: td, snapshot_month: sm });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-
-// ═══ Correlation — price movement correlation between stocks ═══
+// ═══ Correlation ═══
 router.get('/correlation', (req, res) => {
   try {
     const { latestFundDate, latestSnap } = require('../db');
@@ -915,51 +913,24 @@ router.get('/correlation', (req, res) => {
       if (!sd) return res.json({ pairs: [], error: 'No holdings data', mode });
       const invMap = {};
       db.prepare('SELECT code, investor_norm FROM holdings WHERE snapshot_date=? AND pct>=1').all(sd)
-        .forEach(r => {
-          if (!invMap[r.investor_norm]) invMap[r.investor_norm] = new Set();
-          invMap[r.investor_norm].add(r.code);
-        });
+        .forEach(r => { if (!invMap[r.investor_norm]) invMap[r.investor_norm] = new Set(); invMap[r.investor_norm].add(r.code); });
       const pairSet = new Set();
       for (const [inv, codes] of Object.entries(invMap)) {
         if (codes.size < 2 || codes.size > 50) continue;
         const arr = [...codes];
-        for (let i = 0; i < arr.length && i < 20; i++) {
-          for (let j = i + 1; j < arr.length && j < 20; j++) {
-            const key = [arr[i], arr[j]].sort().join('|');
-            pairSet.add(key);
-          }
-        }
+        for (let i = 0; i < arr.length && i < 20; i++) { for (let j = i + 1; j < arr.length && j < 20; j++) { pairSet.add([arr[i], arr[j]].sort().join('|')); } }
       }
       tickerPairs = [...pairSet].map(k => { const [a, b] = k.split('|'); return { a, b }; });
       tickers = [...new Set(tickerPairs.flatMap(p => [p.a, p.b]))];
-
     } else if (mode === 'industry') {
       const indMap = {};
-      for (const [code, f] of Object.entries(fundInfo)) {
-        if (!f.industry) continue;
-        if (!indMap[f.industry]) indMap[f.industry] = [];
-        indMap[f.industry].push(code);
-      }
-      for (const [ind, codes] of Object.entries(indMap)) {
-        if (codes.length < 2) continue;
-        const limited = codes.slice(0, 30);
-        for (let i = 0; i < limited.length; i++) {
-          for (let j = i + 1; j < limited.length; j++) {
-            tickerPairs.push({ a: limited[i], b: limited[j] });
-          }
-        }
-      }
+      for (const [code, f] of Object.entries(fundInfo)) { if (!f.industry) continue; if (!indMap[f.industry]) indMap[f.industry] = []; indMap[f.industry].push(code); }
+      for (const [ind, codes] of Object.entries(indMap)) { if (codes.length < 2) continue; const limited = codes.slice(0, 30); for (let i = 0; i < limited.length; i++) { for (let j = i + 1; j < limited.length; j++) { tickerPairs.push({ a: limited[i], b: limited[j] }); } } }
       tickers = [...new Set(tickerPairs.flatMap(p => [p.a, p.b]))];
-
     } else {
-      if (industry) {
-        tickers = Object.keys(fundInfo).filter(c => fundInfo[c].industry === industry);
-      } else if (sector) {
-        tickers = Object.keys(fundInfo).filter(c => fundInfo[c].sector === sector);
-      } else {
-        const td = latestIdxDate();
-        tickers = db.prepare('SELECT code FROM idx_daily WHERE trade_date=? AND close>0 ORDER BY value DESC LIMIT 150').all(td).map(r => r.code);
-      }
+      if (industry) { tickers = Object.keys(fundInfo).filter(c => fundInfo[c].industry === industry); }
+      else if (sector) { tickers = Object.keys(fundInfo).filter(c => fundInfo[c].sector === sector); }
+      else { const td = latestIdxDate(); tickers = db.prepare('SELECT code FROM idx_daily WHERE trade_date=? AND close>0 ORDER BY value DESC LIMIT 150').all(td).map(r => r.code); }
     }
 
     if (tickers.length < 2) return res.json({ pairs: [], tickers: tickers.length, mode });
@@ -969,13 +940,10 @@ router.get('/correlation', (req, res) => {
 
     const returns = {};
     for (const code of tickers) {
-      const rows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date')
-        .all(code, dates[0]);
+      const rows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date').all(code, dates[0]);
       if (rows.length < dates.length * 0.7) continue;
       const dailyRet = [];
-      for (let i = 1; i < rows.length; i++) {
-        if (rows[i - 1].close > 0) dailyRet.push((rows[i].close - rows[i - 1].close) / rows[i - 1].close);
-      }
+      for (let i = 1; i < rows.length; i++) { if (rows[i - 1].close > 0) dailyRet.push((rows[i].close - rows[i - 1].close) / rows[i - 1].close); }
       if (dailyRet.length >= 10) returns[code] = dailyRet;
     }
 
@@ -986,66 +954,39 @@ router.get('/correlation', (req, res) => {
       const n = Math.min(a.length, b.length);
       if (n < 10) return null;
       const ax = a.slice(-n), bx = b.slice(-n);
-      const ma = ax.reduce((s, v) => s + v, 0) / n;
-      const mb = bx.reduce((s, v) => s + v, 0) / n;
+      const ma = ax.reduce((s, v) => s + v, 0) / n, mb = bx.reduce((s, v) => s + v, 0) / n;
       let num = 0, da = 0, db2 = 0;
-      for (let k = 0; k < n; k++) {
-        num += (ax[k] - ma) * (bx[k] - mb);
-        da += (ax[k] - ma) ** 2;
-        db2 += (bx[k] - mb) ** 2;
-      }
+      for (let k = 0; k < n; k++) { num += (ax[k] - ma) * (bx[k] - mb); da += (ax[k] - ma) ** 2; db2 += (bx[k] - mb) ** 2; }
       return (da > 0 && db2 > 0) ? num / Math.sqrt(da * db2) : 0;
     };
 
     if (tickerPairs.length > 0) {
-      for (const { a, b } of tickerPairs) {
-        const corr = calcCorr(a, b);
-        if (corr !== null && Math.abs(corr) >= minCorr) {
-          pairs.push({ a, b, corr: Math.round(corr * 1000) / 1000 });
-        }
-      }
+      for (const { a, b } of tickerPairs) { const corr = calcCorr(a, b); if (corr !== null && Math.abs(corr) >= minCorr) { pairs.push({ a, b, corr: Math.round(corr * 1000) / 1000 }); } }
     } else {
       const codes = Object.keys(returns);
-      for (let i = 0; i < codes.length; i++) {
-        for (let j = i + 1; j < codes.length; j++) {
-          const corr = calcCorr(codes[i], codes[j]);
-          if (corr !== null && Math.abs(corr) >= minCorr) {
-            pairs.push({ a: codes[i], b: codes[j], corr: Math.round(corr * 1000) / 1000 });
-          }
-        }
-      }
+      for (let i = 0; i < codes.length; i++) { for (let j = i + 1; j < codes.length; j++) { const corr = calcCorr(codes[i], codes[j]); if (corr !== null && Math.abs(corr) >= minCorr) { pairs.push({ a: codes[i], b: codes[j], corr: Math.round(corr * 1000) / 1000 }); } } }
     }
 
     pairs.sort((a, b) => Math.abs(b.corr) - Math.abs(a.corr));
 
     const holdingsCache = {};
     function getHolders(code) {
-      if (!holdingsCache[code] && sd) {
-        holdingsCache[code] = db.prepare('SELECT investor_norm, investor, pct FROM holdings WHERE snapshot_date=? AND code=? AND pct>=1 ORDER BY pct DESC').all(sd, code);
-      }
+      if (!holdingsCache[code] && sd) { holdingsCache[code] = db.prepare('SELECT investor_norm, investor, pct FROM holdings WHERE snapshot_date=? AND code=? AND pct>=1 ORDER BY pct DESC').all(sd, code); }
       return holdingsCache[code] || [];
     }
 
     const enriched = pairs.slice(0, 50).map(p => {
-      const holdersA = getHolders(p.a);
-      const holdersB = getHolders(p.b);
+      const holdersA = getHolders(p.a), holdersB = getHolders(p.b);
       const aSet = new Set(holdersA.map(h => h.investor_norm));
       const common = holdersB.filter(h => aSet.has(h.investor_norm)).map(h => h.investor.substring(0, 30));
-      return {
-        ...p,
-        a_sector: fundInfo[p.a]?.sector || '',
-        a_industry: fundInfo[p.a]?.industry || '',
-        b_sector: fundInfo[p.b]?.sector || '',
-        b_industry: fundInfo[p.b]?.industry || '',
-        common_owners: common.slice(0, 5)
-      };
+      return { ...p, a_sector: fundInfo[p.a]?.sector || '', a_industry: fundInfo[p.a]?.industry || '', b_sector: fundInfo[p.b]?.sector || '', b_industry: fundInfo[p.b]?.industry || '', common_owners: common.slice(0, 5) };
     });
 
     res.json({ pairs: enriched, tickers: Object.keys(returns).length, days: dates.length, min_corr: minCorr, mode, sector, industry });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ═══ Fundamental lists — sector/industry dropdowns ═══
+// ═══ Fundamental lists ═══
 router.get('/fundamental-lists', (req, res) => {
   try {
     const { latestFundDate } = require('../db');
@@ -1055,10 +996,7 @@ router.get('/fundamental-lists', (req, res) => {
     const sectors = [...new Set(rows.map(r => r.sector))].sort();
     const industries = [...new Set(rows.map(r => r.industry))].sort();
     const sim = {};
-    rows.forEach(r => {
-      if (!sim[r.sector]) sim[r.sector] = [];
-      if (!sim[r.sector].includes(r.industry)) sim[r.sector].push(r.industry);
-    });
+    rows.forEach(r => { if (!sim[r.sector]) sim[r.sector] = []; if (!sim[r.sector].includes(r.industry)) sim[r.sector].push(r.industry); });
     for (const k of Object.keys(sim)) sim[k].sort();
     res.json({ sectors, industries, sector_industry_map: sim });
   } catch (e) { res.json({ sectors: [], industries: [] }); }

@@ -4,8 +4,10 @@ var idxSort = 'value', idxDir = 'desc';
 var idxData = null;
 var idxFilter = '';
 var idxSectorFilter = '';
+var idxIndustryFilter = '';
 var idxAvg = 20;
 var idxSuspended = new Set(); // suspended stock codes
+var idxEmbedded = false; // true when loaded inside Market Intel (hide sub-tabs)
 
 // Column ORDER + visibility — array defines display order (user can reorder via dropdown)
 var idxColOrder = ['code','name','close','chg','value','freq','fnet','score','freq_spike','vol_spike','ma20','ma200','vol','fbuy','fsell','val_spike','fnet_spike','sector'];
@@ -51,6 +53,7 @@ function renderIdxDaily() {
 
   if (!idxShellRendered || !$('idx-body')) {
     var h = '';
+    if (!idxEmbedded) {
     h += '<div style="display:flex;gap:3px;padding:8px 12px;border-bottom:1px solid var(--b1);align-items:center;flex-wrap:wrap">';
     [{k:'digest',l:'📋 Digest'},{k:'rankings',l:'📊 Rankings'},{k:'flow',l:'🌊 Flow'}].forEach(function(v) {
       h += '<button class="bei-tab' + (idxView === v.k ? ' on' : '') + '" id="idx-vbtn-' + v.k + '" onclick="idxSwitchView(\'' + v.k + '\')" style="padding:5px 12px;font-size:11px">' + v.l + '</button>';
@@ -58,16 +61,24 @@ function renderIdxDaily() {
     h += '<span style="flex:1"></span>';
     if (d.trade_date) h += '<span style="font-size:10px;color:var(--t3);font-family:var(--fm)">' + d.trade_date + '</span>';
     h += '</div>';
+    }
 
     h += '<div id="idx-filter-bar" style="display:' + (idxView === 'digest' ? 'none' : 'flex') + ';gap:6px;padding:6px 12px;border-bottom:1px solid var(--b1);align-items:center;flex-wrap:wrap">';
     h += '<input class="bei-filter-input" style="max-width:160px" id="idx-filter-input" placeholder="Filter ticker..." value="' + esc(idxFilter) + '" oninput="idxOnFilter(this.value)">';
     if (d.sectors && d.sectors.length) {
-      h += '<select class="bei-filter-sel" style="max-width:180px" id="idx-sector-sel" onchange="idxSectorFilter=this.value;idxRenderBody()">';
+      h += '<select class="bei-filter-sel" style="max-width:180px" id="idx-sector-sel" onchange="idxSectorFilter=this.value;idxIndustryFilter=\'\';idxRenderBody();idxUpdateIndustryDropdown()">';
       h += '<option value="">All Sectors</option>';
       d.sectors.forEach(function(s) { h += '<option value="' + esc(s) + '"' + (idxSectorFilter === s ? ' selected' : '') + '>' + esc(s) + '</option>'; });
       h += '</select>';
     }
-    h += '<button class="bei-filter-clear" id="idx-clear-btn" style="display:' + (idxFilter || idxSectorFilter ? 'inline-block' : 'none') + '" onclick="idxClearFilters()">Clear</button>';
+    // Industry dropdown — populated from data, filtered by selected sector
+    h += '<select class="bei-filter-sel" style="max-width:220px" id="idx-industry-sel" onchange="idxIndustryFilter=this.value;idxRenderBody()">';
+    h += '<option value="">All Industries</option>';
+    var industries = {};
+    (d.data || []).forEach(function(r) { if (r.industry && (!idxSectorFilter || r.sector === idxSectorFilter)) industries[r.industry] = true; });
+    Object.keys(industries).sort().forEach(function(ind) { h += '<option value="' + esc(ind) + '"' + (idxIndustryFilter === ind ? ' selected' : '') + '>' + esc(ind) + '</option>'; });
+    h += '</select>';
+    h += '<button class="bei-filter-clear" id="idx-clear-btn" style="display:' + (idxFilter || idxSectorFilter || idxIndustryFilter ? 'inline-block' : 'none') + '" onclick="idxClearFilters()">Clear</button>';
     h += '<span style="flex:1"></span>';
     h += '<span id="idx-avg-controls" style="display:' + (idxView === 'rankings' ? 'flex' : 'none') + ';align-items:center;gap:3px">';
     h += '<span style="font-size:10px;color:var(--t3)">Avg:</span>';
@@ -219,15 +230,26 @@ function idxOnFilter(val) {
   clearTimeout(idxFilterDebounce);
   idxFilterDebounce = setTimeout(function() {
     idxRenderBody();
-    var btn = $('idx-clear-btn'); if (btn) btn.style.display = (idxFilter || idxSectorFilter) ? 'inline-block' : 'none';
+    var btn = $('idx-clear-btn'); if (btn) btn.style.display = (idxFilter || idxSectorFilter || idxIndustryFilter) ? 'inline-block' : 'none';
   }, 150);
 }
 function idxClearFilters() {
-  idxFilter = ''; idxSectorFilter = '';
+  idxFilter = ''; idxSectorFilter = ''; idxIndustryFilter = '';
   var inp = $('idx-filter-input'); if (inp) inp.value = '';
   var sel = $('idx-sector-sel'); if (sel) sel.value = '';
+  var indSel = $('idx-industry-sel'); if (indSel) indSel.value = '';
   var btn = $('idx-clear-btn'); if (btn) btn.style.display = 'none';
   idxRenderBody();
+}
+
+// Update industry dropdown options based on selected sector
+function idxUpdateIndustryDropdown() {
+  var sel = $('idx-industry-sel'); if (!sel || !idxData || !idxData.data) return;
+  var industries = {};
+  idxData.data.forEach(function(r) { if (r.industry && (!idxSectorFilter || r.sector === idxSectorFilter)) industries[r.industry] = true; });
+  var h = '<option value="">All Industries</option>';
+  Object.keys(industries).sort().forEach(function(ind) { h += '<option value="' + esc(ind) + '">' + esc(ind) + '</option>'; });
+  sel.innerHTML = h;
 }
 
 function idxRenderBody() {
@@ -242,6 +264,7 @@ function idxFilteredData() {
   var data = idxData.data;
   if (idxFilter) data = data.filter(function(r) { return r.code.includes(idxFilter); });
   if (idxSectorFilter) data = data.filter(function(r) { return r.sector === idxSectorFilter; });
+  if (idxIndustryFilter) data = data.filter(function(r) { return r.industry === idxIndustryFilter; });
   return data;
 }
 
@@ -555,6 +578,11 @@ function renderFlowTbl() {
     var sectorMap = {};
     idxData.data.forEach(function(r) { if (r.sector) sectorMap[r.code] = r.sector; });
     data = data.filter(function(r) { return sectorMap[r.code] === idxSectorFilter; });
+  }
+  if (idxIndustryFilter && idxData && idxData.data) {
+    var industryMap = {};
+    idxData.data.forEach(function(r) { if (r.industry) industryMap[r.code] = r.industry; });
+    data = data.filter(function(r) { return industryMap[r.code] === idxIndustryFilter; });
   }
 
   data.sort(function(a,b) { var va=a[flowSort]||0, vb=b[flowSort]||0; return flowDir==='asc'?va-vb:vb-va; });

@@ -32,19 +32,19 @@ function renderBtForm(el){
   h+='<div><select id="bt-scope" style="width:85px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px;color:var(--t1);font-size:10px;outline:none" onchange="btScopeChg()"><option value="all">All Stocks</option><option value="stock"'+(d&&d.params.scope_type==='stock'?' selected':'')+'>Stock(s)</option><option value="sector"'+(d&&d.params.scope_type==='sector'?' selected':'')+'>Sector</option><option value="industry"'+(d&&d.params.scope_type==='industry'?' selected':'')+'>Industry</option><option value="score_top"'+(d&&d.params.scope_type==='score_top'?' selected':'')+'>📊 Top Score</option></select><div style="font-size:7px;color:var(--t3)">Scope</div></div>';
   // Scope value
   h+='<div style="position:relative;'+(d&&d.params.scope_type!=='all'?'':'display:none')+'" id="bt-sv-wrap"><input id="bt-sv" style="width:130px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-size:10px;font-family:var(--fm);outline:none;text-transform:uppercase" placeholder="BBCA,TLKM" value="'+(d?esc(d.params.scope_value||''):'')+ '" oninput="btAcScope()" onfocus="btAcScope()" autocomplete="off"><div id="bt-sv-ac" class="bt-ac-drop"></div><div style="font-size:7px;color:var(--t3)">Filter</div></div>';
-  h+='<div><input id="bt-mp" type="number" value="'+(d?d.params.max_positions:5)+'" style="width:45px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none"><div style="font-size:7px;color:var(--t3)">Pos</div></div>';
+  h+='<div><input id="bt-mp" type="number" value="'+(d?d.params.max_positions:5)+'" style="width:60px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center"><div style="font-size:7px;color:var(--t3)">Pos</div></div>';
   h+='<div><input id="bt-cap" type="number" value="'+(d?d.stats.initial_capital:100000000)+'" style="width:95px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none"><div style="font-size:7px;color:var(--t3)">Capital</div></div>';
   // Force cutloss
   var clOn=d&&d.params.force_cutloss;
-  h+='<div><div style="display:flex;align-items:center;gap:2px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:3px 5px;height:22px"><input type="checkbox" id="bt-cl" '+(clOn?'checked':'')+' style="margin:0;width:13px;height:13px;cursor:pointer"><input id="bt-clp" type="number" value="'+(d&&d.params.cutloss_pct!=null?d.params.cutloss_pct:-10)+'" style="width:35px;background:transparent;border:none;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:right">%</div><div style="font-size:7px;color:var(--t3)">Cutloss</div></div>';
+  h+='<div><div style="display:flex;align-items:center;gap:2px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:3px 5px;height:22px"><input type="checkbox" id="bt-cl" '+(clOn?'checked':'')+' style="margin:0;width:13px;height:13px;cursor:pointer"><input id="bt-clp" type="number" value="'+(d&&d.params.cutloss_pct!=null?d.params.cutloss_pct:-10)+'" style="width:55px;background:transparent;border:none;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center">%</div><div style="font-size:7px;color:var(--t3)">Cutloss</div></div>';
   // Risk Control
   var rcOn=d&&d.params.risk_control;
   h+='<div><div style="display:flex;align-items:center;gap:2px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:3px 5px;height:22px"><input type="checkbox" id="bt-rc" '+(rcOn?'checked':'')+' style="margin:0;width:13px;height:13px;cursor:pointer" onclick="var p=document.getElementById(\'bt-rc-params\');if(p)p.style.display=this.checked?\'flex\':\'none\'"></div><div style="font-size:7px;color:var(--t3)">Risk Ctrl</div></div>';
   h+='<div id="bt-rc-params" style="display:'+(rcOn?'flex':'none')+';gap:6px;align-items:end;flex-wrap:wrap">';
-  h+='<div><input id="bt-rc-dd" type="number" value="'+(d&&d.params.rc_dd_freeze!=null?d.params.rc_dd_freeze:-10)+'" style="width:50px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:right">%<div style="font-size:7px;color:var(--t3)">DD Freeze</div></div>';
-  h+='<div><input id="bt-rc-cl" type="number" value="'+(d&&d.params.rc_cl_freeze||3)+'" style="width:45px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:right"><div style="font-size:7px;color:var(--t3)">CL Freeze</div></div>';
-  h+='<div><input id="bt-rc-cd" type="number" value="'+(d&&d.params.rc_cooldown||10)+'" style="width:45px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:right"> days<div style="font-size:7px;color:var(--t3)">Cooldown</div></div>';
-  h+='<div><input id="bt-rc-pb" type="number" value="'+(d&&d.params.rc_probe_pos||1)+'" style="width:40px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:right"> pos<div style="font-size:7px;color:var(--t3)">Probe</div></div>';
+  h+='<div><input id="bt-rc-dd" type="number" value="'+(d&&d.params.rc_dd_freeze!=null?d.params.rc_dd_freeze:-10)+'" style="width:60px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center">%<div style="font-size:7px;color:var(--t3)">DD Freeze</div></div>';
+  h+='<div><input id="bt-rc-cl" type="number" value="'+(d&&d.params.rc_cl_freeze||3)+'" style="width:60px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center"><div style="font-size:7px;color:var(--t3)">CL Freeze</div></div>';
+  h+='<div><input id="bt-rc-cd" type="number" value="'+(d&&d.params.rc_cooldown||10)+'" style="width:60px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center"> days<div style="font-size:7px;color:var(--t3)">Cooldown</div></div>';
+  h+='<div><input id="bt-rc-pb" type="number" value="'+(d&&d.params.rc_probe_pos||1)+'" style="width:60px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none;text-align:center"> pos<div style="font-size:7px;color:var(--t3)">Probe</div></div>';
   var lqOn=d&&d.params.rc_liquidate;
   h+='<div><div style="display:flex;align-items:center;gap:3px;background:var(--bgH);border:1px solid var(--b2);border-radius:4px;padding:4px 6px;height:22px"><input type="checkbox" id="bt-rc-lq" '+(lqOn?'checked':'')+' style="margin:0;width:13px;height:13px;cursor:pointer"><span style="font-size:9px;color:var(--t2)">Liquidate</span></div><div style="font-size:7px;color:var(--t3)">On Freeze</div></div>';
   h+='</div>';
@@ -61,15 +61,20 @@ function renderBtForm(el){
   h+='<div id="bt-ref" style="'+(btShowRef?'':'display:none')+';background:var(--bgH);border:1px solid var(--b1);border-radius:6px;padding:6px 10px;margin:4px 0 6px">';
   var refs=[
     ['Price','C|Close price,O|Open,H|High,L|Low,Chg|Change %'],
-    ['Volume','V|Volume shares,Val|Value Rp,Freq|Frequency,DVMil|Value millions,RelVol|Vs 20d avg'],
-    ['MA','MA5|5-day,MA10|10-day,MA20|20-day,MA50|50-day,MA100|100-day,MA200|200-day'],
-    ['Dist%','DistMA5|% from MA5,DistMA20|% from MA20,DistMA50|% from MA50,DistMA200|% from MA200'],
-    ['Position','Up_MA20|Above MA20,Up_MA50|Above MA50,ShortTrend|C>MA10+20,Intermediate|C>MA20+50,LongTrend|C>MA20+50+200'],
-    ['MACD','MACD|MACD line,Signal|Signal line,MACD_Hist|Histogram,Bullish_MACD|Bullish,Bearish_MACD|Bearish,MACDCross|Golden cross'],
-    ['Stoch','K|%K,D|%D'],
-    ['Foreign','ForeignNet|Net Rp,ForeignBuy|Buy Rp,ForeignSell|Sell Rp,Foreign_5D|5d net Rp'],
-    ['Range','HHV20|20d high,LLV20|20d low'],
-    ['Fund','PER|P/E ratio,PBV|P/B ratio,ROE|Return on equity,MktCap|Market cap'],
+    ['Volume','V|Volume shares,Val|Value Rp,Freq|Frequency,DVMil|Value millions,RelVol|Vs 20d avg,RelFreq|Freq vs avg'],
+    ['MA','MA3|3-day,MA5|5-day,MA10|10-day,MA20|20-day,MA30|30-day,MA50|50-day,MA100|100-day,MA200|200-day'],
+    ['Dist%','DistMA3|% from MA3,DistMA5|% from MA5,DistMA10|% from MA10,DistMA20|% from MA20,DistMA30|% from MA30,DistMA50|% from MA50,DistMA100|% from MA100,DistMA200|% from MA200'],
+    ['Position','Up_MA5|Above MA5,Up_MA10|Above MA10,Up_MA20|Above MA20,Up_MA50|Above MA50,Up_MA100|Above MA100,Up_MA200|Above MA200,MA_Above|Stage 0-5,MA_Aligned|Bullish stack'],
+    ['Trend','ShortTrend|C>MA10+20,Intermediate|C>MA20+50,LongTrend|C>MA20+50+200'],
+    ['Pattern','isBase|Base formation,isNearLow|Near 20d low,isBreakout|Above 20d high'],
+    ['MACD','MACD|MACD line,Signal|Signal line,MACD_Hist|Histogram,Bullish_MACD|Bullish,BullishWeak_MACD|Weak bull,Bearish_MACD|Bearish,BearishWeak_MACD|Weak bear,MACDCross|Golden cross,MACDDeathCross|Death cross,MACD_Status|-2~2'],
+    ['Stoch','K|%K,D|%D,StochCrossUp|K cross D up,StochTrend|K>D'],
+    ['Bid/Offer','BidVol|Bid volume,OfferVol|Offer volume,BidRatio|Bid % ratio'],
+    ['Foreign','ForeignNet|Net Rp,ForeignBuy|Buy Rp,ForeignSell|Sell Rp,Foreign_5D|5d net,Foreign_10D|10d net,Foreign_20D|20d net,F0|Today,F1|Yesterday,F2|2d ago,F3|3d ago,F4|4d ago'],
+    ['Scoring','Score|Composite 0-100,ScoreFund|Fundamental,ScoreVal|Valuation,ScoreMom|Momentum,ScoreDemand|Demand,ScoreForeign|Foreign SM'],
+    ['Freq','TickRatio|Val/tx vs avg,isBlockTrade|Block trade,isRetailFrenzy|Retail frenzy,isSmartAccum|Smart accumulation,isDryUp|Volume dry up,RelFreq|Freq vs 20d avg'],
+    ['Range','HHV20|20d high,LLV20|20d low,HHV_C20|20d close high,LLV_C20|20d close low,PrevHHV20|Yesterday HHV20'],
+    ['Fund','PER|P/E ratio,PBV|P/B ratio,ROE|Return on equity,ROA|Return on assets,NPM|Net profit margin,DER|Debt/equity,MktCap|Market cap'],
     ['Exit','PnlPct|Current P&L %,DaysHeld|Bars held,EntryPrice|Entry price'],
   ];
   h+='<div style="display:flex;flex-wrap:wrap;gap:1px 14px">';

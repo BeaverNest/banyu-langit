@@ -47,38 +47,64 @@ try { var _sc = JSON.parse(localStorage.getItem('scoreCols')); if (_sc) { scrSco
 try { var _sw = JSON.parse(localStorage.getItem('scoreWeights')); if (_sw) scrScoreWeights = _sw; } catch(e){}
 function saveScoreCols() { localStorage.setItem('scoreCols', JSON.stringify({vis:scrScoreCols, ord:scrScoreColOrder})); }
 
-var scrScoreSubTab = 'scores'; // scores | ic | backfill
+var scrScoreSubTab = 'scores'; // scores | ic | decay | backfill
 
 // ═══ MAIN ENTRY ═══
 function loadScoring() {
   var el = $('scoring-content'); if (!el) return;
-  renderScoringShell(el);
+  // Only render shell once — don't destroy weight inputs on tab switch
+  if (!$('score-body')) {
+    renderScoringShell(el);
+  } else {
+    // Just update tab button states
+    document.querySelectorAll('#scoring-content .bei-tab[data-stab]').forEach(function(b) {
+      b.classList.toggle('on', b.getAttribute('data-stab') === scrScoreSubTab);
+    });
+  }
   if (scrScoreSubTab === 'scores') loadLastScores();
-  else if (scrScoreSubTab === 'ic') loadICTracking();
   else if (scrScoreSubTab === 'backfill') renderBackfillUI();
+  else if (scrScoreSubTab === 'ic') loadICTracking();
+  else if (scrScoreSubTab === 'decay') loadICDecay();
+}
+
+// Sync weight values from DOM inputs to scrScoreWeights + localStorage
+function _syncWeightsFromInputs() {
+  var changed = false;
+  ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
+    var inp = $('sw-' + k);
+    if (inp) {
+      var v = parseInt(inp.value);
+      if (!isNaN(v) && v >= 0 && v <= 100 && scrScoreWeights[k] !== v) {
+        scrScoreWeights[k] = v;
+        changed = true;
+      }
+    }
+  });
+  if (changed) localStorage.setItem('scoreWeights', JSON.stringify(scrScoreWeights));
 }
 
 function renderScoringShell(el) {
   var h = '';
   // ── Weight controls ──
-  h += '<div style="padding:8px 12px;border-bottom:1px solid var(--b1);display:flex;gap:10px;align-items:center;flex-wrap:wrap">';
-  h += '<span style="font-size:11px;font-weight:700;color:var(--t1)">Weights:</span>';
+  h += '<div style="padding:10px 12px;border-bottom:1px solid var(--b1);display:flex;gap:12px;align-items:center;flex-wrap:wrap">';
+  h += '<span style="font-size:13px;font-weight:700;color:var(--t1)">Weights:</span>';
   ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
     var label = k === 'fundamental' ? '📊 Fund' : k === 'valuation' ? '💰 Value' : k === 'momentum' ? '📈 Mom' : k === 'demand' ? '🔥 Demand' : '🌐 Foreign';
-    h += '<label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--t2)">' + label;
-    h += ' <input type="number" id="sw-' + k + '" value="' + scrScoreWeights[k] + '" min="0" max="100" step="5" style="width:36px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:2px 3px;color:var(--t1);font-family:var(--fm);font-size:10px;text-align:center;outline:none">';
+    h += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--t2)">' + label;
+    h += ' <input type="number" id="sw-' + k + '" value="' + scrScoreWeights[k] + '" min="0" max="100" step="5" oninput="_syncWeightsFromInputs()" style="width:42px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:3px 4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center;outline:none">';
     h += '%</label>';
   });
-  h += '<button onclick="calcScore()" style="padding:4px 12px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:10px;font-family:var(--f);cursor:pointer" id="score-calc-btn">▶ Calculate</button>';
-  h += '<span id="score-status" style="font-size:10px;color:var(--t3)"></span>';
+  h += '<button onclick="calcScore()" style="padding:6px 16px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:12px;font-family:var(--f);cursor:pointer" id="score-calc-btn">▶ Calculate</button>';
+  h += '<button onclick="autoOptimizeWeights()" style="padding:6px 12px;border-radius:4px;border:1px solid var(--am);background:transparent;color:var(--am);font-weight:700;font-size:11px;font-family:var(--f);cursor:pointer" id="score-auto-btn" title="Auto-find optimal weights based on IC Decay data">⚡ Auto</button>';
+  h += '<span id="score-status" style="font-size:11px;color:var(--t3)"></span>';
   h += '<span style="flex:1"></span>';
-  h += '<button id="score-cols-btn" class="bei-sort-btn" style="padding:3px 8px;font-size:9px;display:' + (scrScoreSubTab === 'scores' ? 'inline-block' : 'none') + '" onclick="scoreToggleCols()">⚙ Cols</button>';
+  h += '<button id="score-cols-btn" class="bei-sort-btn" style="padding:4px 10px;font-size:10px;display:' + (scrScoreSubTab === 'scores' ? 'inline-block' : 'none') + '" onclick="scoreToggleCols()">⚙ Cols</button>';
   h += '</div>';
 
   // ── Sub-tabs ──
-  h += '<div style="display:flex;gap:3px;padding:6px 12px;border-bottom:1px solid var(--b1)">';
-  [{k:'scores',l:'📊 Scores'},{k:'ic',l:'📈 IC Tracking'},{k:'backfill',l:'⏪ Backfill'}].forEach(function(t) {
-    h += '<button class="bei-tab' + (scrScoreSubTab === t.k ? ' on' : '') + '" onclick="scrScoreSubTab=\'' + t.k + '\';loadScoring()" style="padding:4px 10px;font-size:10px">' + t.l + '</button>';
+  h += '<div style="display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--b1)">';
+  [{k:'scores',l:'📊 Scores'},{k:'backfill',l:'⏪ Backfill'},{k:'ic',l:'📈 IC Tracking'},{k:'decay',l:'📉 IC Decay'}].forEach(function(t) {
+    h += '<button class="bei-tab' + (scrScoreSubTab === t.k ? ' on' : '') + '" data-stab="' + t.k + '" onclick="scrScoreSubTab=\'' + t.k + '\';loadScoring()" style="padding:6px 14px;font-size:12px">' + t.l + '</button>';
   });
   h += '</div>';
 
@@ -200,14 +226,7 @@ async function loadLastScores() {
     var d = await r.json();
     if (d.data && d.data.length) {
       scrScoreData = d;
-      if (d.weights) {
-        scrScoreWeights = d.weights;
-        var ef = $('sw-fundamental'); if (ef) ef.value = d.weights.fundamental;
-        var ev = $('sw-valuation'); if (ev) ev.value = d.weights.valuation;
-        var em = $('sw-momentum'); if (em) em.value = d.weights.momentum;
-        var ed = $('sw-demand'); if (ed) ed.value = d.weights.demand || 20;
-        var efr = $('sw-foreign'); if (efr) efr.value = d.weights.foreign || 15;
-      }
+      // Note: don't overwrite weight inputs from server — user's current input wins
       if (status) status.textContent = d.data.length + ' stocks · ' + (d.trade_date || '');
       scoreRenderTable();
     } else {
@@ -249,7 +268,7 @@ function scoreRenderTable() {
   // Visible columns
   var visCols = scrScoreColOrder.filter(function(k) { return scrScoreCols[k]; });
 
-  var h = '<table class="bei-tbl" style="font-size:10px"><thead><tr>';
+  var h = '<table class="bei-tbl" style="font-size:12px"><thead><tr>';
   h += '<th style="width:24px;text-align:center;padding:3px 2px">#</th>';
   visCols.forEach(function(k) {
     var arrow = scrScoreSort === k ? (scrScoreDir === 'desc' ? ' ▼' : ' ▲') : '';
@@ -397,7 +416,7 @@ function renderICView(el, d) {
   h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);margin-bottom:6px">' + BL.container('ic-chart', 280) + '</div>';
 
   // Detail table
-  h += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table class="bei-tbl" style="font-size:10px"><thead><tr>';
+  h += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto"><table class="bei-tbl" style="font-size:12px"><thead><tr>';
   h += '<th class="al">Date</th><th class="ar">IC Comp</th><th class="ar">IC Fund</th><th class="ar">IC Val</th><th class="ar">IC Mom</th><th class="ar">Hit%</th><th class="ar">Top20 Ret</th><th class="ar">Bot20 Ret</th><th class="ar">Spread</th><th class="ar">N</th>';
   h += '</tr></thead><tbody>';
   data.slice().reverse().forEach(function(r) {
@@ -543,4 +562,153 @@ async function loadScoredDates() {
     h += '</div></div>';
     el.innerHTML = h;
   } catch (e) { el.innerHTML = 'Error loading dates'; }
+}
+
+// ═══ IC DECAY + INFORMATION RATIO ═══
+async function loadICDecay() {
+  var body = $('score-body'); if (!body) return;
+  body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--t3)">Loading IC Decay...</div>';
+  try {
+    var r = await fetch('/api/idx/ic-decay?limit=120');
+    var d = await r.json();
+    if (d.error || !d.decay || !d.decay.length) {
+      body.innerHTML = '<div class="ne" style="padding:30px">Not enough data for IC Decay analysis.<br><span style="font-size:10px;color:var(--t3)">Need scored data + forward trading days. Use ⏪ Backfill first.</span></div>';
+      return;
+    }
+    renderICDecay(body, d);
+  } catch (e) { body.innerHTML = '<div class="ne">Error: ' + e.message + '</div>'; }
+}
+
+function renderICDecay(el, d) {
+  var h = '<div style="padding:12px">';
+
+  // Best horizon badge
+  h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
+  h += '<div style="font-size:14px;font-weight:700;color:var(--t1)">IC DECAY ANALYSIS</div>';
+  h += '<div style="font-size:12px;padding:4px 12px;border-radius:4px;background:rgba(84,112,198,0.1);border:1px solid var(--bl);color:var(--bl)">Best horizon: <b>' + d.best_horizon + 'D</b> (IR ' + d.best_ir.toFixed(3) + ')</div>';
+  h += '<span style="font-size:10px;color:var(--t3)">' + d.scored_dates + ' scored dates</span>';
+  h += '</div>';
+
+  // Interpretation
+  h += '<div style="font-size:11px;color:var(--t2);margin-bottom:12px;padding:8px 10px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1);line-height:1.6">';
+  h += '<b>IC Decay</b> shows how quickly a scoring signal loses predictive power over time. ';
+  h += '<b>Information Ratio (IR)</b> = avg IC / std IC — measures signal consistency. IR > 0.5 is good, > 1.0 is excellent. ';
+  h += 'The <b>best horizon</b> is where IR peaks — that\'s the optimal holding period for this model.';
+  h += '</div>';
+
+  // Decay Chart (ECharts)
+  h += '<div style="border:1px solid var(--b1);border-radius:4px;overflow:hidden;background:var(--bg2);margin-bottom:10px">' + BL.container('ic-decay-chart', 300) + '</div>';
+
+  // Decay table — all factors
+  h += '<table class="bei-tbl" style="font-size:12px"><thead style="font-size:10px"><tr>';
+  h += '<th class="ar">Horizon</th>';
+  d.factors.forEach(function(f) {
+    h += '<th class="ar" colspan="3" style="border-bottom:2px solid var(--b2)">' + f.charAt(0).toUpperCase() + f.slice(1) + '</th>';
+  });
+  h += '</tr><tr><th class="ar"></th>';
+  d.factors.forEach(function() {
+    h += '<th class="ar" style="color:var(--t3)">IC</th><th class="ar" style="color:var(--t3)">Std</th><th class="ar" style="color:var(--t3)">IR</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  d.decay.forEach(function(row) {
+    var isBest = row.horizon === d.best_horizon;
+    h += '<tr style="' + (isBest ? 'background:rgba(84,112,198,0.08)' : '') + '">';
+    h += '<td class="ar" style="font-weight:700;font-family:var(--fm)">' + row.horizon + 'D' + (isBest ? ' ★' : '') + '</td>';
+    d.factors.forEach(function(f) {
+      var v = row[f] || {};
+      var icColor = v.avg_ic > 0.05 ? 'var(--gn)' : v.avg_ic < 0 ? 'var(--rd)' : 'var(--am)';
+      var irColor = v.ir > 0.5 ? 'var(--gn)' : v.ir > 0.2 ? 'var(--am)' : 'var(--t3)';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + icColor + ';font-weight:600">' + (v.avg_ic || 0).toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (v.std_ic || 0).toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + irColor + ';font-weight:700">' + (v.ir || 0).toFixed(3) + '</td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+
+  h += '</div>';
+  el.innerHTML = h;
+
+  // Render decay chart
+  setTimeout(function() { icDecayRenderChart(d); }, 50);
+}
+
+function icDecayRenderChart(d) {
+  var el = $('ic-decay-chart'); if (!el) return;
+  var c = BL.init(el, 'ic-decay'); if (!c) return;
+
+  var horizons = d.decay.map(function(r) { return r.horizon + 'D'; });
+  var factorColors = {
+    composite: '#5470c6', fundamental: '#22c55e', valuation: '#0ea5e9',
+    momentum: '#f59e0b', demand: '#a855f7', foreign: '#ef4444'
+  };
+
+  // IC lines (left axis) + IR bars (right axis)
+  var series = [];
+
+  // IC lines
+  d.factors.forEach(function(f) {
+    series.push({
+      name: f.charAt(0).toUpperCase() + f.slice(1) + ' IC',
+      type: 'line',
+      yAxisIndex: 0,
+      data: d.decay.map(function(r) { return (r[f] || {}).avg_ic || 0; }),
+      lineStyle: { width: f === 'composite' ? 3 : 1.5 },
+      itemStyle: { color: factorColors[f] || 'var(--t2)' },
+      symbol: 'circle', symbolSize: f === 'composite' ? 6 : 4
+    });
+  });
+
+  // IR bar for composite only
+  series.push({
+    name: 'Composite IR',
+    type: 'bar',
+    yAxisIndex: 1,
+    data: d.decay.map(function(r) { return (r.composite || {}).ir || 0; }),
+    itemStyle: { color: 'rgba(84,112,198,0.3)' },
+    barWidth: '40%'
+  });
+
+  c.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { show: true, top: 0, textStyle: { color: '#8a9bb5', fontSize: 9 }, itemWidth: 12, itemHeight: 8 },
+    grid: { left: 50, right: 50, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: horizons, axisLabel: { color: '#8a9bb5', fontSize: 10 }, axisLine: { lineStyle: { color: '#2a3f5f' } } },
+    yAxis: [
+      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(3); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
+      { type: 'value', name: 'IR', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { show: false } }
+    ],
+    series: series
+  });
+}
+
+// ═══ AUTO-OPTIMIZE WEIGHTS — Grid Search ═══
+async function autoOptimizeWeights() {
+  var btn = $('score-auto-btn'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Searching...'; }
+  var status = $('score-status'); if (status) status.textContent = 'Grid search: testing all weight combinations...';
+  try {
+    var r = await fetch('/api/idx/optimize-weights?horizon=5&step=5&limit=120');
+    var d = await r.json();
+    if (d.error) {
+      if (status) status.textContent = '❌ ' + d.error;
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Auto'; }
+      return;
+    }
+
+    var best = d.best;
+    // Apply to inputs
+    var factors = ['fundamental', 'valuation', 'momentum', 'demand', 'foreign'];
+    factors.forEach(function(f) {
+      var inp = $('sw-' + f);
+      if (inp) inp.value = best[f];
+      scrScoreWeights[f] = best[f];
+    });
+    localStorage.setItem('scoreWeights', JSON.stringify(scrScoreWeights));
+
+    if (status) status.textContent = '✅ Optimal: F' + best.fundamental + ' V' + best.valuation + ' M' + best.momentum + ' D' + best.demand + ' R' + best.foreign + ' (IR ' + best.ir + ', IC ' + best.avg_ic + ') — ' + d.combos_tested + ' combos tested, ' + d.dates_used + ' dates. Click Calculate.';
+  } catch (e) {
+    if (status) status.textContent = '❌ ' + e.message;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '⚡ Auto'; }
 }

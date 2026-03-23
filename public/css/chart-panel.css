@@ -1,0 +1,122 @@
+/* ═══ CHART PANEL V2 — Right Slide (Split Screen) ═══ */
+
+.chart-toggle { position: relative; }
+.chart-toggle.active { color: var(--bl) !important; background: rgba(33,150,243,0.12); }
+
+/* Panel — right slide */
+.chart-panel {
+  position: fixed; top: 36px; right: 0; bottom: 0; width: 0;
+  background: var(--bg0); border-left: 2px solid var(--b2); z-index: 90;
+  overflow: hidden; transition: width 0.28s cubic-bezier(0.4,0,0.2,1);
+  display: flex; flex-direction: column;
+}
+.chart-panel.open { width: var(--chart-w, 55%); box-shadow: -4px 0 20px rgba(0,0,0,0.4); }
+
+.layout.chart-open { margin-right: var(--chart-w, 55%); transition: margin-right 0.28s cubic-bezier(0.4,0,0.2,1); }
+.layout { transition: margin-right 0.28s cubic-bezier(0.4,0,0.2,1); }
+
+/* Topbar */
+.chart-topbar {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border-bottom: 1px solid var(--b1); background: var(--bg1); flex-shrink: 0; min-height: 30px;
+}
+
+/* Ticker input */
+.chart-ticker-input {
+  width: 70px; background: var(--bg0); border: 1px solid var(--b2); border-radius: 3px;
+  padding: 2px 6px; color: var(--bl); font-family: var(--f); font-size: var(--font-md);
+  font-weight: 700; text-transform: uppercase; outline: none; letter-spacing: 0.5px;
+}
+.chart-ticker-input:focus { border-color: var(--bl); box-shadow: 0 0 0 1px rgba(33,150,243,0.3); }
+
+/* Autocomplete */
+.chart-ac {
+  position: absolute; top: 100%; left: 0; width: 240px; max-height: 200px; overflow-y: auto;
+  background: var(--bg1); border: 1px solid var(--b2); border-radius: 0 0 4px 4px;
+  z-index: 999; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.chart-ac.open { display: block; }
+.chart-ac-item {
+  padding: 4px 8px; font-size: var(--font-sm); cursor: pointer;
+  display: flex; justify-content: space-between; border-bottom: 1px solid var(--b0);
+}
+.chart-ac-item:hover, .chart-ac-item.sel { background: var(--bgH); }
+.chart-ac-item .ac-code { color: var(--bl); font-weight: 700; min-width: 50px; display: flex; align-items: center; gap: 4px; }
+.chart-ac-item .ac-name { color: var(--t3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 8px; text-align: right; }
+.ac-badge {
+  font-size: 8px; padding: 1px 3px; border-radius: 2px;
+  background: var(--gn); color: #fff; font-weight: 700; vertical-align: super;
+}
+
+/* Price info */
+.chart-price-info { display: flex; align-items: center; gap: 5px; font-size: var(--font-sm); margin-left: 2px; overflow: hidden; }
+.chart-price-info .cp-price { font-weight: 700; font-size: var(--font-md); color: var(--t1); white-space: nowrap; }
+.chart-price-info .cp-change { font-weight: 600; white-space: nowrap; }
+.chart-price-info .cp-change.up { color: var(--gn); }
+.chart-price-info .cp-change.dn { color: var(--rd); }
+.cp-badge {
+  font-size: 8px; padding: 1px 4px; border-radius: 2px;
+  background: var(--am); color: #000; font-weight: 700; white-space: nowrap;
+}
+
+/* Drawing tools */
+.chart-tool-group { display: flex; gap: 2px; border-left: 1px solid var(--b1); padding-left: 5px; margin-left: 2px; }
+.chart-tool-btn {
+  padding: 2px 5px; border: 1px solid var(--b1); border-radius: 3px; background: transparent;
+  color: var(--t3); font-family: var(--f); font-size: var(--font-xs); cursor: pointer; transition: all 0.1s;
+}
+.chart-tool-btn:hover { background: var(--bgH); color: var(--t1); }
+.chart-tool-btn.active { background: var(--am); color: #000; border-color: var(--am); }
+
+/* Timeframe */
+.chart-tf-group { display: flex; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.chart-tf-btn {
+  padding: 2px 6px; border: 1px solid var(--b1); border-radius: 3px; background: transparent;
+  color: var(--t3); font-family: var(--f); font-size: var(--font-xs); cursor: pointer; transition: all 0.1s;
+}
+.chart-tf-btn:hover { background: var(--bgH); color: var(--t1); }
+.chart-tf-btn.active { background: var(--bl); color: #fff; border-color: var(--bl); }
+
+/* Indicator dropdown */
+.chart-ind-btn {
+  padding: 2px 7px; border: 1px solid var(--b1); border-radius: 3px; background: transparent;
+  color: var(--am); font-family: var(--f); font-size: var(--font-xs); cursor: pointer; flex-shrink: 0;
+}
+.chart-ind-btn:hover { background: var(--bgH); }
+.chart-ind-drop {
+  position: absolute; top: 100%; right: 0; width: 200px; max-height: 300px; overflow-y: auto;
+  background: var(--bg1); border: 1px solid var(--b2); border-radius: 4px; z-index: 999;
+  display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.chart-ind-drop.open { display: block; }
+.ind-section {
+  padding: 4px 10px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--t3); border-bottom: 1px solid var(--b1); background: var(--bg0);
+}
+.chart-ind-item {
+  padding: 5px 10px; font-size: var(--font-sm); cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.chart-ind-item:hover { background: var(--bgH); }
+.chart-ind-item .ind-check { color: var(--gn); font-weight: 700; display: none; }
+.chart-ind-item.on .ind-check { display: inline; }
+
+/* Close */
+.chart-close-btn {
+  padding: 2px 6px; border: none; border-radius: 3px; background: transparent;
+  color: var(--t3); font-family: var(--f); font-size: var(--font-md); cursor: pointer; flex-shrink: 0;
+}
+.chart-close-btn:hover { color: var(--rd); background: rgba(244,67,54,0.1); }
+
+/* Chart body */
+.chart-body { flex: 1; position: relative; min-height: 0; }
+
+/* Resize handle */
+.chart-resize {
+  position: absolute; top: 0; left: 0; bottom: 0; width: 5px; cursor: ew-resize; z-index: 95;
+}
+.chart-resize::after {
+  content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 3px; height: 36px; border-radius: 2px; background: var(--b2); transition: background 0.15s;
+}
+.chart-resize:hover::after { background: var(--bl); }

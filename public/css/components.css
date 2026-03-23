@@ -76,7 +76,7 @@ body.rz iframe{pointer-events:none}
 /* ═══ SETTINGS MODAL — Terminal Style ═══ */
 .smod{display:none;position:fixed;inset:0;background:var(--ov);z-index:800;align-items:center;justify-content:center}
 .smod.o{display:flex}
-.smod-box{background:var(--bg1);border:1px solid var(--b2);border-radius:8px;width:1060px;max-width:95%;height:78vh;max-height:90vh;display:flex;overflow:hidden;box-shadow:var(--sh)}
+.smod-box{background:var(--bg1);border:1px solid var(--b2);border-radius:8px;width:1600px;max-width:95%;height:85vh;max-height:92vh;display:flex;overflow:hidden;box-shadow:var(--sh)}
 
 /* Settings left sidebar */
 .smod-nav{width:200px;border-right:1px solid var(--b1);display:flex;flex-direction:column;flex-shrink:0;background:var(--bg2)}
@@ -168,3 +168,36 @@ body.rz iframe{pointer-events:none}
   .smod-nav-item{padding:5px 10px;border-left:none;border-bottom:2px solid transparent;font-size:var(--font-sm)}
   .smod-nav-item.on{border-bottom-color:var(--bl);border-left-color:transparent}
 }
+
+/* ═══ SCREENER FORMULA MODAL ═══ */
+.scr-modal-overlay{display:flex;position:fixed;inset:0;background:var(--ov);z-index:700;align-items:center;justify-content:center;animation:scrFadeIn .15s ease-out}
+@keyframes scrFadeIn{from{opacity:0}to{opacity:1}}
+.scr-modal-box{background:var(--bg1);border:1px solid var(--b2);border-radius:8px;width:1100px;max-width:95%;max-height:88vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.5);display:flex;flex-direction:column}
+.scr-modal-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--b1);flex-shrink:0;background:var(--bg2);border-radius:8px 8px 0 0}
+.scr-modal-vars{border-top:1px solid var(--b1);overflow-y:auto;flex:1;display:flex;flex-direction:column}
+.scr-var-row{display:flex;border-bottom:1px solid var(--b1);min-height:0}
+.scr-var-row:last-child{border-bottom:none}
+.scr-var-cat{width:140px;min-width:140px;padding:6px 10px;font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;background:var(--bg2);border-right:1px solid var(--b1);display:flex;align-items:flex-start;padding-top:8px}
+.scr-var-list{flex:1;display:flex;flex-wrap:wrap;gap:2px 4px;padding:6px 10px;align-content:flex-start}
+.scr-var-btn{padding:2px 8px;font-size:11px;font-weight:600;color:var(--bl);cursor:pointer;border-radius:3px;transition:background .08s;font-family:var(--fm);white-space:nowrap}
+.scr-var-btn:hover{background:var(--blB)}
+.scr-var-btn.str{color:var(--am)}
+.scr-var-desc{font-weight:400;color:var(--t3);font-size:10px}
+.scr-formula-btn{padding:6px 14px;border-radius:4px;border:none;background:var(--am);color:#000;font-size:11px;font-weight:700;font-family:var(--f);cursor:pointer;transition:all .1s;flex-shrink:0;letter-spacing:.3px}
+.scr-formula-btn:hover{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,0.3)}
+
+@media(max-width:700px){
+  .scr-var-cat{width:80px;min-width:80px;font-size:8px}
+  .scr-var-btn{font-size:10px;padding:1px 5px}
+}
+
+/* ═══ MARKET NEWS PANEL ═══ */
+.mr-news-tab{padding:6px 12px;border:none;background:none;color:var(--t3);font-size:10px;font-weight:600;font-family:var(--f);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:all .1s}
+.mr-news-tab:hover{color:var(--t1);background:var(--bgH)}
+.mr-news-tab.on{color:var(--bl);border-bottom-color:var(--bl)}
+.mr-news-item{display:block;padding:8px 12px;border-bottom:1px solid var(--b1);text-decoration:none;transition:background .08s;cursor:pointer}
+.mr-news-item:hover{background:var(--bgH)}
+.mr-news-item:last-child{border-bottom:none}
+.mr-news-headline{font-size:11px;font-weight:500;color:var(--t1);line-height:1.4;margin-bottom:2px}
+.mr-news-item:hover .mr-news-headline{color:var(--bl)}
+.mr-news-meta{display:flex;gap:8px;font-size:9px;color:var(--t3)}
