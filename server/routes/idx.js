@@ -3372,11 +3372,11 @@ module.exports = function(upload) {
       const { gNews } = require('../utils/news');
       
       const queries = [
-        { q: 'IHSG saham Indonesia hari ini', label: 'IDX Market', icon: '📊' },
-        { q: 'ekonomi Indonesia kebijakan BI rupiah', label: 'Ekonomi & BI', icon: '🏛' },
-        { q: 'harga minyak batu bara nikel emas komoditas', label: 'Komoditas', icon: '⛏' },
-        { q: 'geopolitik global trade war tariff', label: 'Geopolitik', icon: '🌍' },
-        { q: 'The Fed interest rate Wall Street S&P500', label: 'Global Markets', icon: '🇺🇸' },
+        { q: 'IHSG bursa saham when:3d', label: 'IDX Market', icon: '📊' },
+        { q: 'Bank Indonesia ekonomi rupiah when:3d', label: 'Ekonomi & BI', icon: '🏛' },
+        { q: 'coal oil nickel gold commodity price when:3d', label: 'Komoditas', icon: '⛏' },
+        { q: 'geopolitik perang tarif dagang when:7d', label: 'Geopolitik', icon: '🌍' },
+        { q: 'Fed Wall Street S&P 500 stock market when:3d', label: 'Global Markets', icon: '🇺🇸' },
       ];
 
       const results = await Promise.all(queries.map(async (cat) => {
@@ -3392,13 +3392,15 @@ module.exports = function(upload) {
       const categories = results.map(r => ({
         label: r.label,
         icon: r.icon,
-        items: r.items.map(item => ({
-          headline: item.headline,
-          source: item.source,
-          url: item.url,
-          datetime: item.datetime,
-          age: item.datetime > 0 ? _fmtAge(now - item.datetime) : ''
-        }))
+        items: r.items
+          .filter(item => !item.datetime || (now - item.datetime) < 7 * 86400)
+          .map(item => ({
+            headline: item.headline,
+            source: item.source,
+            url: item.url,
+            datetime: item.datetime,
+            age: item.datetime > 0 ? _fmtAge(now - item.datetime) : ''
+          }))
       }));
 
       res.json({ categories, fetched_at: new Date().toISOString() });
