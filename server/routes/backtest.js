@@ -36,6 +36,25 @@ function buildCtx(hist,di,fund){
   const rv=vm>0?Math.round(r.volume/vm*10)/10:0;
   const c20=cls.slice(-20);const hhv=c20.length?Math.max(...c20):0;const llv=c20.length?Math.min(...c20):0;
   const dm=(ma)=>ma?Math.round((c-ma)/ma*10000)/100:0;
+  // ── Freq vars (P4 Sprint 13) ──
+  let tickRatio=1,relFreq=1,isBlockTrade=0,isRetailFrenzy=0,isSmartAccum=0,isDryUp=0;
+  if(di>=20){
+    const h20=hist.slice(di-20,di);
+    const avgVol=h20.reduce((s,x)=>s+(x.volume||0),0)/20;
+    const avgFreq=h20.reduce((s,x)=>s+(x.frequency||0),0)/20;
+    const avgVal=h20.reduce((s,x)=>s+(x.value||0),0)/20;
+    const vol=r.volume||0,freq=r.frequency||0,val=r.value||0;
+    relFreq=avgFreq>0?Math.round(freq/avgFreq*100)/100:1;
+    const avgTickH=avgFreq>0?avgVal/avgFreq:0;
+    const tickS=freq>0?val/freq:0;
+    tickRatio=avgTickH>0?Math.round(tickS/avgTickH*100)/100:1;
+    const fnet=((r.foreign_buy||0)-(r.foreign_sell||0))*(r.close||0);
+    const priceChg=di>0&&cls[cls.length-2]>0?(c-cls[cls.length-2])/cls[cls.length-2]:0;
+    isBlockTrade=(tickRatio>2.5&&rv>1.5&&relFreq<1.5)?1:0;
+    isRetailFrenzy=(relFreq>2.0&&tickRatio<0.6&&rv>1.2)?1:0;
+    isSmartAccum=(rv>1.2&&rv<3.0&&relFreq>=0.8&&relFreq<=1.8&&Math.abs(priceChg)<0.03&&fnet>0&&tickRatio>1.2)?1:0;
+    isDryUp=(rv<0.4&&relFreq<0.5)?1:0;
+  }
   return{C:c,O:r.open_price||c,H:r.high||c,L:r.low||c,Close:c,Open:r.open_price||c,High:r.high||c,Low:r.low||c,
     Chg:chg,V:r.volume||0,Volume:r.volume||0,Val:r.value||0,Value:r.value||0,Freq:r.frequency||0,DVMil:(r.value||0)/1e6,
     MA5:ma5||0,MA10:ma10||0,MA20:ma20||0,MA50:ma50||0,MA100:ma100||0,MA200:ma200||0,
@@ -43,6 +62,7 @@ function buildCtx(hist,di,fund){
     MACD:macd?macd.macd:0,Signal:macd?macd.signal:0,MACD_Hist:macd?macd.histogram:0,
     K:stoch?stoch.k:50,StochK:stoch?stoch.k:50,D:stoch?(stoch.d||50):50,StochD:stoch?(stoch.d||50):50,
     ForeignNet:fn,ForeignBuy:(r.foreign_buy||0)*c,ForeignSell:(r.foreign_sell||0)*c,Foreign_5D:f5d,RelVol:rv,HHV20:hhv,LLV20:llv,
+    TickRatio:tickRatio,RelFreq:relFreq,isBlockTrade:isBlockTrade,isRetailFrenzy:isRetailFrenzy,isSmartAccum:isSmartAccum,isDryUp:isDryUp,
     Up_MA5:c>(ma5||0)?1:0,Up_MA10:c>(ma10||0)?1:0,Up_MA20:c>(ma20||0)?1:0,Up_MA50:c>(ma50||0)?1:0,
     ShortTrend:(c>(ma10||0)&&c>(ma20||0))?1:0,Intermediate:(c>(ma20||0)&&c>(ma50||0))?1:0,
     LongTrend:(c>(ma20||0)&&c>(ma50||0)&&c>(ma200||0))?1:0,
@@ -588,6 +608,7 @@ router.get('/variables', (req, res) => {
     { cat: 'Stochastic', vars: ['K / StochK', 'D / StochD'] },
     { cat: 'Foreign Flow', vars: ['ForeignNet (Rp)', 'ForeignBuy (Rp)', 'ForeignSell (Rp)', 'Foreign_5D (5-day net Rp)'] },
     { cat: 'Range', vars: ['HHV20 (20d high)', 'LLV20 (20d low)'] },
+    { cat: 'Freq Analysis', vars: ['TickRatio (val/tx vs avg)', 'RelFreq (freq vs 20d avg)', 'isBlockTrade (0/1)', 'isRetailFrenzy (0/1)', 'isSmartAccum (0/1)', 'isDryUp (0/1)'] },
     { cat: 'Fundamental', vars: ['PER', 'PBV', 'ROE', 'MktCap'] },
     { cat: 'Exit Only', vars: ['PnlPct (current P&L %)', 'DaysHeld (bars since entry)', 'EntryPrice'] },
     { cat: 'Logic', vars: ['AND', 'OR', '> < >= <= == !=', '( ) for grouping'] },
@@ -608,6 +629,300 @@ router.get('/scopes', (req, res) => {
 router.get('/dates', (req, res) => {
   try { const d = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date); res.json({ dates: d, total: d.length, first: d[0] || '', last: d[d.length - 1] || '' }); }
   catch { res.json({ dates: [], total: 0 }); }
+});
+
+// ═══ WALK FORWARD ENGINE (P2 Sprint 13) ═══
+
+// Helper: run a simplified backtest on a date window, return { return_pct, trades, win_rate, profit_factor, max_dd }
+function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct) {
+  const dates = allDates.filter(d => d >= windowStart && d <= windowEnd);
+  if (dates.length < 3) return null;
+  const trades = [];
+  const openPos = [];
+  let cap = initCap, peak = initCap, maxDD = 0;
+
+  for (let di = 0; di < dates.length; di++) {
+    const td = dates[di];
+    // Exits
+    for (let pi = openPos.length - 1; pi >= 0; pi--) {
+      const pos = openPos[pi];
+      const hist = hbc[pos.code]; if (!hist) continue;
+      const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
+      if (idx < 0 || !hist[idx]) continue;
+      const cur = hist[idx].ac;
+      const pnlP = (cur - pos.ep) / pos.ep * 100;
+      const days = di - pos.edi;
+      let reason = null;
+      if (forceCutloss && pnlP <= cutlossPct) reason = 'cutloss';
+      else if (days >= 1) {
+        try { const ctx = buildCtx(hist, idx, fundMap[pos.code]); ctx.PnlPct = Math.round(pnlP * 100) / 100; ctx.DaysHeld = days; ctx.EntryPrice = pos.ep; const tk = tokenize(exitF); if (!tk.error && evalF(tk, ctx)) reason = 'exit'; } catch {}
+      }
+      if (reason) {
+        cap += cur * pos.shares;
+        trades.push({ pnl: (cur - pos.ep) * pos.shares, pnlP: Math.round(pnlP * 100) / 100 });
+        openPos.splice(pi, 1);
+      }
+    }
+    // Entries
+    const slots = maxPos - openPos.length;
+    if (slots > 0) {
+      const cands = [];
+      for (const code of Object.keys(hbc)) {
+        if (openPos.some(p => p.code === code)) continue;
+        const hist = hbc[code];
+        const idx = dIdx[code] ? dIdx[code][td] : -1;
+        if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;
+        try { const ctx = buildCtx(hist, idx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, price: hist[idx].ac, value: hist[idx].value || 0 }); } catch {}
+      }
+      cands.sort((a, b) => (b.value || 0) - (a.value || 0));
+      for (const c of cands.slice(0, slots)) {
+        const alloc = cap / Math.max(1, slots);
+        const sh = Math.floor(Math.floor(alloc / c.price) / 100) * 100;
+        if (sh < 100 || sh * c.price > cap) continue;
+        cap -= sh * c.price;
+        openPos.push({ code: c.code, ep: c.price, shares: sh, edi: di });
+      }
+    }
+    // Equity
+    const totEq = cap + openPos.reduce((s, p) => { const i = dIdx[p.code] ? dIdx[p.code][td] : -1; return s + (i >= 0 ? hbc[p.code][i].ac * p.shares : p.ep * p.shares); }, 0);
+    if (totEq > peak) peak = totEq;
+    const dd = peak > 0 ? (peak - totEq) / peak * 100 : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
+  // Close remaining
+  const lastD = dates[dates.length - 1];
+  for (const pos of openPos) {
+    const hist = hbc[pos.code]; if (!hist) continue;
+    const idx = dIdx[pos.code] ? dIdx[pos.code][lastD] : -1;
+    const cur = idx >= 0 ? hist[idx].ac : pos.ep;
+    cap += cur * pos.shares;
+    trades.push({ pnl: (cur - pos.ep) * pos.shares, pnlP: Math.round((cur - pos.ep) / pos.ep * 10000) / 100 });
+  }
+  const finalEq = cap;
+  const retPct = Math.round((finalEq / initCap - 1) * 10000) / 100;
+  const W = trades.filter(t => t.pnl > 0), L = trades.filter(t => t.pnl <= 0);
+  const wr = trades.length ? Math.round(W.length / trades.length * 1000) / 10 : 0;
+  const gp = W.reduce((s, t) => s + t.pnl, 0), gl = Math.abs(L.reduce((s, t) => s + t.pnl, 0));
+  const pf = gl > 0 ? Math.round(gp / gl * 100) / 100 : gp > 0 ? 999 : 0;
+  const years = dates.length / 252;
+  const annRet = years > 0.1 ? Math.round((Math.pow(Math.max(0.01, finalEq / initCap), 1 / years) - 1) * 10000) / 100 : retPct;
+  return { return_pct: retPct, ann_return: annRet, trades: trades.length, win_rate: wr, profit_factor: pf, max_dd: Math.round(maxDD * 100) / 100, days: dates.length, start: dates[0], end: lastD };
+}
+
+// ── Mode 1: Formula Walk Forward ──
+router.post('/walk-forward', (req, res) => {
+  const t0 = Date.now();
+  try {
+    const entryF = (req.body.formula || '').trim();
+    const exitF = (req.body.exit_formula || '').trim();
+    if (!entryF || !exitF) return res.json({ error: 'Entry and exit formulas required' });
+    const eTk = tokenize(entryF); if (eTk.error) return res.json({ error: 'Entry: ' + eTk.error });
+    const xTk = tokenize(exitF); if (xTk.error) return res.json({ error: 'Exit: ' + xTk.error });
+
+    const maxPos = Math.max(1, Math.min(parseInt(req.body.max_positions) || 5, 30));
+    const initCap = parseFloat(req.body.capital) || 100000000;
+    const isWindow = Math.max(20, parseInt(req.body.is_window) || 60);
+    const oosWindow = Math.max(10, parseInt(req.body.oos_window) || 20);
+    const stepSize = Math.max(5, parseInt(req.body.step_size) || 20);
+    const forceCutloss = req.body.force_cutloss === true || req.body.force_cutloss === 'true';
+    const cutlossPct = parseFloat(req.body.cutloss_pct) || -10;
+
+    let allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+    const startDate = req.body.start_date || '';
+    const endDate = req.body.end_date || '';
+    if (startDate) allDates = allDates.filter(d => d >= startDate);
+    if (endDate) allDates = allDates.filter(d => d <= endDate);
+    if (allDates.length < isWindow + oosWindow) return res.json({ error: 'Not enough data. Need ' + (isWindow + oosWindow) + ' days, have ' + allDates.length });
+
+    // Load all history
+    const caMap = loadCAs();
+    const { latestFundDate } = require('../db');
+    const fm = latestFundDate();
+    const fundMap = {};
+    if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
+
+    const fullDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+    const lb = 210;
+    const minDate = fullDates[Math.max(0, fullDates.indexOf(allDates[0]) - lb)] || allDates[0];
+    const hbc = {};
+    db.prepare('SELECT code,trade_date,open_price,high,low,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date>=? AND close>0 ORDER BY code,trade_date').all(minDate)
+      .forEach(r => { if (!hbc[r.code]) hbc[r.code] = []; const a = caMap[r.code]; r.ac = a ? adjP(r.close, r.trade_date, a) : r.close; r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close); r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close); hbc[r.code].push(r); });
+    const dIdx = {};
+    for (const code of Object.keys(hbc)) { dIdx[code] = {}; hbc[code].forEach((r, i) => { dIdx[code][r.trade_date] = i; }); }
+
+    // Rolling windows
+    const steps = [];
+    let pos = 0;
+    while (pos + isWindow + oosWindow <= allDates.length) {
+      const isStart = allDates[pos];
+      const isEnd = allDates[pos + isWindow - 1];
+      const oosStart = allDates[pos + isWindow];
+      const oosEnd = allDates[Math.min(pos + isWindow + oosWindow - 1, allDates.length - 1)];
+
+      const isResult = runSimWindow(hbc, dIdx, fundMap, allDates, isStart, isEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct);
+      const oosResult = runSimWindow(hbc, dIdx, fundMap, allDates, oosStart, oosEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct);
+
+      steps.push({
+        step: steps.length + 1,
+        is: isResult, oos: oosResult,
+        wfe: isResult && oosResult && isResult.ann_return > 0 ? Math.round(oosResult.ann_return / isResult.ann_return * 10000) / 100 : 0
+      });
+      pos += stepSize;
+    }
+
+    // Aggregate
+    const validSteps = steps.filter(s => s.oos);
+    const avgOOS = validSteps.length ? Math.round(validSteps.reduce((s, st) => s + st.oos.return_pct, 0) / validSteps.length * 100) / 100 : 0;
+    const avgIS = validSteps.length ? Math.round(validSteps.reduce((s, st) => s + (st.is ? st.is.return_pct : 0), 0) / validSteps.length * 100) / 100 : 0;
+    const avgWFE = validSteps.length ? Math.round(validSteps.reduce((s, st) => s + st.wfe, 0) / validSteps.length * 100) / 100 : 0;
+    const oosWinRate = validSteps.length ? Math.round(validSteps.filter(s => s.oos.return_pct > 0).length / validSteps.length * 1000) / 10 : 0;
+
+    let verdict = 'overfit';
+    if (avgWFE > 50) verdict = 'robust';
+    else if (avgWFE > 30) verdict = 'borderline';
+
+    res.json({
+      ok: true, mode: 'formula',
+      params: { is_window: isWindow, oos_window: oosWindow, step_size: stepSize, formula: entryF, exit_formula: exitF, max_positions: maxPos },
+      steps, total_steps: steps.length,
+      summary: { avg_is_return: avgIS, avg_oos_return: avgOOS, avg_wfe: avgWFE, oos_win_rate: oosWinRate, verdict },
+      compute_time: Date.now() - t0
+    });
+  } catch (e) { res.json({ error: e.message }); }
+});
+
+// ── Mode 2: Scoring Weights Walk Forward ──
+router.post('/walk-forward-score', (req, res) => {
+  const t0 = Date.now();
+  try {
+    const isWindow = Math.max(20, parseInt(req.body.is_window) || 60);
+    const oosWindow = Math.max(10, parseInt(req.body.oos_window) || 20);
+    const stepSize = Math.max(5, parseInt(req.body.step_size) || 20);
+    const topN = Math.max(5, parseInt(req.body.top_n) || 20);
+
+    // Get scored dates
+    const scoreDates = db.prepare('SELECT DISTINCT calc_date FROM daily_scores ORDER BY calc_date').all().map(r => r.calc_date);
+    if (scoreDates.length < isWindow + oosWindow) return res.json({ error: 'Not enough scored dates. Need ' + (isWindow + oosWindow) + ', have ' + scoreDates.length + '. Run Backfill first.' });
+
+    // Weight grid for optimization (simplified: step=10, 5 factors summing to 100)
+    const weightCombos = [];
+    for (let f = 0; f <= 50; f += 10) {
+      for (let v = 0; v <= 50 - f; v += 10) {
+        for (let m = 0; m <= 40; m += 10) {
+          for (let d = 0; d <= 40; d += 10) {
+            const fr = 100 - f - v - m - d;
+            if (fr >= 0 && fr <= 30) weightCombos.push({ fundamental: f, valuation: v, momentum: m, demand: d, foreign: fr });
+          }
+        }
+      }
+    }
+
+    // Preload all scores
+    const allScores = db.prepare('SELECT calc_date, code, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign FROM daily_scores ORDER BY calc_date, code').all();
+    const scoreByDate = {};
+    allScores.forEach(r => { if (!scoreByDate[r.calc_date]) scoreByDate[r.calc_date] = []; scoreByDate[r.calc_date].push(r); });
+
+    // Preload forward returns (close price next day / close price today - 1)
+    const priceMap = {}; // code+date → close
+    const tradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+    const tdIdx = {}; tradeDates.forEach((d, i) => { tdIdx[d] = i; });
+
+    // Load close prices for scored codes
+    const scoredCodes = new Set(allScores.map(r => r.code));
+    for (const code of scoredCodes) {
+      db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date').all(code)
+        .forEach(r => { priceMap[code + '_' + r.trade_date] = r.close; });
+    }
+
+    // Forward return helper
+    function fwdReturn(code, date, horizon) {
+      const di = tdIdx[date]; if (di === undefined) return null;
+      const p0 = priceMap[code + '_' + date]; if (!p0) return null;
+      const fi = Math.min(di + horizon, tradeDates.length - 1);
+      const p1 = priceMap[code + '_' + tradeDates[fi]]; if (!p1) return null;
+      return (p1 - p0) / p0 * 100;
+    }
+
+    // Rolling windows on score dates
+    const steps = [];
+    let pos = 0;
+    while (pos + isWindow + oosWindow <= scoreDates.length) {
+      const isDates = scoreDates.slice(pos, pos + isWindow);
+      const oosDates = scoreDates.slice(pos + isWindow, pos + isWindow + oosWindow);
+
+      // IS: find best weight combo by avg top-N forward 5d return (IC-like)
+      let bestW = null, bestISret = -Infinity;
+      for (const w of weightCombos) {
+        let totalRet = 0, count = 0;
+        for (const d of isDates) {
+          const stocks = scoreByDate[d]; if (!stocks || !stocks.length) continue;
+          // Compute composite score per weight
+          const scored = stocks.map(s => ({
+            code: s.code,
+            composite: (s.score_fundamental || 0) * w.fundamental / 100 + (s.score_valuation || 0) * w.valuation / 100 +
+                       (s.score_momentum || 0) * w.momentum / 100 + (s.score_demand || 0) * w.demand / 100 +
+                       (s.score_foreign || 0) * w.foreign / 100
+          })).sort((a, b) => b.composite - a.composite).slice(0, topN);
+          // Avg forward return of top-N
+          for (const s of scored) {
+            const fr = fwdReturn(s.code, d, 5);
+            if (fr !== null) { totalRet += fr; count++; }
+          }
+        }
+        const avgRet = count > 0 ? totalRet / count : 0;
+        if (avgRet > bestISret) { bestISret = avgRet; bestW = w; }
+      }
+
+      // OOS: apply bestW to OOS dates, measure top-N forward return
+      let oosRet = 0, oosCount = 0;
+      for (const d of oosDates) {
+        const stocks = scoreByDate[d]; if (!stocks || !stocks.length) continue;
+        const scored = stocks.map(s => ({
+          code: s.code,
+          composite: (s.score_fundamental || 0) * bestW.fundamental / 100 + (s.score_valuation || 0) * bestW.valuation / 100 +
+                     (s.score_momentum || 0) * bestW.momentum / 100 + (s.score_demand || 0) * bestW.demand / 100 +
+                     (s.score_foreign || 0) * bestW.foreign / 100
+        })).sort((a, b) => b.composite - a.composite).slice(0, topN);
+        for (const s of scored) {
+          const fr = fwdReturn(s.code, d, 5);
+          if (fr !== null) { oosRet += fr; oosCount++; }
+        }
+      }
+      const avgOOS = oosCount > 0 ? Math.round(oosRet / oosCount * 100) / 100 : 0;
+      const avgIS = Math.round(bestISret * 100) / 100;
+      const wfe = avgIS > 0 ? Math.round(avgOOS / avgIS * 10000) / 100 : 0;
+
+      steps.push({
+        step: steps.length + 1,
+        is_dates: { start: isDates[0], end: isDates[isDates.length - 1] },
+        oos_dates: { start: oosDates[0], end: oosDates[oosDates.length - 1] },
+        best_weights: bestW, is_avg_return: avgIS, oos_avg_return: avgOOS, wfe
+      });
+      pos += stepSize;
+    }
+
+    // Aggregate
+    const avgWFE = steps.length ? Math.round(steps.reduce((s, st) => s + st.wfe, 0) / steps.length * 100) / 100 : 0;
+    const avgOOSall = steps.length ? Math.round(steps.reduce((s, st) => s + st.oos_avg_return, 0) / steps.length * 100) / 100 : 0;
+    const oosWinRate = steps.length ? Math.round(steps.filter(s => s.oos_avg_return > 0).length / steps.length * 1000) / 10 : 0;
+
+    // Most frequently selected weights
+    const wFreq = {};
+    steps.forEach(s => { const k = JSON.stringify(s.best_weights); wFreq[k] = (wFreq[k] || 0) + 1; });
+    const topWeights = Object.entries(wFreq).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => ({ weights: JSON.parse(k), count: v }));
+
+    let verdict = 'overfit';
+    if (avgWFE > 50) verdict = 'robust';
+    else if (avgWFE > 30) verdict = 'borderline';
+
+    res.json({
+      ok: true, mode: 'scoring',
+      params: { is_window: isWindow, oos_window: oosWindow, step_size: stepSize, top_n: topN, weight_combos_tested: weightCombos.length },
+      steps, total_steps: steps.length,
+      summary: { avg_oos_return: avgOOSall, avg_wfe: avgWFE, oos_win_rate: oosWinRate, verdict, top_weights: topWeights },
+      compute_time: Date.now() - t0
+    });
+  } catch (e) { res.json({ error: e.message }); }
 });
 
 module.exports = router;

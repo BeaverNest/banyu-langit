@@ -5,6 +5,8 @@ var scrScoreSort = 'score_composite', scrScoreDir = 'desc';
 var scrScoreWeights = { fundamental: 25, valuation: 20, momentum: 20, demand: 20, foreign: 15 };
 var scrScoreLoading = false;
 var scrScoreColToggleOpen = false;
+var scrRegimeMode = false; // P1: regime-aware toggle
+var scrRegimeInfo = null;  // { regime, weights, ihsg_regime, macro_shift }
 
 // Column order + visibility (same pattern as IDX Daily)
 var scrScoreColOrder = [
@@ -96,6 +98,8 @@ function renderScoringShell(el) {
   });
   h += '<button onclick="calcScore()" style="padding:6px 16px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:12px;font-family:var(--f);cursor:pointer" id="score-calc-btn">▶ Calculate</button>';
   h += '<button onclick="autoOptimizeWeights()" style="padding:6px 12px;border-radius:4px;border:1px solid var(--am);background:transparent;color:var(--am);font-weight:700;font-size:11px;font-family:var(--f);cursor:pointer" id="score-auto-btn" title="Auto-find optimal weights based on IC Decay data">⚡ Auto</button>';
+  h += '<button onclick="toggleRegimeMode()" class="bei-sort-btn' + (scrRegimeMode ? ' on' : '') + '" style="padding:6px 12px;font-size:11px;font-weight:700" id="score-regime-btn" title="Regime-Aware: auto-adjust weights based on current market regime">🎯 Regime</button>';
+  h += '<span id="score-regime-badge" style="font-size:10px;display:' + (scrRegimeInfo ? 'inline' : 'none') + '"></span>';
   h += '<span id="score-status" style="font-size:11px;color:var(--t3)"></span>';
   h += '<span style="flex:1"></span>';
   h += '<button id="score-cols-btn" class="bei-sort-btn" style="padding:4px 10px;font-size:10px;display:' + (scrScoreSubTab === 'scores' ? 'inline-block' : 'none') + '" onclick="scoreToggleCols()">⚙ Cols</button>';
@@ -196,6 +200,53 @@ function scoreThDrop(e) {
   scoreRenderTable();
 }
 
+// ═══ REGIME-AWARE SCORING (P1 Sprint 13) ═══
+async function toggleRegimeMode() {
+  scrRegimeMode = !scrRegimeMode;
+  var btn = $('score-regime-btn');
+  if (btn) btn.className = 'bei-sort-btn' + (scrRegimeMode ? ' on' : '');
+  if (scrRegimeMode) {
+    await fetchRegimeWeights();
+  } else {
+    scrRegimeInfo = null;
+    var badge = $('score-regime-badge'); if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
+    // Restore manual weights from localStorage
+    try { var _sw = JSON.parse(localStorage.getItem('scoreWeights')); if (_sw) scrScoreWeights = _sw; } catch(e){}
+    ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
+      var inp = $('sw-' + k); if (inp) { inp.value = scrScoreWeights[k]; inp.disabled = false; }
+    });
+  }
+}
+
+async function fetchRegimeWeights() {
+  try {
+    var r = await fetch('/api/idx/regime-weights');
+    var d = await r.json();
+    if (!d.ok) return;
+    scrRegimeInfo = d;
+    // Apply weights to UI inputs
+    var w = d.weights;
+    scrScoreWeights = { fundamental: w.fundamental, valuation: w.valuation, momentum: w.momentum, demand: w.demand, foreign: w.foreign };
+    ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
+      var inp = $('sw-' + k); if (inp) { inp.value = scrScoreWeights[k]; inp.disabled = true; }
+    });
+    // Show regime badge
+    var badge = $('score-regime-badge');
+    if (badge) {
+      var regimeLabel = d.regime.replace('_', ' ');
+      var emoji = d.regime === 'bull' ? '🟢' : d.regime === 'mild_bull' ? '🟢' : d.regime === 'sideways' ? '🟡' : d.regime === 'mild_bear' ? '🔴' : '🔴';
+      var color = d.regime.indexOf('bull') >= 0 ? 'var(--gn)' : d.regime.indexOf('bear') >= 0 ? 'var(--rd)' : 'var(--am)';
+      var shift = d.macro_shift > 0 ? ' ↑macro' : d.macro_shift < 0 ? ' ↓macro' : '';
+      badge.style.display = 'inline';
+      badge.innerHTML = '<span style="padding:2px 8px;border-radius:3px;background:' + color + '22;color:' + color + ';font-weight:700;font-size:10px">' + emoji + ' ' + regimeLabel.toUpperCase() + shift + '</span>';
+    }
+    var status = $('score-status');
+    if (status) status.textContent = '🎯 Regime weights: F' + w.fundamental + ' V' + w.valuation + ' M' + w.momentum + ' D' + w.demand + ' Fr' + w.foreign;
+  } catch (e) {
+    var status = $('score-status'); if (status) status.textContent = '❌ Regime fetch error: ' + e.message;
+  }
+}
+
 // ═══ CALCULATE SCORE ═══
 async function calcScore() {
   var btn = $('score-calc-btn'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Calculating...'; }
@@ -205,14 +256,24 @@ async function calcScore() {
   scrScoreWeights.momentum = parseInt($('sw-momentum').value) || 20;
   scrScoreWeights.demand = parseInt($('sw-demand').value) || 20;
   scrScoreWeights.foreign = parseInt($('sw-foreign').value) || 15;
-  localStorage.setItem('scoreWeights', JSON.stringify(scrScoreWeights));
+  if (!scrRegimeMode) localStorage.setItem('scoreWeights', JSON.stringify(scrScoreWeights));
   try {
+    var payload = scrRegimeMode
+      ? { auto_regime: true }
+      : { w_fundamental: scrScoreWeights.fundamental, w_valuation: scrScoreWeights.valuation, w_momentum: scrScoreWeights.momentum, w_demand: scrScoreWeights.demand, w_foreign: scrScoreWeights.foreign };
     var r = await fetch('/api/idx/composite-score', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ w_fundamental: scrScoreWeights.fundamental, w_valuation: scrScoreWeights.valuation, w_momentum: scrScoreWeights.momentum, w_demand: scrScoreWeights.demand, w_foreign: scrScoreWeights.foreign })
+      body: JSON.stringify(payload)
     });
     scrScoreData = await r.json();
-    if (status) status.textContent = scrScoreData.ok ? '✅ ' + scrScoreData.total_scored + ' stocks scored (' + scrScoreData.trade_date + ')' : '❌ ' + (scrScoreData.error || 'Error');
+    if (scrScoreData.regime) {
+      scrRegimeInfo = scrScoreData.regime;
+      var rw = scrScoreData.weights;
+      ['fundamental','valuation','momentum','demand','foreign'].forEach(function(k) {
+        var inp = $('sw-' + k); if (inp) inp.value = rw[k];
+      });
+    }
+    if (status) status.textContent = scrScoreData.ok ? '✅ ' + scrScoreData.total_scored + ' stocks scored (' + scrScoreData.trade_date + ')' + (scrRegimeMode ? ' [🎯 Regime]' : '') : '❌ ' + (scrScoreData.error || 'Error');
     scoreRenderTable();
   } catch (e) { if (status) status.textContent = '❌ ' + e.message; }
   if (btn) { btn.disabled = false; btn.textContent = '▶ Calculate'; }

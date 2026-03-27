@@ -49,6 +49,9 @@ function renderMR(el) {
   // ═══ Level 1: Global Sentiment ═══
   h += mrSection('1', '🌍 Global Sentiment', mrRenderGlobal(d.global));
 
+  // ═══ Level 1.5: Macro Signals ═══
+  h += mrSection('1.5', '📊 Macro Signals', mrRenderMacro(d.macro_signals));
+
   // ═══ Level 2: Commodity Cycle ═══
   h += mrSection('2', '📦 Commodity Cycle', mrRenderCommodity(d.commodities));
 
@@ -106,6 +109,36 @@ function mrRenderGlobal(g) {
   var total = g.length;
   var verdict = bullCount > total / 2 ? '🟢 Risk-On' : bearCount > total / 2 ? '🔴 Risk-Off' : '🟡 Caution';
   h += '<div style="margin-top:8px;padding:6px 10px;background:rgba(84,112,198,0.06);border-radius:4px;font-size:11px"><b>Global:</b> ' + verdict + ' (' + bullCount + ' bullish, ' + bearCount + ' bearish, ' + (total - bullCount - bearCount) + ' neutral)</div>';
+  return h;
+}
+
+// ═══ Level 1.5: Macro Signals ═══
+function mrRenderMacro(ms) {
+  if (!ms || !ms.signals || !ms.signals.length) return '<span style="color:var(--t3)">No macro signals. Upload VIX, DXY, US10Y, BDI, USDIDR via Custom Tickers.</span>';
+  var sigs = ms.signals;
+  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:6px;margin-bottom:8px">';
+  sigs.forEach(function(s) {
+    var bg = s.bear > 0 ? 'rgba(239,68,68,0.06)' : s.bull > 0 ? 'rgba(34,197,94,0.06)' : 'rgba(148,163,184,0.04)';
+    var border = s.bear > 0 ? 'var(--rd)' : s.bull > 0 ? 'var(--gn)' : 'var(--b2)';
+    h += '<div style="background:' + bg + ';border:1px solid ' + border + '33;border-radius:6px;padding:8px 10px">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
+    h += '<span style="font-size:10px;font-weight:700;color:var(--t1)">' + s.emoji + ' ' + esc(s.code) + '</span>';
+    h += '<span style="font-size:14px;font-weight:700;font-family:var(--fm);color:var(--t1)">' + (typeof s.value === 'number' ? s.value.toLocaleString(undefined, {maximumFractionDigits: 4}) : '-') + '</span>';
+    h += '</div>';
+    h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.detail) + '</div>';
+    if (s.bull > 0) h += '<div style="font-size:8px;color:var(--gn);margin-top:2px">+' + s.bull + ' bull point' + (s.bull > 1 ? 's' : '') + '</div>';
+    if (s.bear > 0) h += '<div style="font-size:8px;color:var(--rd);margin-top:2px">+' + s.bear + ' bear point' + (s.bear > 1 ? 's' : '') + '</div>';
+    h += '</div>';
+  });
+  h += '</div>';
+
+  // Summary bar
+  var totalBull = ms.bull_points || 0, totalBear = ms.bear_points || 0;
+  var verdict = totalBear > totalBull + 1 ? '🔴 Macro Headwind' : totalBull > totalBear + 1 ? '🟢 Macro Tailwind' : '🟡 Macro Mixed';
+  var vColor = totalBear > totalBull + 1 ? 'var(--rd)' : totalBull > totalBear + 1 ? 'var(--gn)' : 'var(--am)';
+  h += '<div style="padding:5px 10px;background:rgba(84,112,198,0.06);border-radius:4px;font-size:11px">';
+  h += '<b style="color:' + vColor + '">' + verdict + '</b>';
+  h += ' <span style="color:var(--t3)">(' + totalBull + ' bull · ' + totalBear + ' bear)</span></div>';
   return h;
 }
 
@@ -223,6 +256,15 @@ function mrRenderSectors(sectors) {
 function mrRenderDecision(d) {
   var signals = [];
   var bullPoints = 0, bearPoints = 0;
+
+  // Macro Signals (P0 Sprint 13) — inject bull/bear from macro engine
+  if (d.macro_signals && d.macro_signals.signals && d.macro_signals.signals.length) {
+    var mb = d.macro_signals.bull_points || 0;
+    var mr = d.macro_signals.bear_points || 0;
+    bullPoints += mb; bearPoints += mr;
+    var macroVerdict = mr > mb + 1 ? '🔴 Headwind' : mb > mr + 1 ? '🟢 Tailwind' : '🟡 Mixed';
+    signals.push({ level: 'Macro', signal: macroVerdict, detail: mb + ' bull / ' + mr + ' bear points' });
+  }
 
   // Global
   if (d.global && d.global.length) {

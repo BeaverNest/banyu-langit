@@ -1,16 +1,32 @@
 // ═══ BACKTEST UI V6 — public/js/backtest.js ═══
 var btR=null,btRun=false,btShowT=false,btShowRef=false,btSort={col:'',dir:'desc'};
 var btScopes={sectors:[],industries:[]};
+var btMode='backtest'; // backtest | walkforward
+var wfR=null,wfRunning=false;
 
 function loadBacktest(){
   var el=$('bt-content');if(!el)return;
   fetch('/api/backtest/scopes').then(function(r){return r.json();}).then(function(d){btScopes=d||{};}).catch(function(){});
-  renderBtForm(el);
+  if(btMode==='walkforward')renderWFForm(el);
+  else renderBtForm(el);
+}
+
+function btSwitchMode(mode){
+  btMode=mode;
+  var el=$('bt-content');if(!el)return;
+  if(mode==='walkforward')renderWFForm(el);
+  else renderBtForm(el);
 }
 
 function renderBtForm(el){
   if(!el)el=$('bt-content');if(!el)return;
   var d=btR;var h='<div style="padding:12px">';
+
+  // Mode tabs
+  h+='<div style="display:flex;gap:4px;margin-bottom:8px">';
+  h+='<button class="bei-tab'+(btMode==='backtest'?' on':'')+'" onclick="btSwitchMode(\'backtest\')" style="padding:5px 14px;font-size:12px">📊 Backtest</button>';
+  h+='<button class="bei-tab'+(btMode==='walkforward'?' on':'')+'" onclick="btSwitchMode(\'walkforward\')" style="padding:5px 14px;font-size:12px">🔄 Walk Forward</button>';
+  h+='</div>';
 
   // ── Formulas ──
   h+='<div style="display:flex;gap:10px;margin-bottom:6px;flex-wrap:wrap">';
@@ -497,4 +513,225 @@ function btRenderCharts(d){
     if(d.trades&&d.trades.length>=5&&d.trades[0].mae!==undefined)btMAE_render(d.trades);
     if(d.monte_carlo&&d.monte_carlo.bands)btMCChart_render(d.monte_carlo.bands,s.initial_capital);
   },50);
+}
+// ═══ WALK FORWARD UI (P2 Sprint 13) ═══
+
+function renderWFForm(el) {
+  if (!el) el = $('bt-content'); if (!el) return;
+  var h = '<div style="padding:12px">';
+
+  // Mode tabs
+  h += '<div style="display:flex;gap:4px;margin-bottom:8px">';
+  h += '<button class="bei-tab" onclick="btSwitchMode(\'backtest\')" style="padding:5px 14px;font-size:12px">📊 Backtest</button>';
+  h += '<button class="bei-tab on" onclick="btSwitchMode(\'walkforward\')" style="padding:5px 14px;font-size:12px">🔄 Walk Forward</button>';
+  h += '</div>';
+
+  // WF Mode selector
+  h += '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">';
+  h += '<span style="font-size:12px;font-weight:700">Mode:</span>';
+  h += '<button class="bei-sort-btn' + (wfMode !== 'scoring' ? ' on' : '') + '" onclick="wfMode=\'formula\';renderWFForm()" style="padding:5px 12px;font-size:11px">📝 Formula WF</button>';
+  h += '<button class="bei-sort-btn' + (wfMode === 'scoring' ? ' on' : '') + '" onclick="wfMode=\'scoring\';renderWFForm()" style="padding:5px 12px;font-size:11px">🎯 Scoring WF</button>';
+  h += '</div>';
+
+  // Parameters
+  h += '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px;padding:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px">';
+  h += '<div><div style="font-size:9px;color:var(--t3)">IS Window</div><input id="wf-is" type="number" value="60" min="20" max="200" style="width:55px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center"> days</div>';
+  h += '<div><div style="font-size:9px;color:var(--t3)">OOS Window</div><input id="wf-oos" type="number" value="20" min="5" max="60" style="width:55px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center"> days</div>';
+  h += '<div><div style="font-size:9px;color:var(--t3)">Step Size</div><input id="wf-step" type="number" value="20" min="5" max="60" style="width:55px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center"> days</div>';
+
+  if (wfMode !== 'scoring') {
+    h += '<div><div style="font-size:9px;color:var(--t3)">Max Pos</div><input id="wf-mp" type="number" value="5" min="1" max="20" style="width:45px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center"></div>';
+  } else {
+    h += '<div><div style="font-size:9px;color:var(--t3)">Top N stocks</div><input id="wf-topn" type="number" value="20" min="5" max="50" style="width:55px;background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:4px;color:var(--t1);font-family:var(--fm);font-size:12px;text-align:center"></div>';
+  }
+  h += '</div>';
+
+  // Formula inputs (formula mode only)
+  if (wfMode !== 'scoring') {
+    h += '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">';
+    h += '<div style="flex:1;min-width:280px"><div style="font-size:9px;font-weight:700;color:var(--t3);margin-bottom:2px">Entry Formula</div>';
+    h += '<textarea id="wf-entry" class="afl-textarea" style="min-height:32px;font-size:12px" placeholder="C > MA20 AND Bullish_MACD">C > MA20 AND Bullish_MACD AND ForeignNet > 0</textarea></div>';
+    h += '<div style="flex:1;min-width:280px"><div style="font-size:9px;font-weight:700;color:var(--t3);margin-bottom:2px">Exit Formula</div>';
+    h += '<textarea id="wf-exit" class="afl-textarea" style="min-height:32px;font-size:12px" placeholder="Bearish_MACD OR DaysHeld >= 10">Bearish_MACD OR DaysHeld >= 10 OR PnlPct < -5</textarea></div>';
+    h += '</div>';
+  }
+
+  // Run button
+  h += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">';
+  h += '<button id="wf-run-btn" onclick="runWF()" style="padding:8px 20px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:13px;cursor:pointer">▶ Run Walk Forward</button>';
+  h += '<span id="wf-status" style="font-size:11px;color:var(--t3)"></span>';
+  h += '</div>';
+
+  // Results
+  h += '<div id="wf-results">';
+  if (wfR) h += renderWFResults(wfR);
+  h += '</div>';
+
+  h += '</div>';
+  el.innerHTML = h;
+  if (wfR) setTimeout(function() { wfDrawCharts(wfR); }, 100);
+}
+
+var wfMode = 'formula';
+
+async function runWF() {
+  if (wfRunning) return;
+  wfRunning = true;
+  var btn = $('wf-run-btn'), st = $('wf-status');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Running...'; }
+  if (st) st.textContent = 'Walk forward analysis running...';
+
+  try {
+    var url, payload;
+    if (wfMode === 'scoring') {
+      url = '/api/backtest/walk-forward-score';
+      payload = {
+        is_window: parseInt($('wf-is').value) || 60,
+        oos_window: parseInt($('wf-oos').value) || 20,
+        step_size: parseInt($('wf-step').value) || 20,
+        top_n: parseInt($('wf-topn').value) || 20
+      };
+    } else {
+      url = '/api/backtest/walk-forward';
+      payload = {
+        formula: $('wf-entry').value.trim(),
+        exit_formula: $('wf-exit').value.trim(),
+        is_window: parseInt($('wf-is').value) || 60,
+        oos_window: parseInt($('wf-oos').value) || 20,
+        step_size: parseInt($('wf-step').value) || 20,
+        max_positions: parseInt($('wf-mp').value) || 5,
+        force_cutloss: true, cutloss_pct: -10
+      };
+    }
+    var r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    wfR = await r.json();
+    if (st) st.textContent = wfR.error ? '❌ ' + wfR.error : '✅ ' + wfR.total_steps + ' steps · ' + (wfR.compute_time / 1000).toFixed(1) + 's';
+    var el = $('wf-results');
+    if (el) { el.innerHTML = wfR.error ? '' : renderWFResults(wfR); }
+    if (!wfR.error) setTimeout(function() { wfDrawCharts(wfR); }, 100);
+  } catch (e) { if (st) st.textContent = '❌ ' + e.message; }
+  wfRunning = false;
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Run Walk Forward'; }
+}
+
+function renderWFResults(d) {
+  if (!d || !d.steps || !d.steps.length) return '';
+  var s = d.summary;
+  var h = '';
+
+  // Verdict banner
+  var vColor = s.verdict === 'robust' ? 'var(--gn)' : s.verdict === 'borderline' ? 'var(--am)' : 'var(--rd)';
+  var vBg = s.verdict === 'robust' ? 'rgba(34,197,94,0.08)' : s.verdict === 'borderline' ? 'rgba(245,158,11,0.08)' : 'rgba(239,68,68,0.08)';
+  var vEmoji = s.verdict === 'robust' ? '🟢' : s.verdict === 'borderline' ? '🟡' : '🔴';
+  h += '<div style="padding:10px 14px;border-radius:6px;background:' + vBg + ';border:1px solid ' + vColor + '33;margin-bottom:10px">';
+  h += '<div style="font-size:16px;font-weight:700;color:' + vColor + '">' + vEmoji + ' ' + s.verdict.toUpperCase() + '</div>';
+  h += '<div style="font-size:11px;color:var(--t2);margin-top:2px">';
+  h += 'Avg WFE: <b>' + (s.avg_wfe || 0) + '%</b>';
+  h += ' · OOS Win Rate: <b>' + (s.oos_win_rate || 0) + '%</b>';
+  if (s.avg_oos_return !== undefined) h += ' · Avg OOS Return: <b style="color:' + (s.avg_oos_return > 0 ? 'var(--gn)' : 'var(--rd)') + '">' + (s.avg_oos_return > 0 ? '+' : '') + s.avg_oos_return + '%</b>';
+  h += '</div>';
+  if (s.verdict === 'robust') h += '<div style="font-size:10px;color:var(--gn);margin-top:3px">WFE > 50% — Strategy survives out-of-sample. Deploy with confidence.</div>';
+  else if (s.verdict === 'borderline') h += '<div style="font-size:10px;color:var(--am);margin-top:3px">WFE 30-50% — Partial survival OOS. Use reduced position sizing.</div>';
+  else h += '<div style="font-size:10px;color:var(--rd);margin-top:3px">WFE < 30% — Strategy is overfit to historical data. Do not deploy.</div>';
+
+  // Top weights (scoring mode)
+  if (d.mode === 'scoring' && s.top_weights && s.top_weights.length) {
+    h += '<div style="margin-top:6px;font-size:10px;color:var(--t2)"><b>Most selected weights:</b>';
+    s.top_weights.forEach(function(tw) {
+      var w = tw.weights;
+      h += ' F' + w.fundamental + '/V' + w.valuation + '/M' + w.momentum + '/D' + w.demand + '/Fr' + w.foreign + ' (' + tw.count + 'x)';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+
+  // WFE interpretation guide
+  h += '<div style="font-size:9px;color:var(--t3);margin-bottom:8px">WFE = OOS annualized return / IS annualized return. Measures how much in-sample performance survives out-of-sample.</div>';
+
+  // Chart placeholder
+  h += '<div id="wf-chart" style="height:220px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px;margin-bottom:10px"></div>';
+
+  // Step detail table
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px">';
+  h += '<tr style="border-bottom:2px solid var(--b2)">';
+  h += '<th style="padding:4px 6px;text-align:center;color:var(--t3);font-size:8px">Step</th>';
+  if (d.mode === 'formula') {
+    h += '<th style="padding:4px 6px;text-align:left;color:var(--t3);font-size:8px">IS Period</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">IS Return</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">IS Trades</th>';
+    h += '<th style="padding:4px 6px;text-align:left;color:var(--t3);font-size:8px">OOS Period</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">OOS Return</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">OOS Trades</th>';
+  } else {
+    h += '<th style="padding:4px 6px;text-align:left;color:var(--t3);font-size:8px">IS Dates</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">IS Avg Ret</th>';
+    h += '<th style="padding:4px 6px;text-align:left;color:var(--t3);font-size:8px">OOS Dates</th>';
+    h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">OOS Avg Ret</th>';
+    h += '<th style="padding:4px 6px;text-align:left;color:var(--t3);font-size:8px">Best Weights</th>';
+  }
+  h += '<th style="padding:4px 6px;text-align:right;color:var(--t3);font-size:8px">WFE</th>';
+  h += '</tr>';
+
+  d.steps.forEach(function(st) {
+    var wfeC = st.wfe > 50 ? 'color:var(--gn)' : st.wfe > 30 ? 'color:var(--am)' : 'color:var(--rd)';
+    h += '<tr style="border-bottom:1px solid var(--b1)">';
+    h += '<td style="padding:3px 6px;text-align:center;font-weight:600">' + st.step + '</td>';
+
+    if (d.mode === 'formula') {
+      var is = st.is || {};
+      var oos = st.oos || {};
+      h += '<td style="padding:3px 6px;font-size:9px;color:var(--t3)">' + (is.start || '').substring(5) + '→' + (is.end || '').substring(5) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm);' + (is.return_pct > 0 ? 'color:var(--gn)' : is.return_pct < 0 ? 'color:var(--rd)' : '') + '">' + (is.return_pct > 0 ? '+' : '') + (is.return_pct || 0) + '%</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm)">' + (is.trades || 0) + '</td>';
+      h += '<td style="padding:3px 6px;font-size:9px;color:var(--t3)">' + (oos.start || '').substring(5) + '→' + (oos.end || '').substring(5) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm);font-weight:700;' + (oos.return_pct > 0 ? 'color:var(--gn)' : oos.return_pct < 0 ? 'color:var(--rd)' : '') + '">' + (oos.return_pct > 0 ? '+' : '') + (oos.return_pct || 0) + '%</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm)">' + (oos.trades || 0) + '</td>';
+    } else {
+      h += '<td style="padding:3px 6px;font-size:9px;color:var(--t3)">' + (st.is_dates ? st.is_dates.start.substring(5) + '→' + st.is_dates.end.substring(5) : '') + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm);' + (st.is_avg_return > 0 ? 'color:var(--gn)' : 'color:var(--rd)') + '">' + (st.is_avg_return > 0 ? '+' : '') + st.is_avg_return + '%</td>';
+      h += '<td style="padding:3px 6px;font-size:9px;color:var(--t3)">' + (st.oos_dates ? st.oos_dates.start.substring(5) + '→' + st.oos_dates.end.substring(5) : '') + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm);font-weight:700;' + (st.oos_avg_return > 0 ? 'color:var(--gn)' : 'color:var(--rd)') + '">' + (st.oos_avg_return > 0 ? '+' : '') + st.oos_avg_return + '%</td>';
+      var bw = st.best_weights || {};
+      h += '<td style="padding:3px 6px;font-size:9px;font-family:var(--fm)">F' + (bw.fundamental||0) + ' V' + (bw.valuation||0) + ' M' + (bw.momentum||0) + ' D' + (bw.demand||0) + ' Fr' + (bw.foreign||0) + '</td>';
+    }
+    h += '<td style="padding:3px 6px;text-align:right;font-family:var(--fm);font-weight:700;' + wfeC + '">' + (st.wfe || 0) + '%</td>';
+    h += '</tr>';
+  });
+  h += '</table>';
+  return h;
+}
+
+function wfDrawCharts(d) {
+  if (!d || !d.steps || !d.steps.length) return;
+  var el = $('wf-chart'); if (!el) return;
+  var c = BL.init(el, 'wf-chart');
+  if (!c) return;
+
+  var labels = d.steps.map(function(s) { return 'S' + s.step; });
+  var isData, oosData;
+  if (d.mode === 'formula') {
+    isData = d.steps.map(function(s) { return s.is ? s.is.return_pct : 0; });
+    oosData = d.steps.map(function(s) { return s.oos ? s.oos.return_pct : 0; });
+  } else {
+    isData = d.steps.map(function(s) { return s.is_avg_return || 0; });
+    oosData = d.steps.map(function(s) { return s.oos_avg_return || 0; });
+  }
+  var wfeData = d.steps.map(function(s) { return s.wfe || 0; });
+
+  c.setOption({
+    tooltip: { trigger: 'axis', textStyle: { fontSize: 10 } },
+    legend: { top: 2, textStyle: { fontSize: 9, color: '#94a3b8' }, data: ['IS Return', 'OOS Return', 'WFE'] },
+    grid: BL.grid({ top: 30, bottom: 24, left: 40, right: 40 }),
+    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 8 } },
+    yAxis: [
+      { type: 'value', name: 'Return %', nameTextStyle: { fontSize: 8 }, axisLabel: { fontSize: 8, formatter: function(v) { return v + '%'; } } },
+      { type: 'value', name: 'WFE %', nameTextStyle: { fontSize: 8 }, axisLabel: { fontSize: 8, formatter: function(v) { return v + '%'; } }, splitLine: { show: false } }
+    ],
+    series: [
+      { name: 'IS Return', type: 'bar', data: isData, barWidth: 8, itemStyle: { color: 'rgba(84,112,198,0.5)' } },
+      { name: 'OOS Return', type: 'bar', data: oosData, barWidth: 8, itemStyle: { color: function(p) { return p.value >= 0 ? BL.colors.green : BL.colors.red; } } },
+      { name: 'WFE', type: 'line', yAxisIndex: 1, data: wfeData, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' },
+        markLine: { silent: true, data: [{ yAxis: 50, lineStyle: { color: BL.colors.green, type: 'dashed', width: 1 }, label: { formatter: '50% robust', fontSize: 8 } }, { yAxis: 30, lineStyle: { color: BL.colors.red, type: 'dashed', width: 1 }, label: { formatter: '30% overfit', fontSize: 8 } }] } }
+    ]
+  }, true);
 }

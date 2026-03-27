@@ -1018,6 +1018,46 @@ module.exports = function(upload) {
         return { macd: Math.round(macdVal * 100) / 100, signal: Math.round(signal * 100) / 100, hist: Math.round((macdVal - signal) * 100) / 100 };
       }
 
+      // ── 6b. Commodity momentum bonus ──
+      const COMMODITY_TICKER_MAP = {
+        'AALI':'CPO','LSIP':'CPO','SIMP':'CPO','TBLA':'CPO','SSMS':'CPO','DSNG':'CPO','SGRO':'CPO',
+        'ADRO':'COAL','PTBA':'COAL','ITMG':'COAL','BUMI':'COAL','HRUM':'COAL','BYAN':'COAL','DSSA':'COAL','MBAP':'COAL','GEMS':'COAL','ABMM':'COAL',
+        'INCO':'NICKEL','ANTM':'NICKEL','NCKL':'NICKEL','MBMA':'NICKEL',
+        'MDKA':'GOLD','ARCI':'GOLD','BRMS':'GOLD','PSAB':'GOLD',
+        'TINS':'TIN',
+        'MEDC':'OIL','ELSA':'OIL','AKRA':'OIL'
+      };
+      const COMMODITY_OHLC_MAP = {
+        'CPO':['CPO'],'COAL':['COAL','NCF'],'NICKEL':['NICKEL','HGK6'],
+        'GOLD':['XAUUSD'],'TIN':['TIN'],'OIL':['BRENT','CRUDE']
+      };
+      function getCommodityCode(code, sector, industry) {
+        if (COMMODITY_TICKER_MAP[code]) return COMMODITY_TICKER_MAP[code];
+        const kw = ((sector||'')+ ' '+(industry||'')).toLowerCase();
+        if (kw.includes('palm')||kw.includes('plantation')||kw.includes('sawit')) return 'CPO';
+        if (kw.includes('coal')||kw.includes('batubara')) return 'COAL';
+        if (kw.includes('nickel')||kw.includes('nikel')) return 'NICKEL';
+        if (kw.includes('gold')||kw.includes('emas')) return 'GOLD';
+        if (kw.includes('tin')||kw.includes('timah')) return 'TIN';
+        if (kw.includes('oil')||kw.includes('gas')||kw.includes('minyak')) return 'OIL';
+        return null;
+      }
+      const commodityMomentum = {};
+      try {
+        [...new Set(Object.values(COMMODITY_TICKER_MAP))].forEach(cmdCode => {
+          const ohlcCodes = COMMODITY_OHLC_MAP[cmdCode] || [cmdCode];
+          for (const oc of ohlcCodes) {
+            const rows = db.prepare('SELECT date, close FROM custom_ohlc WHERE code=? ORDER BY date DESC LIMIT 30').all(oc);
+            if (rows.length >= 6) {
+              const now = rows[0].close, d5 = rows[5]?.close || now, d20 = rows[Math.min(20, rows.length-1)]?.close || now;
+              commodityMomentum[cmdCode] = { code: oc, price: now,
+                ret5d: d5>0 ? (now-d5)/d5*100 : 0, ret20d: d20>0 ? (now-d20)/d20*100 : 0 };
+              break;
+            }
+          }
+        });
+      } catch(e) {}
+
       // ── 7. Score each stock ──
       const results = [];
 
@@ -1184,7 +1224,19 @@ module.exports = function(upload) {
         r.score_momentum = Math.round((r._r_ma20_pct * 0.2 + r._r_ma200_pct * 0.15 + r._r_ret_20d * 0.25 + r._r_rsi14 * 0.15 + r._r_fnet_5d * 0.25) * 10) / 10;
         r.score_demand = Math.round((r._r_bid_offer_ratio * 0.25 + r._r_bid_offer_5d * 0.25 + r._r_rel_vol * 0.2 + r._r_freq_spike * 0.15 + r._r_val_spike * 0.15) * 10) / 10;
         r.score_foreign = Math.round((r._r_fnet_10d * 0.2 + r._r_fnet_20d * 0.2 + r._r_foreign_pct_val * 0.2 + r._r_foreign_accum_streak * 0.2 + r._r_fnet_vs_avg * 0.2) * 10) / 10;
-        r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal * 10) / 10;
+        // Commodity momentum bonus (-10 to +10) for commodity-linked stocks
+        const cmdCode = getCommodityCode(r.code, r.sector, r.industry);
+        const cmdMom = cmdCode ? commodityMomentum[cmdCode] : null;
+        let commodity_bonus = 0;
+        if (cmdMom) {
+          const rawMom = cmdMom.ret5d * 0.4 + cmdMom.ret20d * 0.6;
+          commodity_bonus = Math.round(Math.max(-10, Math.min(10, rawMom)) * 10) / 10;
+        }
+        r.commodity_code = cmdCode || null;
+        r.commodity_bonus = commodity_bonus;
+        r.score_composite = Math.round(Math.max(0, Math.min(100,
+          (r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal + commodity_bonus
+        )) * 10) / 10;
         // Cleanup rank keys
         Object.keys(r).filter(k => k.startsWith('_r_')).forEach(k => delete r[k]);
       });
@@ -1219,6 +1271,7 @@ module.exports = function(upload) {
       res.json({
         ok: true, trade_date: td, total_liquid: liquid.length, total_scored: top.length,
         weights: { fundamental: wF, valuation: wV, momentum: wM, demand: wD, foreign: wFR },
+        commodity_data: commodityMomentum,
         data: top
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1442,7 +1495,15 @@ module.exports = function(upload) {
             r.score_momentum = Math.round((r._r_ma20_pct * 0.2 + r._r_ma200_pct * 0.15 + r._r_ret_20d * 0.25 + r._r_rsi14 * 0.15 + r._r_fnet_5d * 0.25) * 10) / 10;
             r.score_demand = Math.round((r._r_bid_offer_ratio * 0.25 + r._r_bid_offer_5d * 0.25 + r._r_rel_vol * 0.2 + r._r_freq_spike * 0.15 + r._r_val_spike * 0.15) * 10) / 10;
             r.score_foreign = Math.round((r._r_fnet_10d * 0.2 + r._r_fnet_20d * 0.2 + r._r_foreign_pct_val * 0.2 + r._r_foreign_accum_streak * 0.2 + r._r_fnet_vs_avg * 0.2) * 10) / 10;
-            r.score_composite = Math.round((r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal * 10) / 10;
+            // Commodity bonus (backfill uses same logic — note: commodity data is latest, not historical)
+            const cmdCode = getCommodityCode(r.code, r.sector, r.industry);
+            const cmdMom = cmdCode ? commodityMomentum[cmdCode] : null;
+            let cb = 0;
+            if (cmdMom) { const rm = cmdMom.ret5d*0.4+cmdMom.ret20d*0.6; cb = Math.round(Math.max(-10,Math.min(10,rm))*10)/10; }
+            r.commodity_bonus = cb;
+            r.score_composite = Math.round(Math.max(0, Math.min(100,
+              (r.score_fundamental * wF + r.score_valuation * wV + r.score_momentum * wM + r.score_demand * wD + r.score_foreign * wFR) / wTotal + cb
+            )) * 10) / 10;
           });
 
           dayStocks.sort((a, b) => b.score_composite - a.score_composite);
