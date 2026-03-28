@@ -18,7 +18,7 @@ function setTab(tab,el){
   document.querySelectorAll('.smod-nav-item').forEach(function(x){x.classList.remove('on')});
   if(el)el.classList.add('on');
   else{var t=document.querySelector('.smod-nav-item[onclick*="'+tab+'"]');if(t)t.classList.add('on');}
-  var titles={sync:'🔄 Sync Center',dbstats:'🗄 Database',upload:'📋 Upload',ca:'⚡ Corp Actions',tags:'🏷 Tags',export:'📥 Export',prefs:'🎨 Prefs',custom:'📌 Custom Tickers',eod:'🌐 EOD Fetcher'};
+  var titles={sync:'🔄 Sync Center',dbstats:'🗄 Database',upload:'📤 BEI Upload',ca:'⚡ Corp Actions',tags:'🏷 Tags',export:'📥 Export',prefs:'🎨 Prefs',custom:'📌 Custom Tickers',eod:'🌐 EOD Fetcher'};
   var t=titles[tab]||tab;
   $('smod-title').innerHTML='<span class="sbh-icon">'+t.split(' ')[0]+'</span> '+t.split(' ').slice(1).join(' ');
   var c=$('smod-content');
@@ -478,33 +478,195 @@ async function renderSetDbStats(c){
 }
 
 // ═══════════════════════════════════════════════
-// UPLOAD TAB — Manual only (Insider + Tags)
+// BEI DATA UPLOAD — Auto-detect + Preview + Confirm
 // ═══════════════════════════════════════════════
+var _beiPreview=null;
+
 function renderSetUpload(c){
   var h='';
-  h+='<div class="s-section"><div class="s-section-title">Manual Upload</div>';
-  h+='<div style="font-size:var(--font-sm);color:var(--t3);margin-bottom:8px">Semua data OHLCV/Index/Fundamental sekarang otomatis via Sync Center. Hanya data berikut yang masih manual.</div>';
-  h+='<div class="s-row"><div class="s-row-icon">📋</div><div class="s-row-info"><div class="s-row-title">Insider Ownership (XLSX)</div><div class="s-row-desc">BEI monthly shareholder data</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx,.xls" onchange="setUploadInsider(this)"></label></div></div>';
-  h+='<div class="s-row"><div class="s-row-icon">🏷</div><div class="s-row-info"><div class="s-row-title">Investor Tags (XLSX)</div><div class="s-row-desc">Groups, keyword rules, ticker map</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx" onchange="setUploadTags(this)"></label></div></div>';
+  h+='<div class="s-section"><div class="s-section-title">BEI Data Upload</div>';
+  h+='<div style="font-size:var(--font-sm);color:var(--t3);margin-bottom:10px">Drop any BEI file — auto-detects Financial Data, Balance Position, Corporate Actions, Dividends</div>';
+  h+='<div id="bei-dropzone" style="border:2px dashed var(--b2);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s" onclick="document.getElementById(\'bei-file-input\').click()" ondragover="event.preventDefault();this.style.borderColor=\'var(--am)\';this.style.background=\'rgba(255,152,0,0.05)\'" ondragleave="this.style.borderColor=\'var(--b2)\';this.style.background=\'transparent\'" ondrop="beiHandleDrop(event)">';
+  h+='<div style="font-size:13px;color:var(--t2);font-weight:500">Drop file here or click to browse</div>';
+  h+='<div style="font-size:11px;color:var(--t3);margin-top:4px">XLSX · XLS · TXT</div>';
+  h+='<input type="file" id="bei-file-input" accept=".xlsx,.xls,.txt,.csv" style="display:none" onchange="beiFileSelected(this)">';
   h+='</div>';
-  h+='<div class="s-info" id="set-upload-info"></div>';
-  h+='<div class="s-section"><div class="s-section-title">Insider Data Status</div><div id="set-insider-stats" style="font-size:var(--font-md);color:var(--t2)">Loading...</div></div>';
-  c.innerHTML=h;
+  h+='<div id="bei-preview" style="display:none"></div>';
+  h+='</div>';
 
-  Promise.all([
-    fetch('/api/insider/stats').then(function(r){return r.json()}),
-    fetch('/api/insider/tags/stats').then(function(r){return r.json()})
-  ]).then(function(results){
-    var ins=results[0],tags=results[1];
-    var el=$('set-insider-stats');if(!el)return;
-    var h='';
-    if(ins.total){
-      h+='Holdings: <b>'+ins.total.toLocaleString()+'</b> | Tickers: <b>'+ins.tickers+'</b> | Investors: <b>'+ins.investors.toLocaleString()+'</b>';
-      if(ins.latest)h+=' | Last: <b>'+ins.latest+'</b>';
-    }else{h+='<span style="color:var(--t3)">No insider data yet</span>';}
-    h+='<div style="margin-top:4px">Tags: <b>'+tags.groups+'</b> groups | <b>'+tags.rules+'</b> rules | <b>'+tags.overrides+'</b> overrides</div>';
-    el.innerHTML=h;
-  }).catch(function(){});
+  h+='<div class="s-section"><div class="s-section-title">Insider Ownership</div>';
+  h+='<div class="s-row"><div class="s-row-icon">📋</div><div class="s-row-info"><div class="s-row-title">Insider Ownership (XLSX)</div><div class="s-row-desc">BEI monthly shareholder >1% data</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx,.xls" onchange="setUploadInsider(this)"></label></div></div>';
+  h+='<div class="s-row"><div class="s-row-icon">🏷</div><div class="s-row-info"><div class="s-row-title">Investor Tags (XLSX)</div><div class="s-row-desc">Groups, keyword rules, ticker map</div></div><div class="s-row-action"><label class="s-upload-btn">Choose File<input type="file" accept=".xlsx" onchange="setUploadTags(this)"></label></div></div>';
+  h+='<div class="s-info" id="set-upload-info"></div>';
+  h+='</div>';
+
+  h+='<div class="s-section"><div class="s-section-title">BEI Data Status</div>';
+  h+='<div id="bei-data-stats" style="font-size:var(--font-md);color:var(--t2)">Loading...</div>';
+  h+='</div>';
+
+  h+='<div class="s-section"><div class="s-section-title">Import History</div>';
+  h+='<div id="bei-upload-history" style="font-size:var(--font-md);color:var(--t2)">Loading...</div>';
+  h+='</div>';
+
+  c.innerHTML=h;
+  beiLoadStats();
+  beiLoadHistory();
+}
+
+function beiHandleDrop(e){
+  e.preventDefault();
+  var dz=document.getElementById('bei-dropzone');
+  dz.style.borderColor='var(--b2)';dz.style.background='transparent';
+  if(e.dataTransfer.files.length)beiUploadPreview(e.dataTransfer.files[0]);
+}
+function beiFileSelected(input){if(input.files[0])beiUploadPreview(input.files[0]);input.value='';}
+
+async function beiUploadPreview(file){
+  var preview=document.getElementById('bei-preview');
+  preview.style.display='';
+  preview.innerHTML='<div style="padding:16px;text-align:center;color:var(--t3)">Detecting file type...</div>';
+  var fd=new FormData();fd.append('file',file);
+  try{
+    var r=await fetch('/api/idx/bei/upload/preview',{method:'POST',body:fd});
+    var d=await r.json();
+    if(d.error){preview.innerHTML=beiErrorCard(d.error,d.hint||'');return;}
+    _beiPreview=d;
+    preview.innerHTML=beiPreviewCard(d,file.name);
+  }catch(e){preview.innerHTML=beiErrorCard(e.message,'');}
+}
+
+function beiPreviewCard(d,fileName){
+  var h='<div style="margin-top:12px;border:1px solid var(--b2);border-radius:10px;overflow:hidden">';
+  h+='<div style="padding:12px 16px;background:var(--bg2);border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">';
+  h+='<div><span style="color:var(--gn);font-weight:600;font-size:13px">✓ Detected: '+esc(d.label)+'</span>';
+  if(d.snapshot)h+='<span style="margin-left:10px;font-size:12px;color:var(--t2)">Snapshot: <b style="color:var(--am)">'+esc(d.snapshot)+'</b></span>';
+  h+='</div><div style="font-size:11px;color:var(--t3)">'+esc(fileName)+'</div></div>';
+
+  h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--b1)">';
+  h+=beiStatPill('Rows',d.total_rows||0,'var(--t1)');
+  if(d.skipped_rows>0)h+=beiStatPill('Skipped',d.skipped_rows,'var(--am)');
+  if(d.conflicts>0)h+=beiStatPill('Overwrite',d.conflicts,'var(--rd)');
+  h+='</div>';
+
+  if(d.warnings&&d.warnings.length){
+    h+='<div style="padding:8px 16px;border-bottom:1px solid var(--b1);font-size:11px;color:var(--am);background:rgba(255,152,0,0.04)">';
+    d.warnings.forEach(function(w){h+='<div style="padding:1px 0">⚠ '+esc(w)+'</div>';});
+    h+='</div>';
+  }
+
+  if(d.sample&&d.sample.length&&d.columns&&d.columns.length){
+    h+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
+    h+='<table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--fm)">';
+    h+='<thead><tr>';
+    d.columns.forEach(function(c){h+='<th style="padding:4px 8px;text-align:left;border-bottom:1px solid var(--b2);color:var(--t3);font-weight:600;font-size:10px;white-space:nowrap;position:sticky;top:0;background:var(--bg1)">'+esc(c)+'</th>';});
+    h+='</tr></thead><tbody>';
+    d.sample.forEach(function(row){
+      h+='<tr>';
+      d.columns.forEach(function(c){
+        var v=row[c];if(v===undefined||v===null)v='';
+        if(typeof v==='number')v=v.toLocaleString();
+        h+='<td style="padding:3px 8px;border-bottom:1px solid var(--b1);white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis">'+esc(String(v))+'</td>';
+      });
+      h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+
+  h+='<div style="padding:12px 16px;display:flex;justify-content:flex-end;gap:8px;background:var(--bg2)">';
+  h+='<button class="s-upload-btn" style="padding:6px 16px" onclick="beiCancelPreview()">Cancel</button>';
+  h+='<button class="s-upload-btn" style="padding:6px 20px;background:var(--gn);color:#000;border-color:var(--gn);font-weight:700" onclick="beiCommit()">▶ Confirm Import</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function beiStatPill(label,value,color){
+  return '<div style="flex:1;padding:8px 16px;text-align:center;border-right:1px solid var(--b1)">'
+    +'<div style="font-size:16px;font-weight:600;color:'+color+';font-family:var(--fm)">'+Number(value).toLocaleString()+'</div>'
+    +'<div style="font-size:10px;color:var(--t3)">'+label+'</div></div>';
+}
+
+function beiErrorCard(msg,hint){
+  var h='<div style="margin-top:12px;padding:16px;border:1px solid var(--rd);border-radius:10px;background:rgba(220,50,50,0.04)">';
+  h+='<div style="font-size:13px;color:var(--rd);font-weight:600">✗ '+esc(msg)+'</div>';
+  if(hint)h+='<div style="font-size:11px;color:var(--t3);margin-top:4px">'+esc(hint)+'</div>';
+  h+='<button class="s-upload-btn" style="margin-top:8px;padding:4px 12px;font-size:11px" onclick="beiCancelPreview()">Dismiss</button>';
+  h+='</div>';return h;
+}
+
+function beiCancelPreview(){
+  _beiPreview=null;
+  var el=document.getElementById('bei-preview');
+  if(el){el.style.display='none';el.innerHTML='';}
+}
+
+async function beiCommit(){
+  if(!_beiPreview||!_beiPreview.file_id)return;
+  var preview=document.getElementById('bei-preview');
+  var fileId=_beiPreview.file_id;var label=_beiPreview.label;
+  preview.innerHTML='<div style="padding:20px;text-align:center;color:var(--t3)">Importing '+esc(label)+'...</div>';
+  try{
+    var r=await fetch('/api/idx/bei/upload/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file_id:fileId})});
+    var d=await r.json();
+    if(d.error){preview.innerHTML=beiErrorCard(d.error,'');return;}
+    var msg=d.rows_inserted+' rows imported';
+    if(d.dividends_inserted)msg+=', '+d.dividends_inserted+' dividends';
+    preview.innerHTML='<div style="margin-top:12px;padding:16px;border:1px solid var(--gn);border-radius:10px;background:rgba(50,180,50,0.04)">'
+      +'<div style="font-size:13px;color:var(--gn);font-weight:600">✓ '+esc(label)+' imported successfully</div>'
+      +'<div style="font-size:12px;color:var(--t2);margin-top:4px">'+esc(msg)+(d.snapshot?' · Snapshot: '+esc(d.snapshot):'')+'</div></div>';
+    showT(label,msg);_beiPreview=null;
+    beiLoadStats();beiLoadHistory();
+    setTimeout(function(){var el=document.getElementById('bei-preview');if(el){el.style.display='none';el.innerHTML='';}},4000);
+  }catch(e){preview.innerHTML=beiErrorCard(e.message,'');}
+}
+
+async function beiLoadStats(){
+  var el=document.getElementById('bei-data-stats');if(!el)return;
+  try{
+    var r=await fetch('/api/idx/bei/upload/stats');var d=await r.json();
+    var h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">';
+    h+=beiStatCard('Fundamental',d.fundamental?.total||0,d.fundamental?.snapshots?d.fundamental.snapshots+' snapshots':'No data',d.fundamental?.first&&d.fundamental?.last?d.fundamental.first+' → '+d.fundamental.last:'');
+    h+=beiStatCard('Balance Pos.',d.balance_position?.total||0,d.balance_position?.snapshots?d.balance_position.snapshots+' snapshots':'No data',d.balance_position?.first&&d.balance_position?.last?d.balance_position.first+' → '+d.balance_position.last:'');
+    h+=beiStatCard('Corp. Actions',d.corporate_actions?.total||0,d.corporate_actions?.first&&d.corporate_actions?.last?d.corporate_actions.first+'–'+d.corporate_actions.last:'No data','');
+    h+=beiStatCard('Dividends',d.dividends?.total||0,d.dividends?.tickers?d.dividends.tickers+' tickers':'No data','');
+    h+='</div>';el.innerHTML=h;
+  }catch(e){el.innerHTML='<span style="color:var(--rd)">Error loading stats</span>';}
+}
+
+function beiStatCard(title,count,sub1,sub2){
+  return '<div style="padding:10px 12px;background:var(--bg2);border-radius:8px;border:1px solid var(--b1)">'
+    +'<div style="font-size:10px;color:var(--t3);font-weight:600;text-transform:uppercase;letter-spacing:.5px">'+title+'</div>'
+    +'<div style="font-size:18px;font-weight:600;color:var(--t1);font-family:var(--fm);margin:2px 0">'+Number(count).toLocaleString()+'</div>'
+    +(sub1?'<div style="font-size:10px;color:var(--t3)">'+esc(sub1)+'</div>':'')
+    +(sub2?'<div style="font-size:10px;color:var(--t3)">'+esc(sub2)+'</div>':'')
+    +'</div>';
+}
+
+async function beiLoadHistory(){
+  var el=document.getElementById('bei-upload-history');if(!el)return;
+  try{
+    var r=await fetch('/api/idx/bei/upload/history');var rows=await r.json();
+    if(!rows||!rows.length){el.innerHTML='<span style="color:var(--t3)">No imports yet</span>';return;}
+    var typeLabels={financial_data:'Financial Data',balance_position:'Balance Position',ca_dividend:'Dividend',ca_rights:'Rights Issue',ca_split:'Stock Split',ca_reverse:'Reverse Stock',ca_bonus:'Bonus Shares',ca_merger:'Merger',ca_proxy:'Proxy/RUPS',ca_interest:'Interest',ca_conversion:'Conversion',ca_master:'CA Master'};
+    var h='<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>';
+    h+='<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--b2);color:var(--t3);font-size:10px">Date</th>';
+    h+='<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--b2);color:var(--t3);font-size:10px">Type</th>';
+    h+='<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--b2);color:var(--t3);font-size:10px">Snapshot</th>';
+    h+='<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--b2);color:var(--t3);font-size:10px">Rows</th>';
+    h+='<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--b2);color:var(--t3);font-size:10px">File</th>';
+    h+='</tr></thead><tbody>';
+    rows.slice(0,20).forEach(function(r){
+      var tl=typeLabels[r.file_type]||r.file_type;
+      var ds=r.uploaded_at?r.uploaded_at.substring(0,16).replace('T',' '):'';
+      h+='<tr style="border-bottom:1px solid var(--b1)">';
+      h+='<td style="padding:3px 8px;font-family:var(--fm);color:var(--t2)">'+esc(ds)+'</td>';
+      h+='<td style="padding:3px 8px"><span style="background:var(--bg2);padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600">'+esc(tl)+'</span></td>';
+      h+='<td style="padding:3px 8px;font-family:var(--fm);color:var(--am)">'+esc(r.snapshot||'-')+'</td>';
+      h+='<td style="padding:3px 8px;text-align:right;font-family:var(--fm);font-weight:600">'+(r.rows_inserted||0).toLocaleString()+'</td>';
+      h+='<td style="padding:3px 8px;color:var(--t3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(r.file_name)+'">'+esc(r.file_name||'')+'</td>';
+      h+='</tr>';
+    });
+    h+='</tbody></table>';el.innerHTML=h;
+  }catch(e){el.innerHTML='<span style="color:var(--rd)">Error loading history</span>';}
 }
 
 async function setUploadInsider(input){

@@ -277,6 +277,7 @@ function detectNeeds(formula) {
     relvol: /RELVOL/i.test(formula),
     freq: /TICKRATIO|ISBLOCK|ISRETAIL|ISSMART|ISDRYUP|BLOCKTRADE|RETAILFRENZY|SMARTACCUM|DRYUP|RELFREQ/i.test(formula),
     fund: /SECTOR|INDUSTRY|BOARD/i.test(formula),
+    divown: /DIVYIELD|DIVCOUNT|RICOUNT|FOREIGNPCT|LIVEPER|LIVEPBV|EPS\b|BOOKVAL/i.test(formula),
   };
 }
 
@@ -304,6 +305,35 @@ router.post('/formula', (req, res) => {
 
     const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol || needs.freq) ? bulkLoadHistory(td) : {};
     const caMap = (needs.ma || needs.macd || needs.stoch) ? loadConfirmedCAs() : {};
+
+    // ── Bulk-load dividend, ownership, CA data for new variables ──
+    let divMap = {}, bpMap = {}, riMap = {};
+    if (needs.divown) {
+      try {
+        // DivYield: latest DPS per code; DivCount: count in last 3 years
+        db.prepare('SELECT code, dps, cum_date FROM bei_dividends ORDER BY cum_date DESC').all().forEach(r => {
+          if (!divMap[r.code]) divMap[r.code] = { latest_dps: r.dps, count: 0 };
+          // Count dividends in last ~3 years
+          if (r.cum_date >= new Date(Date.now() - 3*365*86400000).toISOString().slice(0,10)) divMap[r.code].count++;
+        });
+      } catch (e) {}
+      try {
+        // ForeignPct: from latest balance_position
+        const latestBpDate = db.prepare('SELECT MAX(snapshot_date) as d FROM balance_position').get();
+        if (latestBpDate && latestBpDate.d) {
+          db.prepare('SELECT code, local_total, foreign_total FROM balance_position WHERE snapshot_date=?').all(latestBpDate.d).forEach(r => {
+            const total = (r.local_total||0) + (r.foreign_total||0);
+            bpMap[r.code] = total > 0 ? Math.round(r.foreign_total / total * 10000) / 100 : 0;
+          });
+        }
+      } catch (e) {}
+      try {
+        // RICount: count of rights issues per code
+        db.prepare("SELECT code, COUNT(*) as cnt FROM bei_corporate_actions WHERE ca_type IN ('rights','hmetd','right') GROUP BY code").all().forEach(r => {
+          riMap[r.code] = r.cnt;
+        });
+      } catch (e) {}
+    }
     
     const results = [];
 
@@ -445,6 +475,15 @@ router.post('/formula', (req, res) => {
         DER: fund.der||0, NPM: fund.npm||0, MktCap: fund.mkt_cap||0, YTD: fund.ytd||0,
         // [PATCH 4] String variables for sector/industry filtering
         Sector: fund.sector || '', Industry: fund.industry || '', Board: fund.board || '',
+        // [Sprint 16] New variables from BEI upload data
+        EPS: fund.eps_trailing || 0,
+        BookVal: fund.book_value || 0,
+        LivePER: (fund.eps_trailing && fund.eps_trailing > 0) ? Math.round(stock.close / fund.eps_trailing * 100) / 100 : 0,
+        LivePBV: (fund.book_value && fund.book_value > 0) ? Math.round(stock.close / fund.book_value * 100) / 100 : 0,
+        DivYield: (divMap[stock.code] && divMap[stock.code].latest_dps && stock.close > 0) ? Math.round(divMap[stock.code].latest_dps / stock.close * 10000) / 100 : 0,
+        DivCount: divMap[stock.code] ? divMap[stock.code].count : 0,
+        RICount: riMap[stock.code] || 0,
+        ForeignPct: bpMap[stock.code] || 0,
         ...extraCtx,
       };
 

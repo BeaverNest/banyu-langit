@@ -49,7 +49,7 @@ try { var _sc = JSON.parse(localStorage.getItem('scoreCols')); if (_sc) { scrSco
 try { var _sw = JSON.parse(localStorage.getItem('scoreWeights')); if (_sw) scrScoreWeights = _sw; } catch(e){}
 function saveScoreCols() { localStorage.setItem('scoreCols', JSON.stringify({vis:scrScoreCols, ord:scrScoreColOrder})); }
 
-var scrScoreSubTab = 'scores'; // scores | ic | decay | backfill
+var scrScoreSubTab = 'scores'; // scores | ic | decay | staleness | backfill
 
 // ═══ MAIN ENTRY ═══
 function loadScoring() {
@@ -67,6 +67,7 @@ function loadScoring() {
   else if (scrScoreSubTab === 'backfill') renderBackfillUI();
   else if (scrScoreSubTab === 'ic') loadICTracking();
   else if (scrScoreSubTab === 'decay') loadICDecay();
+  else if (scrScoreSubTab === 'staleness') loadICStaleness();
 }
 
 // Sync weight values from DOM inputs to scrScoreWeights + localStorage
@@ -107,7 +108,7 @@ function renderScoringShell(el) {
 
   // ── Sub-tabs ──
   h += '<div style="display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--b1)">';
-  [{k:'scores',l:'📊 Scores'},{k:'backfill',l:'⏪ Backfill'},{k:'ic',l:'📈 IC Tracking'},{k:'decay',l:'📉 IC Decay'}].forEach(function(t) {
+  [{k:'scores',l:'📊 Scores'},{k:'backfill',l:'⏪ Backfill'},{k:'ic',l:'📈 IC Tracking'},{k:'decay',l:'📉 IC Decay'},{k:'staleness',l:'🔬 Staleness'}].forEach(function(t) {
     h += '<button class="bei-tab' + (scrScoreSubTab === t.k ? ' on' : '') + '" data-stab="' + t.k + '" onclick="scrScoreSubTab=\'' + t.k + '\';loadScoring()" style="padding:6px 14px;font-size:12px">' + t.l + '</button>';
   });
   h += '</div>';
@@ -536,19 +537,23 @@ function renderBackfillUI() {
   var body = $('score-body'); if (!body) return;
   var h = '<div style="padding:16px 12px">';
   h += '<div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px">⏪ Backfill Historical Scores</div>';
-  h += '<div style="font-size:10px;color:var(--t2);margin-bottom:14px;line-height:1.6">Compute composite scores for historical dates using current weights.<br>This enables IC tracking to validate scoring model quality.<br><span style="color:var(--am)">⚠ Note: Fundamental data uses latest snapshot (look-ahead bias for older dates). Momentum metrics are computed correctly per date.</span></div>';
+  h += '<div style="font-size:10px;color:var(--t2);margin-bottom:14px;line-height:1.6">Compute composite scores for historical dates using current weights.<br>This enables IC tracking to validate scoring model quality.<br><span style="color:var(--am)">⚠ Note: Without point-in-time mode, fundamental data uses latest snapshot (look-ahead bias for older dates). Momentum metrics are computed correctly per date.</span></div>';
 
   h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">';
   h += '<label style="font-size:10px;color:var(--t2)">From: <input type="date" id="bf-from" value="' + getDefaultFrom() + '" style="background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none"></label>';
   h += '<label style="font-size:10px;color:var(--t2)">To: <input type="date" id="bf-to" value="' + getDefaultTo() + '" style="background:var(--bg0);border:1px solid var(--b1);border-radius:3px;padding:3px 6px;color:var(--t1);font-family:var(--fm);font-size:10px;outline:none"></label>';
+  h += '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2);cursor:pointer" title="Use the most recent fundamental snapshot available at each scoring date, eliminating look-ahead bias"><input type="checkbox" id="bf-pit" checked style="accent-color:var(--bl)"> Point-in-time snapshots</label>';
   h += '<button onclick="runBackfill()" id="bf-btn" style="padding:5px 14px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:11px;font-family:var(--f);cursor:pointer">▶ Run Backfill</button>';
   h += '</div>';
 
   // Quick presets
-  h += '<div style="display:flex;gap:4px;margin-bottom:14px">';
+  h += '<div style="display:flex;gap:4px;margin-bottom:14px;align-items:center">';
   [{l:'Last 30 days', d:30},{l:'Last 60 days',d:60},{l:'Last 6 months',d:180},{l:'Last 1 year',d:365}].forEach(function(p) {
     h += '<button class="bei-sort-btn" onclick="setBackfillRange(' + p.d + ')" style="padding:3px 8px;font-size:9px">' + p.l + '</button>';
   });
+  h += '<span style="flex:1"></span>';
+  h += '<button onclick="clearBackfillRange()" class="bei-sort-btn" style="padding:3px 8px;font-size:9px;color:var(--am);border-color:var(--am)" title="Delete scored data within the selected date range">🗑 Clear Range</button>';
+  h += '<button onclick="clearBackfillAll()" class="bei-sort-btn" style="padding:3px 8px;font-size:9px;color:var(--rd);border-color:var(--rd)" title="Delete ALL backfilled score data">🗑 Clear All</button>';
   h += '</div>';
 
   h += '<div id="bf-status" style="font-size:10px;color:var(--t3);margin-bottom:12px"></div>';
@@ -588,11 +593,14 @@ async function runBackfill() {
   var wF = parseInt(($('sw-fundamental') || {}).value) || scrScoreWeights.fundamental;
   var wV = parseInt(($('sw-valuation') || {}).value) || scrScoreWeights.valuation;
   var wM = parseInt(($('sw-momentum') || {}).value) || scrScoreWeights.momentum;
+  var wD = parseInt(($('sw-demand') || {}).value) || scrScoreWeights.demand;
+  var wFr = parseInt(($('sw-foreign') || {}).value) || scrScoreWeights.foreign;
+  var pit = document.getElementById('bf-pit'); var usePIT = pit ? pit.checked : false;
 
   try {
     var r = await fetch('/api/idx/composite-score/backfill', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ from: from, to: to, w_fundamental: wF, w_valuation: wV, w_momentum: wM })
+      body: JSON.stringify({ from: from, to: to, w_fundamental: wF, w_valuation: wV, w_momentum: wM, w_demand: wD, w_foreign: wFr, point_in_time: usePIT })
     });
     var d = await r.json();
     if (d.ok) {
@@ -623,6 +631,49 @@ async function loadScoredDates() {
     h += '</div></div>';
     el.innerHTML = h;
   } catch (e) { el.innerHTML = 'Error loading dates'; }
+}
+
+async function clearBackfillRange() {
+  var from = document.getElementById('bf-from').value;
+  var to = document.getElementById('bf-to').value;
+  if (!from || !to) return;
+  if (!confirm('Delete all scored data from ' + from + ' to ' + to + '?')) return;
+  var status = document.getElementById('bf-status');
+  try {
+    var r = await fetch('/api/idx/composite-score/clear', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ from: from, to: to })
+    });
+    var d = await r.json();
+    if (d.ok) {
+      if (status) status.innerHTML = '<span style="color:var(--gn)">✅ Deleted ' + d.deleted + ' rows (' + from + ' → ' + to + ')</span>';
+    } else {
+      if (status) status.innerHTML = '<span style="color:var(--rd)">❌ ' + (d.error || 'Error') + '</span>';
+    }
+    loadScoredDates();
+  } catch (e) {
+    if (status) status.innerHTML = '<span style="color:var(--rd)">❌ ' + e.message + '</span>';
+  }
+}
+
+async function clearBackfillAll() {
+  if (!confirm('Delete ALL backfilled score data? This cannot be undone.')) return;
+  var status = document.getElementById('bf-status');
+  try {
+    var r = await fetch('/api/idx/composite-score/clear', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ all: true })
+    });
+    var d = await r.json();
+    if (d.ok) {
+      if (status) status.innerHTML = '<span style="color:var(--gn)">✅ Deleted ' + d.deleted + ' rows (all data cleared)</span>';
+    } else {
+      if (status) status.innerHTML = '<span style="color:var(--rd)">❌ ' + (d.error || 'Error') + '</span>';
+    }
+    loadScoredDates();
+  } catch (e) {
+    if (status) status.innerHTML = '<span style="color:var(--rd)">❌ ' + e.message + '</span>';
+  }
 }
 
 // ═══ IC DECAY + INFORMATION RATIO ═══
@@ -772,4 +823,153 @@ async function autoOptimizeWeights() {
     if (status) status.textContent = '❌ ' + e.message;
   }
   if (btn) { btn.disabled = false; btn.textContent = '⚡ Auto'; }
+}
+
+// ═══ IC STALENESS DECAY ANALYSIS ═══
+// Measures how fundamental score IC decays as snapshot data gets older
+// Requires: multi-snapshot idx_fundamental data + backfilled scores with point-in-time mode
+
+var icStaleHorizon = 5;
+
+async function loadICStaleness() {
+  var body = $('score-body'); if (!body) return;
+  body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--t3)">Loading staleness analysis...</div>';
+  try {
+    var r = await fetch('/api/idx/ic-staleness?horizon=' + icStaleHorizon);
+    var d = await r.json();
+    if (d.error) {
+      body.innerHTML = '<div class="ne" style="padding:30px">' + esc(d.error) + '<br><br><span style="font-size:10px;color:var(--t3)">Requirements:<br>1. Multiple fundamental snapshots in idx_fundamental (upload BEI XLSX monthly)<br>2. Backfill scores with "Point-in-time snapshots" enabled<br>3. Run Backfill for a date range that spans multiple snapshot months</span></div>';
+      return;
+    }
+    renderICStaleness(body, d);
+  } catch (e) { body.innerHTML = '<div class="ne">Error: ' + e.message + '</div>'; }
+}
+
+function renderICStaleness(el, d) {
+  var h = '<div style="padding:12px">';
+
+  // Header
+  h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">';
+  h += '<div style="font-size:14px;font-weight:700;color:var(--t1)">FUNDAMENTAL STALENESS DECAY</div>';
+  h += '<span style="font-size:10px;color:var(--t3)">Forward horizon:</span>';
+  [5, 10, 20].forEach(function(n) {
+    h += '<button class="bei-sort-btn' + (icStaleHorizon === n ? ' on' : '') + '" onclick="icStaleHorizon=' + n + ';loadICStaleness()" style="padding:3px 8px;font-size:10px">' + n + 'D</button>';
+  });
+  h += '<span style="flex:1"></span>';
+  if (d.snapshot_count != null) h += '<span style="font-size:10px;color:var(--t3)">' + d.snapshot_count + ' snapshots · ' + d.scored_dates + ' scored dates</span>';
+  h += '</div>';
+
+  // Interpretation box
+  h += '<div style="font-size:11px;color:var(--t2);margin-bottom:12px;padding:8px 10px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1);line-height:1.6">';
+  h += '<b>Staleness decay</b> answers: how quickly does fundamental data lose predictive power as it ages? ';
+  h += 'Each scored date uses the most recent snapshot available at that time. Data age = months between scoring date and that snapshot. ';
+  h += 'If IC drops significantly after N months, fundamental weight should be discounted when data is older than N months.';
+  h += '</div>';
+
+  // Summary cards
+  if (d.summary) {
+    var s = d.summary;
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+    h += '<div class="bd-card"><div class="bd-card-label">Fresh IC (0-1mo)</div><div class="bd-card-val"><span style="color:' + (s.fresh_ic > 0.05 ? 'var(--gn)' : s.fresh_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.fresh_ic != null ? s.fresh_ic.toFixed(4) : '—') + '</span></div></div>';
+    h += '<div class="bd-card"><div class="bd-card-label">Stale IC (3+mo)</div><div class="bd-card-val"><span style="color:' + (s.stale_ic > 0.05 ? 'var(--gn)' : s.stale_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.stale_ic != null ? s.stale_ic.toFixed(4) : '—') + '</span></div></div>';
+    h += '<div class="bd-card"><div class="bd-card-label">IC Drop</div><div class="bd-card-val"><span style="color:' + (s.ic_drop_pct > 50 ? 'var(--rd)' : s.ic_drop_pct > 25 ? 'var(--am)' : 'var(--gn)') + '">' + (s.ic_drop_pct != null ? s.ic_drop_pct.toFixed(1) + '%' : '—') + '</span></div></div>';
+    if (s.recommended_max_age != null) {
+      h += '<div class="bd-card"><div class="bd-card-label">Max Useful Age</div><div class="bd-card-val"><span style="color:var(--bl)">' + s.recommended_max_age + ' months</span></div></div>';
+    }
+    h += '</div>';
+
+    // Recommendation
+    h += '<div style="font-size:11px;padding:8px 10px;border-radius:4px;margin-bottom:12px;line-height:1.6;';
+    if (s.ic_drop_pct > 50) {
+      h += 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);color:var(--rd)">';
+      h += '⚠ <b>Significant staleness decay detected.</b> Fundamental IC drops ' + s.ic_drop_pct.toFixed(0) + '% after data ages beyond ' + (s.recommended_max_age || 3) + ' months. Consider discounting fundamental weight for stocks with stale data, or increase upload frequency.';
+    } else if (s.ic_drop_pct > 25) {
+      h += 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);color:var(--am)">';
+      h += '⚡ <b>Moderate staleness effect.</b> Fundamental IC decays ' + s.ic_drop_pct.toFixed(0) + '% with age. Data beyond ' + (s.recommended_max_age || 6) + ' months should be treated with caution.';
+    } else {
+      h += 'background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);color:var(--gn)">';
+      h += '✅ <b>Minimal staleness decay.</b> Fundamental data retains predictive power even when ' + (s.recommended_max_age || 6) + '+ months old. Current upload frequency is adequate.';
+    }
+    h += '</div>';
+  }
+
+  // Chart
+  h += '<div style="border:1px solid var(--b1);border-radius:4px;overflow:hidden;background:var(--bg2);margin-bottom:12px">' + BL.container('ic-stale-chart', 300) + '</div>';
+
+  // Decay table by age bucket
+  if (d.buckets && d.buckets.length) {
+    h += '<table class="bei-tbl" style="font-size:12px"><thead style="font-size:10px"><tr>';
+    h += '<th class="al">Data Age</th><th class="ar">Samples</th><th class="ar">IC Fund</th><th class="ar">IC Val</th><th class="ar">IC Comp</th><th class="ar">Std IC</th><th class="ar">IR</th><th class="ar">Hit Rate</th>';
+    h += '</tr></thead><tbody>';
+    d.buckets.forEach(function(b) {
+      var icC = b.ic_fundamental > 0.05 ? 'var(--gn)' : b.ic_fundamental > 0 ? 'var(--am)' : 'var(--rd)';
+      var irC = b.ir > 0.5 ? 'var(--gn)' : b.ir > 0.2 ? 'var(--am)' : 'var(--t3)';
+      var hrC = b.hit_rate > 55 ? 'var(--gn)' : b.hit_rate < 45 ? 'var(--rd)' : 'var(--t2)';
+      h += '<tr>';
+      h += '<td class="al" style="font-weight:600">' + esc(b.label) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + b.n + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + icC + ';font-weight:600">' + b.ic_fundamental.toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm)">' + b.ic_valuation.toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);font-weight:700">' + b.ic_composite.toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + b.std_ic.toFixed(4) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + irC + ';font-weight:700">' + b.ir.toFixed(3) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + hrC + '">' + b.hit_rate.toFixed(1) + '%</td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+  }
+
+  // Discount table suggestion
+  if (d.discount_schedule && d.discount_schedule.length) {
+    h += '<div style="margin-top:12px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">SUGGESTED STALENESS DISCOUNT</div>';
+    h += '<div style="font-size:10px;color:var(--t3);margin-bottom:6px">Apply this multiplier to fundamental weight based on data age:</div>';
+    h += '<div style="display:flex;gap:4px;flex-wrap:wrap">';
+    d.discount_schedule.forEach(function(ds) {
+      var bg = ds.multiplier >= 0.8 ? 'rgba(34,197,94,0.1)' : ds.multiplier >= 0.5 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)';
+      var c = ds.multiplier >= 0.8 ? 'var(--gn)' : ds.multiplier >= 0.5 ? 'var(--am)' : 'var(--rd)';
+      h += '<div style="padding:6px 10px;border-radius:4px;background:' + bg + ';text-align:center;min-width:70px">';
+      h += '<div style="font-size:13px;font-weight:700;font-family:var(--fm);color:' + c + '">' + (ds.multiplier * 100).toFixed(0) + '%</div>';
+      h += '<div style="font-size:9px;color:var(--t3)">' + esc(ds.label) + '</div>';
+      h += '</div>';
+    });
+    h += '</div></div>';
+  }
+
+  h += '</div>';
+  el.innerHTML = h;
+
+  // Render chart
+  setTimeout(function() { icStalenessRenderChart(d); }, 50);
+}
+
+function icStalenessRenderChart(d) {
+  if (!d.buckets || !d.buckets.length) return;
+  var el = $('ic-stale-chart'); if (!el) return;
+  var c = BL.init(el, 'ic-stale'); if (!c) return;
+
+  var labels = d.buckets.map(function(b) { return b.label; });
+
+  c.setOption({
+    tooltip: { trigger: 'axis', textStyle: { fontSize: 10 } },
+    legend: { show: true, top: 0, textStyle: { color: '#8a9bb5', fontSize: 9 } },
+    grid: { left: 50, right: 50, top: 36, bottom: 30 },
+    xAxis: {
+      type: 'category', data: labels, name: 'Data Age',
+      nameTextStyle: { color: '#8a9bb5', fontSize: 9 },
+      axisLabel: { color: '#8a9bb5', fontSize: 10 },
+      axisLine: { lineStyle: { color: '#2a3f5f' } }
+    },
+    yAxis: [
+      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(3); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
+      { type: 'value', name: 'IR', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, position: 'right', axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { show: false } }
+    ],
+    series: [
+      { name: 'IC Fund', type: 'line', yAxisIndex: 0, data: d.buckets.map(function(b) { return b.ic_fundamental; }), lineStyle: { color: '#22c55e', width: 2.5 }, itemStyle: { color: '#22c55e' }, symbol: 'circle', symbolSize: 8 },
+      { name: 'IC Val', type: 'line', yAxisIndex: 0, data: d.buckets.map(function(b) { return b.ic_valuation; }), lineStyle: { color: '#0ea5e9', width: 1.5 }, itemStyle: { color: '#0ea5e9' }, symbol: 'circle', symbolSize: 5 },
+      { name: 'IC Comp', type: 'line', yAxisIndex: 0, data: d.buckets.map(function(b) { return b.ic_composite; }), lineStyle: { color: '#e0e6ed', width: 2, type: 'dashed' }, itemStyle: { color: '#e0e6ed' }, symbol: 'diamond', symbolSize: 6 },
+      { name: 'IR', type: 'bar', yAxisIndex: 1, data: d.buckets.map(function(b) { return b.ir; }), itemStyle: { color: function(p) { return p.value >= 0.5 ? 'rgba(34,197,94,0.3)' : p.value >= 0.2 ? 'rgba(245,158,11,0.25)' : 'rgba(239,68,68,0.2)'; } }, barWidth: '30%' },
+      { name: 'Samples', type: 'bar', yAxisIndex: 1, data: d.buckets.map(function(b) { return 0; }), tooltip: { show: false }, barWidth: 0 }
+    ]
+  });
 }

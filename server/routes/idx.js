@@ -45,6 +45,44 @@ module.exports = function(upload) {
     } catch (e) { res.json({ count: 0, codes: [], error: e.message }); }
   });
 
+  // ═══ Point-in-time snapshot helpers (IC Staleness) ═══
+  function getFundSnapshotMonths() {
+    try {
+      return db.prepare('SELECT DISTINCT snapshot_month FROM idx_fundamental ORDER BY snapshot_month').all().map(r => r.snapshot_month);
+    } catch { return []; }
+  }
+  function getPointInTimeSnapshot(scoringDate, snapshotMonths) {
+    const scoringMonth = scoringDate.substring(0, 7);
+    for (let i = snapshotMonths.length - 1; i >= 0; i--) {
+      if (snapshotMonths[i] <= scoringMonth) return snapshotMonths[i];
+    }
+    return snapshotMonths.length ? snapshotMonths[0] : null;
+  }
+  function calcDataAgeMonths(scoringDate, snapshotMonth) {
+    if (!scoringDate || !snapshotMonth) return null;
+    const sd = new Date(scoringDate + 'T00:00:00');
+    const sm = new Date(snapshotMonth + '-01T00:00:00');
+    return (sd.getFullYear() - sm.getFullYear()) * 12 + (sd.getMonth() - sm.getMonth());
+  }
+  // Normalize fs_date from MM/DD/YYYY or YYYY-MM-DD to YYYY-MM-DD
+  function normalizeFsDateGlobal(fd) {
+    if (!fd) return null;
+    if (/^\d{4}-\d{2}/.test(fd)) return fd.substring(0, 10);
+    var parts = fd.split('/');
+    if (parts.length === 3) return parts[2] + '-' + parts[0].padStart(2, '0') + '-' + parts[1].padStart(2, '0');
+    return null;
+  }
+  // Compute data age in months: scoring_date vs fs_date (fiscal period end)
+  // This is per-stock — each company has different fs_date
+  function calcFsAge(scoringDate, fsDateRaw) {
+    const fd = normalizeFsDateGlobal(fsDateRaw);
+    if (!fd || !scoringDate) return null;
+    const sd = new Date(scoringDate + 'T00:00:00');
+    const fs = new Date(fd + 'T00:00:00');
+    if (isNaN(fs.getTime())) return null;
+    return (sd.getFullYear() - fs.getFullYear()) * 12 + (sd.getMonth() - fs.getMonth());
+  }
+
   // Top rankings
   router.get('/top', (req, res) => {
     const sort = req.query.sort || 'foreign_net';
@@ -958,7 +996,7 @@ module.exports = function(upload) {
       // ── 5. Dividend yield ──
       const divMap = {};
       try {
-        db.prepare('SELECT code, cash_dividend FROM dividends WHERE (code, ex_date) IN (SELECT code, MAX(ex_date) FROM dividends GROUP BY code)').all()
+        db.prepare('SELECT code, cash_dividend FROM bei_dividends WHERE (code, ex_date) IN (SELECT code, MAX(ex_date) FROM bei_dividends GROUP BY code)').all()
           .forEach(r => { divMap[r.code] = r.cash_dividend; });
       } catch {}
 
@@ -1047,7 +1085,7 @@ module.exports = function(upload) {
         [...new Set(Object.values(COMMODITY_TICKER_MAP))].forEach(cmdCode => {
           const ohlcCodes = COMMODITY_OHLC_MAP[cmdCode] || [cmdCode];
           for (const oc of ohlcCodes) {
-            const rows = db.prepare('SELECT date, close FROM custom_ohlc WHERE code=? ORDER BY date DESC LIMIT 30').all(oc);
+            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(oc);
             if (rows.length >= 6) {
               const now = rows[0].close, d5 = rows[5]?.close || now, d20 = rows[Math.min(20, rows.length-1)]?.close || now;
               commodityMomentum[cmdCode] = { code: oc, price: now,
@@ -1291,7 +1329,7 @@ module.exports = function(upload) {
   // ═══ BACKFILL SCORES — calculate for historical dates ═══
   router.post('/composite-score/backfill', (req, res) => {
     try {
-      const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign } = req.body || {};
+      const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign, point_in_time } = req.body || {};
       if (!from || !to) return res.status(400).json({ error: 'from and to required (YYYY-MM-DD)' });
       const wF = parseFloat(w_fundamental) || 25;
       const wV = parseFloat(w_valuation) || 20;
@@ -1304,24 +1342,91 @@ module.exports = function(upload) {
       const tradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily WHERE trade_date>=? AND trade_date<=? ORDER BY trade_date').all(from, to).map(r => r.trade_date);
       if (!tradeDates.length) return res.json({ ok: false, error: 'No trade dates in range' });
 
-      // Fundamental data (single snapshot — acknowledge bias for older dates)
-      const { latestFundDate } = require('../db');
-      const fm = latestFundDate();
-      const fundMap = {};
-      if (fm) {
-        db.prepare('SELECT code, name, sector, industry, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(fm)
-          .forEach(f => { fundMap[f.code] = f; });
+      // Point-in-time mode: get all available snapshot months
+      const snapshotMonths = point_in_time ? getFundSnapshotMonths() : [];
+      const usePIT = point_in_time && snapshotMonths.length > 1;
+
+      // Fundamental data — either point-in-time or latest snapshot
+      let fundMapGlobal = null; // will be set once if NOT PIT mode
+      let globalSnapshot = null;
+      if (!usePIT) {
+        const { latestFundDate } = require('../db');
+        const fm = latestFundDate();
+        globalSnapshot = fm;
+        if (fm) {
+          fundMapGlobal = {};
+          db.prepare('SELECT code, name, sector, industry, per, pbv, roe, roa, der, npm, fs_date FROM idx_fundamental WHERE snapshot_month=?').all(fm)
+            .forEach(f => { fundMapGlobal[f.code] = f; });
+        }
       }
-      const indMedian = {};
-      if (fm) {
-        db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(fm)
-          .forEach(r => { indMedian[r.industry] = r; });
+
+      // Cache for PIT mode: snapshot_month → fundMap
+      const pitCache = {};
+      function getPITFundMap(tradeDate) {
+        if (!usePIT) return { map: fundMapGlobal || {}, snapshot: globalSnapshot };
+        const snap = getPointInTimeSnapshot(tradeDate, snapshotMonths);
+        if (!snap) return { map: {}, snapshot: null };
+        if (!pitCache[snap]) {
+          pitCache[snap] = {};
+          db.prepare('SELECT code, name, sector, industry, per, pbv, roe, roa, der, npm, fs_date FROM idx_fundamental WHERE snapshot_month=?').all(snap)
+            .forEach(f => { pitCache[snap][f.code] = f; });
+        }
+        return { map: pitCache[snap], snapshot: snap };
+      }
+      // Industry medians — also per-snapshot for PIT mode
+      const indMedianCache = {};
+      function getIndMedian(snapshot) {
+        if (!snapshot) return {};
+        if (indMedianCache[snapshot]) return indMedianCache[snapshot];
+        indMedianCache[snapshot] = {};
+        db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(snapshot)
+          .forEach(r => { indMedianCache[snapshot][r.industry] = r; });
+        return indMedianCache[snapshot];
       }
       const divMap = {};
       try {
-        db.prepare('SELECT code, cash_dividend FROM dividends WHERE (code, ex_date) IN (SELECT code, MAX(ex_date) FROM dividends GROUP BY code)').all()
+        db.prepare('SELECT code, cash_dividend FROM bei_dividends WHERE (code, ex_date) IN (SELECT code, MAX(ex_date) FROM bei_dividends GROUP BY code)').all()
           .forEach(r => { divMap[r.code] = r.cash_dividend; });
       } catch {}
+
+      // Commodity helpers (duplicated from composite-score handler for scope access)
+      const COMMODITY_TICKER_MAP_BF = {
+        'ADRO':'COAL','PTBA':'COAL','ITMG':'COAL','BUMI':'COAL','HRUM':'COAL','MBAP':'COAL','GEMS':'COAL',
+        'AALI':'CPO','LSIP':'CPO','SIMP':'CPO','SSMS':'CPO','TBLA':'CPO','SGRO':'CPO','DSNG':'CPO',
+        'ANTM':'NICKEL','INCO':'NICKEL','MDKA':'NICKEL','NCKL':'NICKEL',
+        'TINS':'TIN','BRMS':'GOLD','ARCI':'GOLD','PSAB':'GOLD',
+        'MEDC':'OIL','ELSA':'OIL','AKRA':'OIL','ESSA':'OIL'
+      };
+      const COMMODITY_OHLC_MAP_BF = {
+        'CPO':['CPO'],'COAL':['COAL','NCF'],'NICKEL':['NICKEL','HGK6'],
+        'GOLD':['XAUUSD'],'TIN':['TIN'],'OIL':['BRENT','CRUDE']
+      };
+      function getCommodityCode(code, sector, industry) {
+        if (COMMODITY_TICKER_MAP_BF[code]) return COMMODITY_TICKER_MAP_BF[code];
+        const kw = ((sector||'')+' '+(industry||'')).toLowerCase();
+        if (kw.includes('palm')||kw.includes('plantation')||kw.includes('sawit')) return 'CPO';
+        if (kw.includes('coal')||kw.includes('batubara')) return 'COAL';
+        if (kw.includes('nickel')||kw.includes('nikel')) return 'NICKEL';
+        if (kw.includes('gold')||kw.includes('emas')) return 'GOLD';
+        if (kw.includes('tin')||kw.includes('timah')) return 'TIN';
+        if (kw.includes('oil')||kw.includes('gas')||kw.includes('minyak')) return 'OIL';
+        return null;
+      }
+      const commodityMomentum = {};
+      try {
+        [...new Set(Object.values(COMMODITY_TICKER_MAP_BF))].forEach(cmdCode => {
+          const ohlcCodes = COMMODITY_OHLC_MAP_BF[cmdCode] || [cmdCode];
+          for (const oc of ohlcCodes) {
+            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(oc);
+            if (rows.length >= 6) {
+              const now = rows[0].close, d5 = rows[5]?.close || now, d20 = rows[Math.min(20, rows.length-1)]?.close || now;
+              commodityMomentum[cmdCode] = { code: oc, price: now,
+                ret5d: d5>0 ? (now-d5)/d5*100 : 0, ret20d: d20>0 ? (now-d20)/d20*100 : 0 };
+              break;
+            }
+          }
+        });
+      } catch(e) {}
 
       // Helper functions (same as single-day calc)
       function calcMA(closes, n) { if (closes.length < n) return 0; return closes.slice(-n).reduce((s, v) => s + v, 0) / n; }
@@ -1370,13 +1475,19 @@ module.exports = function(upload) {
         rsi14,macd,macd_signal,macd_hist,ret_5d,ret_20d,fnet_5d,fnet_dir,
         bid_offer_ratio,bid_offer_5d,rel_vol,freq_spike,val_spike,
         fnet_10d,fnet_20d,foreign_pct_val,foreign_accum_streak,fnet_vs_avg,
-        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign)
-        VALUES(${Array(56).fill('?').join(',')})`);
+        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign,
+        fund_snapshot_month,data_age_months)
+        VALUES(${Array(58).fill('?').join(',')})`);
 
       let totalScored = 0;
 
       db.transaction(() => {
         tradeDates.forEach(td => {
+          // Get PIT or global fundamental data for this trade date
+          const { map: fundMap, snapshot: usedSnap } = getPITFundMap(td);
+          const indMedian = getIndMedian(usedSnap);
+          // dataAge computed per-stock below using fs_date
+
           // Get stocks for this date
           const dayStocks = [];
           Object.keys(allHist).forEach(code => {
@@ -1405,6 +1516,8 @@ module.exports = function(upload) {
             const allFSells = [...pre.map(x => (x.foreign_sell || 0) * x.close), ...cur.map(x => (x.foreign_sell || 0) * x.close)];
 
             const fund = fundMap[code] || {};
+            // Per-stock data age: scoring_date vs fiscal period end (fs_date)
+            const stockFsAge = calcFsAge(td, fund.fs_date);
             const chgPct = r.prev_close > 0 ? Math.round((r.close - r.prev_close) / r.prev_close * 10000) / 100 : 0;
             const ma5 = Math.round(calcMA(allCloses, 5));
             const ma10 = Math.round(calcMA(allCloses, 10));
@@ -1466,7 +1579,8 @@ module.exports = function(upload) {
               bid_offer_ratio: bidOfferRatio, bid_offer_5d: bidOffer5d,
               rel_vol: relVol, freq_spike: freqSpike, val_spike: valSpike,
               fnet_10d: fnet10, fnet_20d: fnet20,
-              foreign_pct_val: foreignPctVal, foreign_accum_streak: accumStreak, fnet_vs_avg: fnetVsAvg
+              foreign_pct_val: foreignPctVal, foreign_accum_streak: accumStreak, fnet_vs_avg: fnetVsAvg,
+              _fs_age: stockFsAge
             });
           });
 
@@ -1516,7 +1630,8 @@ module.exports = function(upload) {
               r.rsi14, r.macd, r.macd_signal, r.macd_hist, r.ret_5d, r.ret_20d, r.fnet_5d, r.fnet_dir,
               r.bid_offer_ratio, r.bid_offer_5d, r.rel_vol, r.freq_spike, r.val_spike,
               r.fnet_10d, r.fnet_20d, r.foreign_pct_val, r.foreign_accum_streak, r.fnet_vs_avg,
-              wF, wV, wM, wD, wFR);
+              wF, wV, wM, wD, wFR,
+              usedSnap, r._fs_age);
           });
           totalScored += top.length;
         });
@@ -1625,6 +1740,25 @@ module.exports = function(upload) {
     } catch (e) { res.json({ dates: [] }); }
   });
 
+  // ═══ CLEAR BACKFILL DATA ═══
+  router.post('/composite-score/clear', (req, res) => {
+    try {
+      const { from, to, all } = req.body || {};
+      let deleted = 0;
+      if (all) {
+        const info = db.prepare('DELETE FROM daily_scores').run();
+        deleted = info.changes;
+        try { db.prepare('DELETE FROM ic_staleness_results').run(); } catch(e) {}
+      } else if (from && to) {
+        const info = db.prepare('DELETE FROM daily_scores WHERE calc_date >= ? AND calc_date <= ?').run(from, to);
+        deleted = info.changes;
+      } else {
+        return res.status(400).json({ error: 'Specify from/to range or all:true' });
+      }
+      res.json({ ok: true, deleted });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ═══ IC DECAY + INFORMATION RATIO ═══
   // Computes IC at multiple horizons to show signal decay curve
   router.get('/ic-decay', (req, res) => {
@@ -1724,6 +1858,218 @@ module.exports = function(upload) {
         factors: ['composite', 'fundamental', 'valuation', 'momentum', 'demand', 'foreign']
       });
     } catch (e) { res.json({ error: e.message, data: [] }); }
+  });
+
+  // ═══ IC STALENESS DECAY — simulated fundamental data age vs predictiveness ═══
+  // Works with continuous monthly snapshots: for each scoring date, re-computes
+  // fundamental score using progressively older snapshots (0, 1, 2, 3, 6 months back)
+  // and measures how IC decays as snapshot gets older.
+  router.get('/ic-staleness', (req, res) => {
+    try {
+      const horizon = parseInt(req.query.horizon) || 5;
+      const limit = Math.min(parseInt(req.query.limit) || 120, 250);
+
+      const snapshots = getFundSnapshotMonths();
+      if (snapshots.length < 3) {
+        return res.json({ error: 'Need at least 3 fundamental snapshots. Currently have ' + snapshots.length + '. Upload more monthly BEI XLSX files.' });
+      }
+
+      // Get scored dates (need PIT backfill data)
+      const scoredDates = db.prepare('SELECT DISTINCT calc_date FROM daily_scores WHERE fund_snapshot_month IS NOT NULL ORDER BY calc_date DESC LIMIT ?').all(limit).map(r => r.calc_date);
+      if (scoredDates.length < 10) {
+        return res.json({ error: 'Need at least 10 scored dates with point-in-time data (' + scoredDates.length + ' found). Run Backfill with PIT enabled.' });
+      }
+      scoredDates.reverse();
+
+      const allTradeDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+      const tdIndex = {};
+      allTradeDates.forEach((d, i) => { tdIndex[d] = i; });
+
+      function spearmanIC(pairs) {
+        const n = pairs.length; if (n < 10) return null;
+        const byS = pairs.slice().sort((a, b) => a.s - b.s);
+        const byR = pairs.slice().sort((a, b) => a.r - b.r);
+        const rankS = {}, rankR = {};
+        byS.forEach((p, i) => { rankS[p.code] = i + 1; });
+        byR.forEach((p, i) => { rankR[p.code] = i + 1; });
+        let d2 = 0;
+        pairs.forEach(p => { const d = (rankS[p.code] || 0) - (rankR[p.code] || 0); d2 += d * d; });
+        return Math.round((1 - 6 * d2 / (n * (n * n - 1))) * 10000) / 10000;
+      }
+
+      // Staleness offsets to test: "what if data was N months older?"
+      const offsets = [0, 1, 2, 3, 6];
+
+      // For each offset, collect IC values across all scored dates
+      const offsetICs = {};
+      offsets.forEach(o => { offsetICs[o] = { fund: [], val: [], comp: [], nPairs: 0 }; });
+
+      // Cache: snapshot_month → { code → { per, pbv, roe, roa, der, npm } }
+      const fundCache = {};
+      function loadFundSnap(sm) {
+        if (fundCache[sm]) return fundCache[sm];
+        fundCache[sm] = {};
+        try {
+          db.prepare('SELECT code, per, pbv, roe, roa, der, npm FROM idx_fundamental WHERE snapshot_month=?').all(sm)
+            .forEach(r => { fundCache[sm][r.code] = r; });
+        } catch(e) {}
+        return fundCache[sm];
+      }
+
+      // Industry medians per snapshot
+      const indMedCache = {};
+      function loadIndMedian(sm) {
+        if (indMedCache[sm]) return indMedCache[sm];
+        indMedCache[sm] = {};
+        try {
+          db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(sm)
+            .forEach(r => { indMedCache[sm][r.industry] = r; });
+        } catch(e) {}
+        return indMedCache[sm];
+      }
+
+      // Re-score fundamental + valuation using a specific snapshot
+      function reScoreFundVal(code, industry, snapshot) {
+        const fm = loadFundSnap(snapshot);
+        const fund = fm[code];
+        if (!fund) return null;
+        const im = loadIndMedian(snapshot);
+        const indM = industry ? (im[industry] || {}) : {};
+        return {
+          roe: fund.roe || 0, roa: fund.roa || 0, npm: fund.npm || 0, der: fund.der || 0,
+          per: fund.per || 0, pbv: fund.pbv || 0,
+          per_vs_ind: fund.per > 0 && indM.avg_per > 0 ? (fund.per / indM.avg_per - 1) * 100 : 0,
+          pbv_vs_ind: fund.pbv > 0 && indM.avg_pbv > 0 ? (fund.pbv / indM.avg_pbv - 1) * 100 : 0
+        };
+      }
+
+      // Go month back from snapshot_month
+      function monthsBack(sm, n) {
+        const [y, m] = sm.split('-').map(Number);
+        const d = new Date(y, m - 1 - n, 1);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      }
+
+      for (const calcDate of scoredDates) {
+        const fwdIdx = (tdIndex[calcDate] || 0) + horizon;
+        if (fwdIdx >= allTradeDates.length) continue;
+        const fwdDate = allTradeDates[fwdIdx];
+
+        // Get scores + the snapshot that was used
+        const scores = db.prepare('SELECT code, score_composite, score_fundamental, score_valuation, score_momentum, score_demand, score_foreign, close, fund_snapshot_month, industry FROM daily_scores WHERE calc_date=? AND fund_snapshot_month IS NOT NULL').all(calcDate);
+        if (scores.length < 20) continue;
+
+        // Forward returns
+        const codes = scores.map(s => s.code);
+        const ph = codes.map(() => '?').join(',');
+        const fwdMap = {};
+        db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+          .forEach(r => { fwdMap[r.code] = r.close; });
+
+        // Build return map
+        const retMap = {};
+        scores.forEach(s => {
+          if (fwdMap[s.code] && s.close > 0) retMap[s.code] = (fwdMap[s.code] - s.close) / s.close * 100;
+        });
+        if (Object.keys(retMap).length < 15) continue;
+
+        // For each staleness offset, re-score using older snapshot
+        for (const offset of offsets) {
+          const pairs = [];
+          for (const s of scores) {
+            if (retMap[s.code] == null) continue;
+
+            if (offset === 0) {
+              // Use actual scores (fresh snapshot)
+              pairs.push({ code: s.code, sf: s.score_fundamental || 0, sv: s.score_valuation || 0, sc: s.score_composite || 0, r: retMap[s.code] });
+            } else {
+              // Re-score with older snapshot
+              const olderSnap = monthsBack(s.fund_snapshot_month, offset);
+              if (snapshots.indexOf(olderSnap) < 0) continue; // snapshot doesn't exist
+              const fs = reScoreFundVal(s.code, s.industry, olderSnap);
+              if (!fs) continue;
+              // Rough fundamental score: average of rankings (can't rank without all stocks, use raw values as proxy)
+              const fundProxy = Math.max(0, Math.min(100, (fs.roe > 0 ? 50 + fs.roe : 20) * 0.3 + (fs.roa > 0 ? 50 + fs.roa * 3 : 20) * 0.2 + (fs.npm > 0 ? 50 + fs.npm : 20) * 0.3 + (fs.der < 1 ? 70 : fs.der < 2 ? 50 : 20) * 0.2));
+              const valProxy = Math.max(0, Math.min(100, (fs.per_vs_ind < 0 ? 60 - fs.per_vs_ind * 0.3 : 40 - fs.per_vs_ind * 0.3) * 0.5 + (fs.pbv_vs_ind < 0 ? 60 - fs.pbv_vs_ind * 0.3 : 40 - fs.pbv_vs_ind * 0.3) * 0.5));
+              // Keep momentum/demand/foreign from original (they're price-based, not affected by fundamental staleness)
+              const compProxy = (fundProxy * 0.25 + valProxy * 0.20 + (s.score_momentum || 50) * 0.20 + (s.score_demand || 50) * 0.20 + (s.score_foreign || 50) * 0.15);
+              pairs.push({ code: s.code, sf: fundProxy, sv: valProxy, sc: compProxy, r: retMap[s.code] });
+            }
+          }
+
+          if (pairs.length >= 15) {
+            const icF = spearmanIC(pairs.map(p => ({ code: p.code, s: p.sf, r: p.r })));
+            const icV = spearmanIC(pairs.map(p => ({ code: p.code, s: p.sv, r: p.r })));
+            const icC = spearmanIC(pairs.map(p => ({ code: p.code, s: p.sc, r: p.r })));
+            if (icF != null) offsetICs[offset].fund.push(icF);
+            if (icV != null) offsetICs[offset].val.push(icV);
+            if (icC != null) offsetICs[offset].comp.push(icC);
+            offsetICs[offset].nPairs += pairs.length;
+          }
+        }
+      }
+
+      // Compute average IC per offset
+      const buckets = [];
+      const labels = { 0: 'Fresh (0mo)', 1: '1 month old', 2: '2 months old', 3: '3 months old', 6: '6 months old' };
+      offsets.forEach(o => {
+        const d = offsetICs[o];
+        if (d.fund.length < 3) return;
+        const avgF = d.fund.reduce((a, v) => a + v, 0) / d.fund.length;
+        const avgV = d.val.reduce((a, v) => a + v, 0) / d.val.length;
+        const avgC = d.comp.reduce((a, v) => a + v, 0) / d.comp.length;
+        const stdC = d.comp.length >= 2 ? Math.sqrt(d.comp.reduce((a, v) => a + (v - avgC) * (v - avgC), 0) / (d.comp.length - 1)) : 0;
+        const ir = stdC > 0 ? avgC / stdC : 0;
+        // Hit rate from composite
+        const hitRate = d.comp.filter(ic => ic > 0).length / d.comp.length * 100;
+        buckets.push({
+          key: String(o), label: labels[o] || o + ' mo old', n: d.nPairs, dates: d.fund.length,
+          ic_fundamental: Math.round(avgF * 10000) / 10000,
+          ic_valuation: Math.round(avgV * 10000) / 10000,
+          ic_composite: Math.round(avgC * 10000) / 10000,
+          std_ic: Math.round(stdC * 10000) / 10000,
+          ir: Math.round(ir * 1000) / 1000,
+          hit_rate: Math.round(hitRate * 10) / 10
+        });
+      });
+
+      if (buckets.length < 2) {
+        return res.json({ error: 'Could not compute staleness for enough offsets. Need snapshots going back at least 2 months from your scored dates. You have ' + snapshots.length + ' snapshots: ' + snapshots[0] + ' to ' + snapshots[snapshots.length - 1] });
+      }
+
+      // Summary
+      const freshB = buckets[0];
+      const freshIC = freshB ? freshB.ic_fundamental : 0;
+      const staleB = buckets.length >= 3 ? buckets[buckets.length - 1] : buckets[1];
+      const staleIC = staleB ? staleB.ic_fundamental : 0;
+      const icDropPct = freshIC > 0 ? Math.round((freshIC - staleIC) / Math.abs(freshIC) * 1000) / 10 : 0;
+      let recommendedMaxAge = 6;
+      for (const b of buckets) {
+        const o = parseInt(b.key);
+        if (o > 0 && freshIC > 0 && b.ic_fundamental < freshIC * 0.5) { recommendedMaxAge = o; break; }
+      }
+
+      const discountSchedule = buckets.map(b => ({
+        label: b.label,
+        multiplier: freshIC > 0 ? Math.round(Math.max(0, Math.min(1, b.ic_fundamental / freshIC)) * 100) / 100 : 1
+      }));
+
+      // Cache results
+      try {
+        const ins = db.prepare('INSERT OR REPLACE INTO ic_staleness_results(horizon,age_bucket,age_label,n_samples,ic_fundamental,ic_valuation,ic_composite,std_ic,ir,hit_rate) VALUES(?,?,?,?,?,?,?,?,?,?)');
+        db.transaction(() => {
+          db.prepare('DELETE FROM ic_staleness_results WHERE horizon=?').run(horizon);
+          buckets.forEach(b => { ins.run(horizon, b.key, b.label, b.n, b.ic_fundamental, b.ic_valuation, b.ic_composite, b.std_ic, b.ir, b.hit_rate); });
+        })();
+      } catch (e) { console.error('Staleness cache error:', e.message); }
+
+      res.json({
+        horizon, snapshot_count: snapshots.length, scored_dates: scoredDates.length,
+        buckets,
+        summary: { fresh_ic: freshIC, stale_ic: Math.round(staleIC * 10000) / 10000, ic_drop_pct: icDropPct, recommended_max_age: recommendedMaxAge },
+        discount_schedule: discountSchedule
+      });
+    } catch (e) { console.error('IC Staleness error:', e); res.json({ error: e.message }); }
   });
 
   // ═══ OPTIMIZE WEIGHTS — Grid Search ═══
@@ -2802,11 +3148,111 @@ module.exports = function(upload) {
         }
       } catch (e) {}
 
-      res.json({ date: today, global, commodities, idx, sectors });
+      // ── Level 1.5: Macro Signals (VIX, DXY, US10Y, BDI, USDIDR) ──
+      let macro_signals = null;
+      try {
+        const macroTickers = db.prepare("SELECT code, name, category FROM custom_tickers WHERE category IN ('macro','currency') ORDER BY code").all();
+        if (macroTickers.length) {
+          const signals = [];
+          let bullPoints = 0, bearPoints = 0;
+
+          // Macro interpretation rules
+          const MACRO_RULES = {
+            'VIX':    { emoji: '😨', high: 25, low: 15, label: 'Fear Index',      highBear: true },
+            'DXY':    { emoji: '💵', high: 105, low: 100, label: 'Dollar Strength', highBear: true },
+            'US10Y':  { emoji: '📈', high: 4.5, low: 3.5, label: '10Y Yield',      highBear: true },
+            'BDI':    { emoji: '🚢', high: 2000, low: 1000, label: 'Baltic Dry',   highBear: false },
+            'BAID':   { emoji: '🚢', high: 2000, low: 1000, label: 'Baltic Dirty', highBear: false },
+            'USDIDR': { emoji: '💱', high: 16500, low: 15500, label: 'USD/IDR',    highBear: true }
+          };
+
+          macroTickers.forEach(t => {
+            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(t.code);
+            if (!rows.length) return;
+            const now = rows[0].close;
+            const d5 = rows[4] ? rows[4].close : now;
+            const d20 = rows[19] ? rows[19].close : now;
+            const chg5 = d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0;
+            const chg20 = d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0;
+            const rule = MACRO_RULES[t.code] || { emoji: '📊', high: now * 1.1, low: now * 0.9, label: t.name || t.code, highBear: false };
+
+            let bull = 0, bear = 0, detail = '';
+            if (rule.highBear) {
+              // High = bearish (VIX, DXY, US10Y, USDIDR)
+              if (now > rule.high) { bear += 1; detail = 'Above ' + rule.high + ' — bearish'; }
+              else if (now < rule.low) { bull += 1; detail = 'Below ' + rule.low + ' — bullish'; }
+              else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
+              if (chg5 > 3) { bear += 1; detail += ', rising fast'; }
+              else if (chg5 < -3) { bull += 1; detail += ', falling fast'; }
+            } else {
+              // High = bullish (BDI)
+              if (now > rule.high) { bull += 1; detail = 'Above ' + rule.high + ' — bullish'; }
+              else if (now < rule.low) { bear += 1; detail = 'Below ' + rule.low + ' — bearish'; }
+              else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
+              if (chg5 > 3) { bull += 1; detail += ', rising'; }
+              else if (chg5 < -3) { bear += 1; detail += ', falling'; }
+            }
+
+            bullPoints += bull;
+            bearPoints += bear;
+            signals.push({ code: t.code, emoji: rule.emoji, value: now, detail: rule.label + ': ' + detail, bull, bear, chg_5d: chg5, chg_20d: chg20 });
+          });
+
+          macro_signals = { signals, bull_points: bullPoints, bear_points: bearPoints };
+        }
+      } catch (e) {}
+
+      res.json({ date: today, global, commodities, idx, sectors, macro_signals });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ═══ STOCK DETAIL — Phase Detection + AD Line + Deep Analytics ═══
+  // ═══ REGIME-WEIGHTS — return weight profile based on current market regime ═══
+  router.get('/regime-weights', (req, res) => {
+    try {
+      // Detect IHSG regime
+      let regime = 'sideways';
+      let chg20 = 0;
+      try {
+        const ihsgRows = db.prepare("SELECT close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 25").all();
+        if (ihsgRows.length >= 20) {
+          const now = ihsgRows[0].close;
+          const d20 = ihsgRows[19].close;
+          chg20 = d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0;
+          if (chg20 > 5) regime = 'bull';
+          else if (chg20 < -5) regime = 'bear';
+          else if (chg20 > 2) regime = 'mild_bull';
+          else if (chg20 < -2) regime = 'mild_bear';
+        }
+      } catch (e) {}
+
+      // Macro shift: check VIX/DXY for additional context
+      let macroShift = 0;
+      try {
+        const vixRows = db.prepare("SELECT close FROM custom_ohlc WHERE code='VIX' ORDER BY trade_date DESC LIMIT 1").all();
+        if (vixRows.length && vixRows[0].close > 25) macroShift -= 1; // high fear
+        if (vixRows.length && vixRows[0].close < 15) macroShift += 1; // low fear
+      } catch (e) {}
+
+      // Weight profiles per regime (heuristic — to be validated via Walk Forward)
+      const REGIME_WEIGHTS = {
+        bull:      { fundamental: 25, valuation: 15, momentum: 30, demand: 15, foreign: 15 },
+        mild_bull: { fundamental: 25, valuation: 20, momentum: 25, demand: 15, foreign: 15 },
+        sideways:  { fundamental: 25, valuation: 25, momentum: 15, demand: 20, foreign: 15 },
+        mild_bear: { fundamental: 30, valuation: 25, momentum: 5,  demand: 20, foreign: 20 },
+        bear:      { fundamental: 30, valuation: 30, momentum: 0,  demand: 15, foreign: 25 }
+      };
+
+      const weights = REGIME_WEIGHTS[regime] || REGIME_WEIGHTS.sideways;
+
+      res.json({
+        ok: true,
+        regime,
+        ihsg_chg_20d: chg20,
+        macro_shift: macroShift,
+        weights
+      });
+    } catch (e) { res.json({ ok: false, error: e.message }); }
+  });
   router.get('/stock-detail/:code', (req, res) => {
     try {
       const code = req.params.code.toUpperCase().trim();
@@ -3030,6 +3476,184 @@ module.exports = function(upload) {
         if (fm) fundamental = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(fm, code);
       } catch (e) {}
 
+      // ── 7b. Ownership from balance_position ──
+      let ownership = null;
+      try {
+        const bpRow = db.prepare('SELECT * FROM balance_position WHERE code=? ORDER BY snapshot_date DESC LIMIT 1').get(code);
+        if (bpRow) {
+          const totalShares = (bpRow.local_total || 0) + (bpRow.foreign_total || 0);
+          ownership = {
+            snapshot_date: bpRow.snapshot_date,
+            local_total: bpRow.local_total || 0,
+            foreign_total: bpRow.foreign_total || 0,
+            total: totalShares,
+            foreign_pct: totalShares > 0 ? Math.round(bpRow.foreign_total / totalShares * 10000) / 100 : 0,
+            local_pct: totalShares > 0 ? Math.round(bpRow.local_total / totalShares * 10000) / 100 : 0,
+            breakdown: {
+              local: { is: bpRow.local_is||0, cp: bpRow.local_cp||0, pf: bpRow.local_pf||0, ib: bpRow.local_ib||0, id: bpRow.local_id||0, mf: bpRow.local_mf||0, sc: bpRow.local_sc||0, fd: bpRow.local_fd||0, ot: bpRow.local_ot||0 },
+              foreign: { is: bpRow.foreign_is||0, cp: bpRow.foreign_cp||0, pf: bpRow.foreign_pf||0, ib: bpRow.foreign_ib||0, id: bpRow.foreign_id||0, mf: bpRow.foreign_mf||0, sc: bpRow.foreign_sc||0, fd: bpRow.foreign_fd||0, ot: bpRow.foreign_ot||0 }
+            }
+          };
+        }
+      } catch (e) {}
+
+      // ── 7c. Dividend History from bei_dividends ──
+      let dividendHistory = [];
+      try {
+        dividendHistory = db.prepare('SELECT * FROM bei_dividends WHERE code=? ORDER BY cum_date DESC').all(code);
+      } catch (e) {}
+
+      // ── 7d. CA Timeline from bei_corporate_actions ──
+      let caTimeline = [];
+      try {
+        caTimeline = db.prepare('SELECT * FROM bei_corporate_actions WHERE code=? ORDER BY cum_date DESC LIMIT 30').all(code);
+      } catch (e) {}
+
+      // ── 7e. Live PER/PBV + Derived Ratios ──
+      if (fundamental) {
+        const liveClose = last.ac;
+        const fu = fundamental;
+        // Live valuation
+        if (fu.eps_trailing && fu.eps_trailing !== 0) {
+          fu.live_per = Math.round(liveClose / fu.eps_trailing * 100) / 100;
+        }
+        if (fu.book_value && fu.book_value !== 0) {
+          fu.live_pbv = Math.round(liveClose / fu.book_value * 100) / 100;
+        }
+        // Earnings Yield = EPS / Close × 100
+        if (fu.eps_trailing && liveClose > 0) {
+          fu.earnings_yield = Math.round(fu.eps_trailing / liveClose * 10000) / 100;
+        }
+        // Price to Sales = Market Cap / Sales (both in billions)
+        const mktCapB = liveClose * (last.listed_shares || 0);
+        if (fu.sales && fu.sales > 0 && mktCapB > 0) {
+          fu.price_to_sales = Math.round(mktCapB / (fu.sales * 1e9) * 100) / 100; // sales in billions from BEI
+        }
+        // DAR = Liabilities / Assets
+        if (fu.assets && fu.assets > 0) {
+          fu.dar = Math.round(fu.liabilities / fu.assets * 10000) / 100;
+        }
+        // Equity Ratio = Equity / Assets
+        if (fu.assets && fu.assets > 0 && fu.equity) {
+          fu.equity_ratio = Math.round(fu.equity / fu.assets * 10000) / 100;
+        }
+        // Asset Turnover = Sales / Assets
+        if (fu.assets && fu.assets > 0 && fu.sales) {
+          fu.asset_turnover = Math.round(fu.sales / fu.assets * 10000) / 100;
+        }
+        // Equity Multiplier = Assets / Equity
+        if (fu.equity && fu.equity > 0 && fu.assets) {
+          fu.equity_multiplier = Math.round(fu.assets / fu.equity * 100) / 100;
+        }
+        // DuPont: ROE = NPM × Asset Turnover × Equity Multiplier
+        if (fu.npm && fu.asset_turnover && fu.equity_multiplier) {
+          fu.dupont = {
+            npm: fu.npm,
+            asset_turnover: fu.asset_turnover,
+            equity_multiplier: fu.equity_multiplier,
+            roe_check: Math.round(fu.npm / 100 * fu.asset_turnover / 100 * fu.equity_multiplier * 10000) / 100
+          };
+        }
+      }
+
+      // ── 7f. YoY Growth (compare same month 1 year ago) ──
+      let fundGrowth = null;
+      try {
+        if (fundamental && fundamental.snapshot_month) {
+          const curMonth = fundamental.snapshot_month; // e.g. "2026-02"
+          const yParts = curMonth.split('-');
+          const yoyMonth = (parseInt(yParts[0]) - 1) + '-' + yParts[1]; // e.g. "2025-02"
+          const prev = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(yoyMonth, code);
+          if (prev) {
+            const pctChg = (cur, prv) => (prv && prv !== 0) ? Math.round((cur - prv) / Math.abs(prv) * 10000) / 100 : null;
+            fundGrowth = {
+              period: yoyMonth + ' → ' + curMonth,
+              revenue_growth: pctChg(fundamental.sales, prev.sales),
+              profit_growth: pctChg(fundamental.profit, prev.profit),
+              eps_growth: pctChg(fundamental.eps_trailing, prev.eps_trailing),
+              equity_growth: pctChg(fundamental.equity, prev.equity),
+              assets_growth: pctChg(fundamental.assets, prev.assets),
+              prev_snapshot: yoyMonth
+            };
+          }
+        }
+      } catch (e) {}
+
+      // ── 7g. Fund History — quarterly deduplicated + daily live valuation ──
+      let fundHistory = [];
+      let dailyValuation = [];
+      try {
+        // Helper: parse fs_date from MM/DD/YYYY or YYYY-MM-DD to ISO YYYY-MM-DD
+        function normalizeFsDate(fd) {
+          if (!fd) return '';
+          // Already YYYY-MM-DD?
+          if (/^\d{4}-\d{2}/.test(fd)) return fd;
+          // MM/DD/YYYY format
+          var parts = fd.split('/');
+          if (parts.length === 3) return parts[2] + '-' + parts[0].padStart(2,'0') + '-' + parts[1].padStart(2,'0');
+          return fd;
+        }
+
+        const allSnaps = db.prepare('SELECT snapshot_month, fs_date, fiscal_year, fs_type, sales, ebt, profit, profit_attr, eps_trailing, book_value, assets, liabilities, equity, roe, roa, npm, per, pbv, der FROM idx_fundamental WHERE code=? ORDER BY snapshot_month').all(code);
+        // Normalize fs_date and snap to nearest quarter end
+        function snapToQuarterEnd(nfd) {
+          // Given YYYY-MM-DD, snap to nearest standard quarter end: 03-31, 06-30, 09-30, 12-31
+          var parts = nfd.split('-');
+          var y = parts[0], m = parseInt(parts[1] || '1');
+          if (m <= 3) return y + '-03-31';
+          if (m <= 6) return y + '-06-30';
+          if (m <= 9) return y + '-09-30';
+          return y + '-12-31';
+        }
+
+        const byQtr = {};
+        allSnaps.forEach(s => {
+          const nfd = normalizeFsDate(s.fs_date) || s.snapshot_month;
+          const qKey = snapToQuarterEnd(nfd);
+          s._norm_fs_date = qKey;
+          // Keep latest snapshot per quarter-end key
+          if (!byQtr[qKey] || s.snapshot_month > byQtr[qKey].snapshot_month) byQtr[qKey] = s;
+        });
+        fundHistory = Object.values(byQtr).sort((a, b) => a._norm_fs_date.localeCompare(b._norm_fs_date));
+
+        // Remove content-duplicate entries (same sales+profit as previous = stale data)
+        var cleaned = [];
+        for (var fi = 0; fi < fundHistory.length; fi++) {
+          var cur = fundHistory[fi];
+          if (fi > 0) {
+            var prev = fundHistory[fi - 1];
+            if (Math.abs((cur.sales || 0) - (prev.sales || 0)) < 0.01 && Math.abs((cur.profit || 0) - (prev.profit || 0)) < 0.01) continue;
+          }
+          cleaned.push(cur);
+        }
+        fundHistory = cleaned;
+
+        // Label quarters from snapped date
+        fundHistory.forEach(fh => {
+          const fd = fh._norm_fs_date || '';
+          const parts = fd.split('-');
+          const year = parts[0] || '';
+          const m = parseInt(parts[1] || '0');
+          fh.quarter_label = m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'FY';
+          fh.period_label = year.slice(2) + ' ' + fh.quarter_label;
+        });
+      } catch (e) {}
+
+      try {
+        // Daily live PER/PBV from idx_daily close / latest EPS & BV/S
+        if (fundamental && (fundamental.eps_trailing || fundamental.book_value)) {
+          const epsT = fundamental.eps_trailing || 0;
+          const bvS = fundamental.book_value || 0;
+          const dailyRows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 250').all(code).reverse();
+          dailyValuation = dailyRows.map(r => ({
+            date: r.trade_date,
+            close: r.close,
+            live_per: epsT !== 0 ? Math.round(r.close / epsT * 100) / 100 : null,
+            live_pbv: bvS !== 0 ? Math.round(r.close / bvS * 100) / 100 : null
+          }));
+        }
+      } catch (e) {}
+
       // ── 8. MA Stage Detection ──
       // Calculate MAs from adjusted close
       function calcMA(period) {
@@ -3219,7 +3843,7 @@ module.exports = function(upload) {
 
         if (commodityCode) {
           // Try custom_ohlc first, then commodities table
-          const cmdRows = db.prepare('SELECT date, close FROM custom_ohlc WHERE code=? ORDER BY date DESC LIMIT 30').all(commodityCode);
+          const cmdRows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(commodityCode);
           if (cmdRows.length >= 5) {
             const now = cmdRows[0].close;
             const d5 = cmdRows[4] ? cmdRows[4].close : now;
@@ -3421,6 +4045,12 @@ module.exports = function(upload) {
         bid_offer: { data: boData, avg_ratio: avgBidRatio },
         scoring, score_history: scoreHist || [],
         fundamental,
+        ownership,
+        dividend_history: dividendHistory,
+        ca_timeline: caTimeline,
+        fund_growth: fundGrowth,
+        fund_history: fundHistory,
+        daily_valuation: dailyValuation,
         chart: chartData,
         ad_line: adChartData
       });
@@ -3476,6 +4106,327 @@ module.exports = function(upload) {
     if (seconds < 604800) return Math.floor(seconds / 86400) + 'd ago';
     return Math.floor(seconds / 604800) + 'w ago';
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // BEI DATA UPLOAD — Auto-detect + Preview + Commit
+  // ═══════════════════════════════════════════════════════════════════
+
+  const path=require('path');
+  const beiUpload = require('multer')({
+    dest: '/tmp/bei-uploads/',
+    limits: { fileSize: 100 * 1024 * 1024 }
+  });
+
+  // ── Table migrations (individual statements to avoid SQLite multi-exec issues) ──
+  db.exec("CREATE TABLE IF NOT EXISTS _bei_upload_log (id INTEGER PRIMARY KEY AUTOINCREMENT, uploaded_at TEXT DEFAULT (datetime('now')), file_type TEXT NOT NULL, file_name TEXT DEFAULT '', snapshot TEXT DEFAULT '', rows_inserted INTEGER DEFAULT 0, rows_skipped INTEGER DEFAULT 0, rows_updated INTEGER DEFAULT 0)");
+  db.exec("CREATE TABLE IF NOT EXISTS balance_position (snapshot_date TEXT NOT NULL, code TEXT NOT NULL, sec_num INTEGER DEFAULT 0, price REAL DEFAULT 0, local_is INTEGER DEFAULT 0, local_cp INTEGER DEFAULT 0, local_pf INTEGER DEFAULT 0, local_ib INTEGER DEFAULT 0, local_id INTEGER DEFAULT 0, local_mf INTEGER DEFAULT 0, local_sc INTEGER DEFAULT 0, local_fd INTEGER DEFAULT 0, local_ot INTEGER DEFAULT 0, local_total INTEGER DEFAULT 0, foreign_is INTEGER DEFAULT 0, foreign_cp INTEGER DEFAULT 0, foreign_pf INTEGER DEFAULT 0, foreign_ib INTEGER DEFAULT 0, foreign_id INTEGER DEFAULT 0, foreign_mf INTEGER DEFAULT 0, foreign_sc INTEGER DEFAULT 0, foreign_fd INTEGER DEFAULT 0, foreign_ot INTEGER DEFAULT 0, foreign_total INTEGER DEFAULT 0, PRIMARY KEY (snapshot_date, code))");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bp_code ON balance_position(code)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bp_date ON balance_position(snapshot_date)");
+  db.exec("CREATE TABLE IF NOT EXISTS bei_corporate_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, issuer TEXT DEFAULT '', security_name TEXT DEFAULT '', ca_type TEXT NOT NULL, cum_date TEXT DEFAULT '', recording_date TEXT DEFAULT '', dist_date TEXT DEFAULT '', exercise_ratio REAL DEFAULT 0, exercise_instr TEXT DEFAULT '', proceed_ratio REAL DEFAULT 0, proceed_instr TEXT DEFAULT '', description TEXT DEFAULT '', ref_no TEXT DEFAULT '', letter_date TEXT DEFAULT '', year INTEGER DEFAULT 0, UNIQUE(code, ca_type, cum_date))");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bca_code ON bei_corporate_actions(code)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bca_type ON bei_corporate_actions(ca_type)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bca_cum ON bei_corporate_actions(cum_date)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bca_year ON bei_corporate_actions(year)");
+  db.exec("CREATE TABLE IF NOT EXISTS bei_dividends (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, div_type TEXT DEFAULT 'final', cum_date TEXT NOT NULL, recording_date TEXT DEFAULT '', payment_date TEXT DEFAULT '', dps REAL NOT NULL DEFAULT 0, year INTEGER DEFAULT 0, UNIQUE(code, cum_date))");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bdiv_code ON bei_dividends(code)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bdiv_year ON bei_dividends(year)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_bdiv_cum ON bei_dividends(cum_date)");
+
+  // Migrate idx_fundamental — add new columns if missing
+  (function() {
+    try {
+      const cols = db.pragma('table_info(idx_fundamental)').map(c => c.name);
+      const adds = [
+        ['sub_ind_code','TEXT DEFAULT ""'],['sharia','INTEGER DEFAULT 0'],
+        ['fs_date','TEXT DEFAULT ""'],['fiscal_year','TEXT DEFAULT ""'],
+        ['fs_type','TEXT DEFAULT ""'],['auditor_opinion','TEXT DEFAULT ""'],
+        ['assets','REAL DEFAULT 0'],['liabilities','REAL DEFAULT 0'],
+        ['equity','REAL DEFAULT 0'],['sales','REAL DEFAULT 0'],
+        ['ebt','REAL DEFAULT 0'],['profit','REAL DEFAULT 0'],
+        ['profit_attr','REAL DEFAULT 0'],['eps_trailing','REAL DEFAULT 0'],
+        ['book_value','REAL DEFAULT 0']
+      ];
+      for (const [col, def] of adds) {
+        if (!cols.includes(col)) {
+          try { db.exec(`ALTER TABLE idx_fundamental ADD COLUMN ${col} ${def}`); } catch(_) {}
+        }
+      }
+    } catch(_) {}
+  })();
+
+  // ── Helpers ──
+  const BEI_MONTHS = {
+    JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',
+    JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12',
+    JANUARY:'01',FEBRUARY:'02',MARCH:'03',APRIL:'04',JUNE:'06',
+    JULY:'07',AUGUST:'08',SEPTEMBER:'09',OCTOBER:'10',NOVEMBER:'11',DECEMBER:'12'
+  };
+
+  function parseBeiDate(s) {
+    if (!s) return '';
+    // Excel serial date number (e.g., 46020 = 2025-12-29)
+    if (typeof s === 'number' && s > 30000 && s < 60000) {
+      const d = new Date((s - 25569) * 86400000);
+      return d.toISOString().split('T')[0];
+    }
+    if (typeof s !== 'string') s = String(s);
+    s = s.trim();
+    const m = s.match(/^(\d{1,2})-([A-Z]+)-(\d{4})$/i);
+    if (m) { const mm = BEI_MONTHS[m[2].toUpperCase()]; if (mm) return `${m[3]}-${mm}-${m[1].padStart(2,'0')}`; }
+    const m2 = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m2) return `${m2[3]}-${m2[1]}-${m2[2]}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    return s;
+  }
+
+  function beiSnapshotFromFilename(fn) {
+    const m = fn.match(/[_-]\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[_\s]*(\d{4})/i);
+    if (m) { const mm = BEI_MONTHS[m[1].toUpperCase().substring(0,3)]; return `${m[2]}-${mm}`; }
+    const y = fn.match(/(\d{4})/); return y ? y[1] : '';
+  }
+
+  function detectBeiFileType(firstLine, fn) {
+    const fl = (firstLine||'').toLowerCase();
+    const f = (fn||'').toLowerCase();
+    if (/financial data and ratio/i.test(firstLine)) return {type:'financial_data',label:'Financial Data & Ratio'};
+    if (firstLine.includes('|') && /sec\. num/i.test(firstLine)) return {type:'balance_position',label:'Balance Position'};
+    if (/cash dividend/i.test(firstLine)) return {type:'ca_dividend',label:'Cash Dividend'};
+    if (/right distribution/i.test(firstLine)) return {type:'ca_rights',label:'Rights Issue (HMETD)'};
+    if (/stock split/i.test(firstLine)) return {type:'ca_split',label:'Stock Split'};
+    if (/reverse stock/i.test(firstLine)) return {type:'ca_reverse',label:'Reverse Stock'};
+    if (/bonus/i.test(firstLine) && !/obligasi/i.test(firstLine)) return {type:'ca_bonus',label:'Bonus Shares'};
+    if (/merger/i.test(firstLine) && f.includes('merger')) return {type:'ca_merger',label:'Merger'};
+    if (/proxy voting/i.test(firstLine)) return {type:'ca_proxy',label:'Proxy Voting (RUPS)'};
+    if (/interest recording/i.test(firstLine)) return {type:'ca_interest',label:'Interest / Coupon'};
+    if (/mandatory conversion/i.test(firstLine)) return {type:'ca_conversion',label:'Mandatory Conversion'};
+    if (/schedule of corporate action/i.test(firstLine)) return {type:'ca_master',label:'Corporate Action (Master)'};
+    if (f.includes('balancepos')) return {type:'balance_position',label:'Balance Position'};
+    if (f.includes('div_')) return {type:'ca_dividend',label:'Cash Dividend'};
+    if (f.includes('right_')) return {type:'ca_rights',label:'Rights Issue (HMETD)'};
+    if (f.includes('bonu_')) return {type:'ca_bonus',label:'Bonus Shares'};
+    if (f.includes('prox_')) return {type:'ca_proxy',label:'Proxy Voting (RUPS)'};
+    if (f.includes('int_')) return {type:'ca_interest',label:'Interest / Coupon'};
+    if (f.includes('mconv_')) return {type:'ca_conversion',label:'Mandatory Conversion'};
+    if (f.includes('merger')) return {type:'ca_merger',label:'Merger'};
+    return null;
+  }
+
+  // ── Parsers ──
+  function parseFinancialData(filePath, filename) {
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(filePath);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const allRows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    let dataStart = -1;
+    for (let i=0; i<Math.min(10,allRows.length); i++) {
+      if (/^[A-Z]{4,5}$/.test(String(allRows[i][4]||'').trim())) { dataStart=i; break; }
+    }
+    if (dataStart<0) return {error:'Cannot find data rows — no stock codes detected'};
+    const snapshot = beiSnapshotFromFilename(filename);
+    if (!snapshot) return {error:'Cannot determine snapshot month from filename'};
+    const parsed=[], skipped=[];
+    for (let i=dataStart; i<allRows.length; i++) {
+      const r=allRows[i]; const code=String(r[4]||'').trim().toUpperCase();
+      if (!code || !/^[A-Z]{4,5}$/.test(code)) { if(code)skipped.push('Row '+(i+1)+': invalid code "'+code+'"'); continue; }
+      parsed.push({
+        snapshot_month:snapshot, code, name:String(r[5]||'').trim(),
+        sector:String(r[1]||'').trim(), sub_ind_code:String(r[2]||'').trim(),
+        industry:String(r[3]||'').trim(), sharia:String(r[6]||'').trim().toUpperCase()==='S'?1:0,
+        fs_date:String(r[7]||'').trim(), fiscal_year:String(r[8]||'').trim(),
+        fs_type:String(r[9]||'').trim(), auditor_opinion:String(r[10]||'').replace(/^-$/,'').trim(),
+        assets:parseFloat(r[11])||0, liabilities:parseFloat(r[12])||0, equity:parseFloat(r[13])||0,
+        sales:parseFloat(r[14])||0, ebt:parseFloat(r[15])||0, profit:parseFloat(r[16])||0,
+        profit_attr:parseFloat(r[17])||0, eps_trailing:parseFloat(r[18])||0, book_value:parseFloat(r[19])||0,
+        per:parseFloat(r[20])||0, pbv:parseFloat(r[21])||0, der:parseFloat(r[22])||0,
+        roa:parseFloat(r[23])||0, roe:parseFloat(r[24])||0, npm:parseFloat(r[25])||0
+      });
+    }
+    let conflicts=0;
+    try { conflicts=db.prepare('SELECT COUNT(*)as c FROM idx_fundamental WHERE snapshot_month=?').get(snapshot)?.c||0; } catch(_){}
+    return {
+      type:'financial_data', label:'Financial Data & Ratio', snapshot,
+      total_rows:parsed.length, skipped_rows:skipped.length, conflicts,
+      warnings:[...skipped.slice(0,5),...(conflicts>0?[conflicts+' existing rows for '+snapshot+' will be overwritten']:[])],
+      columns:['code','name','sector','industry','assets','equity','eps_trailing','roe','npm'],
+      sample:parsed.slice(0,10).map(r=>({code:r.code,name:r.name.substring(0,30),sector:r.sector,industry:r.industry,assets:r.assets,equity:r.equity,eps_trailing:r.eps_trailing,roe:r.roe,npm:r.npm})),
+      _data:parsed
+    };
+  }
+
+  function parseBalancePosition(filePath) {
+    const raw = require('fs').readFileSync(filePath,'utf-8');
+    const lines = raw.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+    if (!lines.length) return {error:'Empty file'};
+    const parsed=[], skipped=[]; let snapshotDate='';
+    for (let i=1; i<lines.length; i++) {
+      const cols=lines[i].split('|');
+      if (cols.length<25) { skipped.push('Row '+(i+1)+': insufficient columns'); continue; }
+      if (cols[2]!=='EQUITY') continue;
+      const code=(cols[1]||'').trim().toUpperCase();
+      if (!code||!/^[A-Z]{4,5}$/.test(code)) { skipped.push('Row '+(i+1)+': invalid code "'+code+'"'); continue; }
+      const dateStr=parseBeiDate(cols[0]||'');
+      if (!snapshotDate && dateStr) snapshotDate=dateStr;
+      parsed.push({
+        snapshot_date:dateStr, code, sec_num:parseInt(cols[3])||0, price:parseFloat(cols[4])||0,
+        local_is:parseInt(cols[5])||0, local_cp:parseInt(cols[6])||0, local_pf:parseInt(cols[7])||0,
+        local_ib:parseInt(cols[8])||0, local_id:parseInt(cols[9])||0, local_mf:parseInt(cols[10])||0,
+        local_sc:parseInt(cols[11])||0, local_fd:parseInt(cols[12])||0, local_ot:parseInt(cols[13])||0,
+        local_total:parseInt(cols[14])||0,
+        foreign_is:parseInt(cols[15])||0, foreign_cp:parseInt(cols[16])||0, foreign_pf:parseInt(cols[17])||0,
+        foreign_ib:parseInt(cols[18])||0, foreign_id:parseInt(cols[19])||0, foreign_mf:parseInt(cols[20])||0,
+        foreign_sc:parseInt(cols[21])||0, foreign_fd:parseInt(cols[22])||0, foreign_ot:parseInt(cols[23])||0,
+        foreign_total:parseInt(cols[24])||0
+      });
+    }
+    let conflicts=0;
+    try { conflicts=db.prepare('SELECT COUNT(*)as c FROM balance_position WHERE snapshot_date=?').get(snapshotDate)?.c||0; } catch(_){}
+    return {
+      type:'balance_position', label:'Balance Position', snapshot:snapshotDate,
+      total_rows:parsed.length, skipped_rows:skipped.length, conflicts,
+      warnings:[(lines.length-1-parsed.length-skipped.length)+' non-EQUITY rows filtered out',...skipped.slice(0,5),...(conflicts>0?[conflicts+' existing rows for '+snapshotDate+' will be overwritten']:[])],
+      columns:['code','sec_num','price','local_total','foreign_total','local_id','local_mf','foreign_mf'],
+      sample:parsed.slice(0,10).map(r=>({code:r.code,sec_num:r.sec_num,price:r.price,local_total:r.local_total,foreign_total:r.foreign_total,local_id:r.local_id,local_mf:r.local_mf,foreign_mf:r.foreign_mf})),
+      _data:parsed
+    };
+  }
+
+  function parseCorporateAction(filePath, detectedType, filename) {
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(filePath);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const allRows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    let headerIdx=-1;
+    for (let i=0;i<Math.min(5,allRows.length);i++) {
+      if (allRows[i].some(c=>String(c).toLowerCase().includes('security code')||String(c).toLowerCase().includes('no.'))) { headerIdx=i; break; }
+    }
+    if (headerIdx<0) {
+      return { type:detectedType, label:detectBeiFileType('',filename)?.label||detectedType,
+        snapshot:beiSnapshotFromFilename(filename), total_rows:0, skipped_rows:0, conflicts:0,
+        warnings:['File is empty — no data rows found'], columns:[], sample:[], _data:[], _dividends:[] };
+    }
+    const TYPE_MAP={ca_dividend:'CASH DIVIDEND',ca_rights:'RIGHT DISTRIBUTION',ca_split:'STOCK SPLIT',ca_reverse:'REVERSE STOCK',ca_bonus:'BONUS SHARES',ca_merger:'MERGER',ca_proxy:'PROXY VOTING',ca_interest:'INTEREST',ca_conversion:'MANDATORY CONVERSION',ca_master:null};
+    const forcedType=TYPE_MAP[detectedType]||null;
+    const parsed=[], dividends=[], skipped=[];
+    const yearFromFilename=filename.match(/(\d{4})/)?.[1]||'';
+    for (let i=headerIdx+1;i<allRows.length;i++) {
+      const r=allRows[i]; if(!r||r.length<10) continue;
+      const code=String(r[2]||'').trim().toUpperCase();
+      if (!code||code.length>5||/\d/.test(code)) { if(code)skipped.push('Row '+(i+1)+': skipped "'+code+'" (non-equity)'); continue; }
+      const caType=forcedType||String(r[4]||'').trim().toUpperCase();
+      if (!caType) continue;
+      const cumDate=parseBeiDate(r[5]||''); const recDate=parseBeiDate(r[6]||'');
+      const distDate=parseBeiDate(r[7]||''); const exRatio=parseFloat(r[8])||0;
+      const procRatio=parseFloat(r[10])||0; const desc=String(r[12]||'').trim();
+      const year=cumDate?parseInt(cumDate.substring(0,4)):parseInt(yearFromFilename)||0;
+      const row={code, issuer:String(r[1]||'').trim(), security_name:String(r[3]||'').trim(),
+        ca_type:caType, cum_date:cumDate, recording_date:recDate, dist_date:distDate,
+        exercise_ratio:exRatio, exercise_instr:String(r[9]||'').trim(),
+        proceed_ratio:procRatio, proceed_instr:String(r[11]||'').trim(),
+        description:desc, ref_no:String(r[13]||'').trim(), letter_date:String(r[14]||'').trim(), year};
+      parsed.push(row);
+      if (caType==='CASH DIVIDEND' && procRatio>0) {
+        dividends.push({code, div_type:/interim/i.test(desc)?'interim':/special/i.test(desc)?'special':'final',
+          cum_date:cumDate, recording_date:recDate, payment_date:distDate, dps:procRatio, year});
+      }
+    }
+    return {
+      type:detectedType, label:detectBeiFileType('',filename)?.label||detectedType,
+      snapshot:yearFromFilename, total_rows:parsed.length, skipped_rows:skipped.length, conflicts:0,
+      warnings:[...skipped.slice(0,5),...(skipped.length>5?['... and '+(skipped.length-5)+' more skipped']:[]),
+        ...(dividends.length>0?[dividends.length+' dividend records will also be added']:[])],
+      columns:['code','ca_type','cum_date','exercise_ratio','proceed_ratio','proceed_instr'],
+      sample:parsed.slice(0,10).map(r=>({code:r.code,ca_type:r.ca_type,cum_date:r.cum_date,exercise_ratio:r.exercise_ratio,proceed_ratio:r.proceed_ratio,proceed_instr:r.proceed_instr})),
+      _data:parsed, _dividends:dividends
+    };
+  }
+
+  // ── Commit functions ──
+  function commitFinancialData(data) {
+    const stmt=db.prepare(`INSERT OR REPLACE INTO idx_fundamental(snapshot_month,code,name,sector,sub_ind_code,industry,sharia,fs_date,fiscal_year,fs_type,auditor_opinion,assets,liabilities,equity,sales,ebt,profit,profit_attr,eps_trailing,book_value,per,pbv,der,roa,roe,npm)VALUES(@snapshot_month,@code,@name,@sector,@sub_ind_code,@industry,@sharia,@fs_date,@fiscal_year,@fs_type,@auditor_opinion,@assets,@liabilities,@equity,@sales,@ebt,@profit,@profit_attr,@eps_trailing,@book_value,@per,@pbv,@der,@roa,@roe,@npm)`);
+    let n=0; db.transaction(()=>{for(const r of data){stmt.run(r);n++;}})(); return n;
+  }
+  function commitBalancePosition(data) {
+    const stmt=db.prepare(`INSERT OR REPLACE INTO balance_position(snapshot_date,code,sec_num,price,local_is,local_cp,local_pf,local_ib,local_id,local_mf,local_sc,local_fd,local_ot,local_total,foreign_is,foreign_cp,foreign_pf,foreign_ib,foreign_id,foreign_mf,foreign_sc,foreign_fd,foreign_ot,foreign_total)VALUES(@snapshot_date,@code,@sec_num,@price,@local_is,@local_cp,@local_pf,@local_ib,@local_id,@local_mf,@local_sc,@local_fd,@local_ot,@local_total,@foreign_is,@foreign_cp,@foreign_pf,@foreign_ib,@foreign_id,@foreign_mf,@foreign_sc,@foreign_fd,@foreign_ot,@foreign_total)`);
+    let n=0; db.transaction(()=>{for(const r of data){stmt.run(r);n++;}})(); return n;
+  }
+  function commitCorporateActions(data, divData) {
+    const caStmt=db.prepare(`INSERT OR REPLACE INTO bei_corporate_actions(code,issuer,security_name,ca_type,cum_date,recording_date,dist_date,exercise_ratio,exercise_instr,proceed_ratio,proceed_instr,description,ref_no,letter_date,year)VALUES(@code,@issuer,@security_name,@ca_type,@cum_date,@recording_date,@dist_date,@exercise_ratio,@exercise_instr,@proceed_ratio,@proceed_instr,@description,@ref_no,@letter_date,@year)`);
+    const divStmt=db.prepare(`INSERT OR REPLACE INTO bei_dividends(code,div_type,cum_date,recording_date,payment_date,dps,year)VALUES(@code,@div_type,@cum_date,@recording_date,@payment_date,@dps,@year)`);
+    let ca=0,dv=0;
+    db.transaction(()=>{for(const r of data){caStmt.run(r);ca++;} if(divData){for(const r of divData){divStmt.run(r);dv++;}}})();
+    return {ca,div:dv};
+  }
+
+  // ── API: Preview ──
+  router.post('/bei/upload/preview', beiUpload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({error:'No file uploaded'});
+    const fs=require('fs'); const filePath=req.file.path; const filename=req.file.originalname||'';
+    try {
+      let firstLine=''; const ext=path.extname(filename).toLowerCase();
+      if (ext==='.txt'||ext==='.csv') {
+        firstLine=fs.readFileSync(filePath,'utf-8').split(/\r?\n/)[0]||'';
+      } else {
+        const XLSX=require('xlsx'); const wb=XLSX.readFile(filePath);
+        const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+        firstLine=(rows[0]||[]).join(',');
+      }
+      const detected=detectBeiFileType(firstLine,filename);
+      if (!detected) { fs.unlinkSync(filePath); return res.status(400).json({error:'Cannot auto-detect file type',hint:'Supported: Financial Data XLSX, Balance Position TXT, Corporate Action XLS'}); }
+      let result;
+      if (detected.type==='financial_data') result=parseFinancialData(filePath,filename);
+      else if (detected.type==='balance_position') result=parseBalancePosition(filePath);
+      else if (detected.type.startsWith('ca_')) result=parseCorporateAction(filePath,detected.type,filename);
+      else { fs.unlinkSync(filePath); return res.status(400).json({error:'Unsupported type: '+detected.type}); }
+      if (result.error) { fs.unlinkSync(filePath); return res.status(400).json({error:result.error}); }
+      const tmpId='bei_'+Date.now()+'_'+Math.random().toString(36).substring(2,8);
+      fs.writeFileSync('/tmp/'+tmpId+'.json', JSON.stringify({type:result.type,label:result.label,snapshot:result.snapshot,filename,data:result._data,dividends:result._dividends||null}));
+      fs.unlinkSync(filePath);
+      const {_data,_dividends,...preview}=result; preview.file_id=tmpId; preview.source_file=filename;
+      res.json(preview);
+    } catch(e) { try{fs.unlinkSync(filePath);}catch(_){} res.status(500).json({error:e.message}); }
+  });
+
+  // ── API: Commit ──
+  router.post('/bei/upload/commit', (req, res) => {
+    const {file_id}=req.body; if(!file_id) return res.status(400).json({error:'file_id required'});
+    const fs=require('fs'); const tmpPath='/tmp/'+file_id+'.json';
+    if (!fs.existsSync(tmpPath)) return res.status(404).json({error:'Preview expired or not found. Please re-upload.'});
+    try {
+      const payload=JSON.parse(fs.readFileSync(tmpPath,'utf-8')); let result;
+      if (payload.type==='financial_data') {
+        const n=commitFinancialData(payload.data);
+        result={success:true,type:payload.type,label:payload.label,snapshot:payload.snapshot,rows_inserted:n};
+      } else if (payload.type==='balance_position') {
+        const n=commitBalancePosition(payload.data);
+        result={success:true,type:payload.type,label:payload.label,snapshot:payload.snapshot,rows_inserted:n};
+      } else if (payload.type.startsWith('ca_')) {
+        const r=commitCorporateActions(payload.data,payload.dividends);
+        result={success:true,type:payload.type,label:payload.label,snapshot:payload.snapshot,rows_inserted:r.ca,dividends_inserted:r.div};
+      } else { return res.status(400).json({error:'Unknown type: '+payload.type}); }
+      db.prepare('INSERT INTO _bei_upload_log(file_type,file_name,snapshot,rows_inserted)VALUES(?,?,?,?)').run(payload.type,payload.filename||'',payload.snapshot||'',result.rows_inserted||0);
+      fs.unlinkSync(tmpPath);
+      res.json(result);
+    } catch(e) { res.status(500).json({error:e.message}); }
+  });
+
+  // ── API: History + Stats ──
+  router.get('/bei/upload/history', (req, res) => {
+    try { res.json(db.prepare('SELECT * FROM _bei_upload_log ORDER BY uploaded_at DESC LIMIT 50').all()); }
+    catch(e) { res.json([]); }
+  });
+
+  router.get('/bei/upload/stats', (req, res) => {
+    try {
+      const fund=db.prepare('SELECT COUNT(DISTINCT snapshot_month)as snapshots,COUNT(*)as total FROM idx_fundamental').get();
+      const bp=db.prepare('SELECT COUNT(DISTINCT snapshot_date)as snapshots,COUNT(*)as total FROM balance_position').get();
+      const ca=db.prepare('SELECT COUNT(*)as total FROM bei_corporate_actions').get();
+      const div=db.prepare('SELECT COUNT(*)as total,COUNT(DISTINCT code)as tickers FROM bei_dividends').get();
+      const fundR=db.prepare('SELECT MIN(snapshot_month)as first,MAX(snapshot_month)as last FROM idx_fundamental').get();
+      const bpR=db.prepare('SELECT MIN(snapshot_date)as first,MAX(snapshot_date)as last FROM balance_position').get();
+      const caR=db.prepare('SELECT MIN(year)as first,MAX(year)as last FROM bei_corporate_actions WHERE year>0').get();
+      res.json({fundamental:{...fund,...fundR},balance_position:{...bp,...bpR},corporate_actions:{...ca,...caR},dividends:div});
+    } catch(e) { res.json({error:e.message}); }
+  });
 
   return router;
 };
