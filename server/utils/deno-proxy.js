@@ -307,6 +307,7 @@ function runBridgeImport(db, idxBridge, logSync) {
     if (typeof idxBridge.importParticipantProfiles === 'function') results.prof_part = idxBridge.importParticipantProfiles(db);
     if (typeof idxBridge.importTradeSummary === 'function') results.trade_sum = idxBridge.importTradeSummary(db);
     if (typeof idxBridge.importFinancialRatiosFull === 'function') results.fin_ratios = idxBridge.importFinancialRatiosFull(db);
+    if (typeof idxBridge.importStockPriceHistory === 'function') results.price_hist = idxBridge.importStockPriceHistory(db);
 
     const totalRows = Object.values(results).reduce((s, r) => s + (r?.rows || 0), 0);
     if (logSync) {

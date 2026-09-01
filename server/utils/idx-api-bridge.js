@@ -637,6 +637,57 @@ function importFinancialRatiosFull(targetDb) {
     r => { if (!r.code) return null; return { code: r.code, name: r.name || '', sector: r.sector || '', sub_sector: r.sub_sector || '', industry: r.industry || '', sub_industry: r.sub_industry || '', period: epochToDate(r.period) || '', assets: r.assets || 0, liabilities: r.liabilities || 0, equity: r.equity || 0, sales: r.sales || 0, ebt: r.ebt || 0, profit: r.profit || 0, eps: r.eps || 0, book_value: r.book_value || 0, per: r.per || 0, pbv: r.pbv || 0, der: r.der || 0, roa: r.roa || 0, roe: r.roe || 0, npm: r.npm || 0 }; });
 }
 
+/**
+ * Import stock_price_history → idx_daily (~1.5yrs backfill of daily OHLCV).
+ * Source cols: code,date(ms),open,high,low,close,previous,volume,value,frequency,
+ * foreign_buy,foreign_sell. Names filled from company_profile.
+ * On conflict only price/volume/foreign are updated, preserving existing
+ * bid/offer/listed_shares/name set by the stock_summary import.
+ */
+function importStockPriceHistory(targetDb) {
+  const idxDb = openIdxDb();
+  try {
+    const total = idxDb.prepare(`SELECT COUNT(*) as c FROM stock_price_history`).get()?.c || 0;
+    if (!total) return { rows: 0, message: 'No stock_price_history data' };
+
+    const nameMap = {};
+    try {
+      for (const r of idxDb.prepare(`SELECT code, name FROM company_profile WHERE name != ''`).all()) {
+        nameMap[String(r.code).trim().toUpperCase()] = r.name || '';
+      }
+    } catch {}
+
+    const upsert = targetDb.prepare(`INSERT INTO idx_daily(trade_date,code,name,prev_close,open_price,high,low,close,change,volume,value,frequency,foreign_buy,foreign_sell)
+      VALUES(@trade_date,@code,@name,@prev_close,@open_price,@high,@low,@close,@change,@volume,@value,@frequency,@foreign_buy,@foreign_sell)
+      ON CONFLICT(trade_date,code) DO UPDATE SET prev_close=excluded.prev_close,open_price=excluded.open_price,high=excluded.high,low=excluded.low,close=excluded.close,change=excluded.change,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,foreign_buy=excluded.foreign_buy,foreign_sell=excluded.foreign_sell`);
+
+    let count = 0, offset = 0;
+    while (offset < total) {
+      const rows = idxDb.prepare(`SELECT * FROM stock_price_history LIMIT ${CHUNK_SIZE} OFFSET ${offset}`).all();
+      if (!rows.length) break;
+      targetDb.transaction(() => {
+        for (const r of rows) {
+          const td = epochToDate(r.date);
+          if (!td || !r.code) continue;
+          const code = String(r.code).trim().toUpperCase();
+          upsert.run({
+            trade_date: td, code, name: nameMap[code] || '',
+            prev_close: r.previous || 0, open_price: r.open || 0,
+            high: r.high || 0, low: r.low || 0, close: r.close || 0,
+            change: Math.round((r.close || 0) - (r.previous || 0)),
+            volume: r.volume || 0, value: r.value || 0, frequency: r.frequency || 0,
+            foreign_buy: r.foreign_buy || 0, foreign_sell: r.foreign_sell || 0
+          });
+          count++;
+        }
+      })();
+      offset += rows.length;
+      if (total > CHUNK_SIZE) console.log(`[bridge] stock_price_history: ${count}/${total} rows imported`);
+    }
+    return { rows: count };
+  } finally { idxDb.close(); }
+}
+
 module.exports = {
   findIdxDb, importStockSummary, importIndexSummary, importFinancialRatios,
   importStockScreener, importDividends, importStockSplits, importCompanyProfiles,
@@ -650,5 +701,6 @@ module.exports = {
   importNewListings, importSecurityStocks, importCompanyDelistings,
   importCompanyRelistings, importProfileAnnouncements, importParticipantDealers,
   importParticipantProfiles, importTradeSummary, importFinancialRatiosFull,
+  importStockPriceHistory,
   wait: (ms) => new Promise(r => setTimeout(r, ms))
 };

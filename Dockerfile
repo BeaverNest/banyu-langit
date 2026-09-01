@@ -15,7 +15,9 @@ COPY public/ ./public/
 
 # Data directory + default tags
 RUN mkdir -p /app/uploads /app/data
-COPY data/investor_tags.xlsx ./data/investor_tags.xlsx
+# NOTE: data/investor_tags.xlsx is gitignored and optional.
+# The app auto-loads it only if present (see server/index.js), so no hard COPY.
+# COPY data/investor_tags.xlsx ./data/investor_tags.xlsx
 
 # Config
 COPY .env* ./
