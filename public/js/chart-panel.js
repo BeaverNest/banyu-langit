@@ -42,7 +42,8 @@
     fflow: { on: false, label: 'Foreign Flow', color: '#2196F3', grp: 'sub' },
     bidoff:{ on: false, label: 'Bid/Offer Vol', color: '#4CAF50', grp: 'sub' },
     freq:  { on: false, label: 'Frequency', color: '#FF9800', grp: 'sub' },
-    rsi:   { on: false, label: 'RSI (14)', period: 14, color: '#AB47BC', grp: 'sub' },
+    // RSI variant = Cutler (simple average of the last 14 changes) — same math as server/routes/idx.js calcRSI, so chart and screener agree
+    rsi:   { on: false, label: 'RSI (14) Cutler', period: 14, color: '#AB47BC', grp: 'sub' },
     macd:  { on: false, label: 'MACD (12,26,9)', fast: 12, slow: 26, signal: 9, grp: 'sub' }
   };
 
@@ -638,7 +639,7 @@
             if(p.seriesName==='MACD'&&p.data!==null){h+='<div style="font-size:10px;color:#2196F3;margin-top:2px">MACD '+p.data+'</div>';}
             if(p.seriesName==='Signal'&&p.data!==null){h+='<div style="font-size:10px;color:#FF9800">Sig '+p.data+'</div>';}
             if(p.seriesName==='Freq'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)h+='<div style="font-size:10px;color:#FF9800;margin-top:2px">Freq '+_fN(vv)+'</div>';}
-            if(p.seriesName==='RSI'&&p.data!==null){var rv=typeof p.data==='number'?p.data:0;var rc=rv>=70?C.bear:rv<=30?C.bull:'#AB47BC';h+='<div style="font-size:10px;color:'+rc+';margin-top:2px">RSI '+rv.toFixed(1)+'</div>';}
+            if(p.seriesName==='RSI'&&p.data!==null){var rv=typeof p.data==='number'?p.data:0;var rc=rv>=70?C.bear:rv<=30?C.bull:'#AB47BC';h+='<div style="font-size:10px;color:'+rc+';margin-top:2px">'+_e(_ind.rsi.label)+' '+rv.toFixed(1)+'</div>';}
           });
           return h;
         }
@@ -691,7 +692,7 @@
   function _calcMA(c,p){var r=[];for(var i=0;i<c.length;i++){if(i<p-1){r.push(null);continue;}var s=0;for(var j=i-p+1;j<=i;j++)s+=c[j];r.push(Math.round(s/p*100)/100);}return r;}
   function _calcBB(c,p,std){var mid=_calcMA(c,p),u=[],l=[];for(var i=0;i<c.length;i++){if(mid[i]===null){u.push(null);l.push(null);continue;}var s=0;for(var j=i-p+1;j<=i;j++)s+=Math.pow(c[j]-mid[i],2);var sd=Math.sqrt(s/p);u.push(Math.round((mid[i]+std*sd)*100)/100);l.push(Math.round((mid[i]-std*sd)*100)/100);}return{u:u,m:mid,l:l};}
   function _calcMACD(c,fast,slow,sig){function ema(d,p){var k=2/(p+1),r=[d[0]];for(var i=1;i<d.length;i++)r.push(d[i]*k+r[i-1]*(1-k));return r;}var ef=ema(c,fast),es=ema(c,slow);var ml=ef.map(function(v,i){return Math.round((v-es[i])*100)/100;});var sl=ema(ml,sig);var hl=ml.map(function(v,i){return Math.round((v-sl[i])*100)/100;});for(var i=0;i<slow;i++){ml[i]=null;sl[i]=null;hl[i]=null;}return{macd:ml,signal:sl,hist:hl};}
-  function _calcRSI(c,p){var r=[];for(var i=0;i<c.length;i++){if(i<p){r.push(null);continue;}var gain=0,loss=0;for(var j=i-p+1;j<=i;j++){var d=c[j]-c[j-1];if(d>0)gain+=d;else loss-=d;}var avgG=gain/p,avgL=loss/p;if(avgL===0){r.push(100);}else{var rs=avgG/avgL;r.push(Math.round(100-100/(1+rs)*100)/100);}}return r;}
+  function _calcRSI(c,p){var r=[];for(var i=0;i<c.length;i++){if(i<p){r.push(null);continue;}var gain=0,loss=0;for(var j=i-p+1;j<=i;j++){var d=c[j]-c[j-1];if(d>0)gain+=d;else loss-=d;}var avgG=gain/p,avgL=loss/p;if(avgL===0){r.push(100);}else{var rs=avgG/avgL;r.push(Math.round((100-100/(1+rs))*100)/100);}}return r;}
 
   // ═══ HELPERS ═══
   function $i(id){return document.getElementById(id);}
