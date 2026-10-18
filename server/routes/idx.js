@@ -894,6 +894,77 @@ module.exports = function(upload) {
   // parser WAJIB positional; berbasis nama akan menimpa yang pertama.
   const KSEI_TYPES = ['IS','CP','PF','IB','ID','MF','SC','FD','OT'];
 
+  // Tanggal bursa terakhir per bulan — dipakai pipeline KSEI untuk menyusun
+  // nama file (BalanceposEfekYYYYMMDD). Jauh lebih cepat daripada probe HTTP.
+  router.get('/trade-dates', (req, res) => {
+    try {
+      const months = Math.min(parseInt(req.query.months) || 120, 400);
+      const rows = db.prepare(`
+        SELECT substr(trade_date,1,7) AS ym, MAX(trade_date) AS last_date
+        FROM idx_daily GROUP BY ym ORDER BY ym DESC LIMIT ?
+      `).all(months);
+      res.json(rows.reverse());
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ═══ KSEI CA TAHUNAN — List of CA Activities (XLS, HTML-table) ═══
+  // Sumber: /data/download-data-and-user-guide -> div_YYYY.xls, prox/right/mconv/
+  // schedule_ca_keseluruhan_YYYY.xls. Semua punya 9 kolom identik.
+  const CA_MONTHS = { JAN:'01', FEB:'02', MAR:'03', APR:'04', MAY:'05', JUN:'06',
+                      JUL:'07', AUG:'08', SEP:'09', OCT:'10', NOV:'11', DEC:'12' };
+  function caDate(v) {
+    if (!v) return null;
+    const m = String(v).trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+    if (!m) return null;
+    const mm = CA_MONTHS[m[2].toUpperCase()];
+    if (!mm) return null;
+    return `${m[3]}-${mm}-${String(m[1]).padStart(2, '0')}`;
+  }
+
+  router.post('/ksei/ca', (req, res) => {
+    try {
+      const year = parseInt(req.body.year);
+      const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+      if (!year || year < 2000 || year > 2100) return res.status(400).json({ error: 'year wajib' });
+      if (!rows.length) return res.status(400).json({ error: 'rows kosong' });
+
+      const insA = db.prepare(`INSERT INTO bei_corporate_actions(
+        code,issuer,security_name,ca_type,cum_date,recording_date,dist_date,
+        exercise_ratio,exercise_instr,proceed_ratio,proceed_instr,description,ref_no,letter_date,year
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      const insD = db.prepare(`INSERT INTO bei_dividends(code,div_type,cum_date,recording_date,payment_date,dps,year)
+                               VALUES (?,?,?,?,?,?,?)`);
+      let nA = 0, nD = 0;
+      const tx = db.transaction(() => {
+        db.prepare('DELETE FROM bei_corporate_actions WHERE year=?').run(year);
+        db.prepare('DELETE FROM bei_dividends WHERE year=?').run(year);
+        const seen = new Set();
+        for (const r of rows) {
+          const code = String(r.code || '').toUpperCase().trim();
+          const type = String(r.ca_type || '').toUpperCase().trim();
+          if (!code || !type) continue;
+          const cum = caDate(r.cum_date), rec = caDate(r.recording_date), dist = caDate(r.dist_date);
+          const key = code + '|' + type + '|' + (cum || '') + '|' + (rec || '');
+          if (seen.has(key)) continue;               // file bisa tumpang tindih antar-sumber
+          seen.add(key);
+          insA.run(code, r.issuer || '', r.security_name || '', type, cum, rec, dist,
+                   r.exercise_ratio != null ? String(r.exercise_ratio) : null,
+                   '', null, '', '', '', '', year);
+          nA++;
+          // bei_dividends: cum_date & dps NOT NULL. KSEI TIDAK memuat nominal
+          // dividen (hanya tanggal), jadi dps=0 berarti "tidak tersedia",
+          // bukan "dividen nol". Nominal harus dari sumber lain.
+          if (type === 'CASH DIVIDEND' && cum) {
+            insD.run(code, 'CASH', cum, rec, dist, 0, year);
+            nD++;
+          }
+        }
+      });
+      tx();
+      res.json({ ok: true, year, actions: nA, dividends: nD });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.get('/ksei/status', (req, res) => {
     try {
       const bp = db.prepare('SELECT COUNT(*) n, MAX(snapshot_date) d, COUNT(DISTINCT code) c FROM balance_position').get();
