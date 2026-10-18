@@ -416,14 +416,6 @@ function importCompanyAnnouncement(targetDb) {
     r => { if (!r.id) return null; return { ann_id: String(r.id), ann_date: epochToDate(r.date) || isoToDate(r.date), title: (r.title || '').slice(0, 300), type: r.type || '', company_code: r.company_code || '', subject: (r.subject || '').slice(0, 200), is_stock: r.is_stock || 0, is_bond: r.is_bond || 0, attachments: r.attachments || '' }; });
 }
 
-function importForeignTrading(targetDb) {
-  return bulkImport(targetDb, 'foreign_trading',
-    `INSERT INTO foreign_trading(trade_date,buy_volume,buy_value,buy_frequency,sell_volume,sell_value,sell_frequency)
-     VALUES(@trade_date,@buy_volume,@buy_value,@buy_frequency,@sell_volume,@sell_value,@sell_frequency)
-     ON CONFLICT(trade_date) DO UPDATE SET buy_volume=excluded.buy_volume,buy_value=excluded.buy_value,buy_frequency=excluded.buy_frequency,sell_volume=excluded.sell_volume,sell_value=excluded.sell_value,sell_frequency=excluded.sell_frequency`,
-    r => { const td = epochToDate(r.date); if (!td) return null; return { trade_date: td, buy_volume: r.buy_volume || 0, buy_value: r.buy_value || 0, buy_frequency: r.buy_frequency || 0, sell_volume: r.sell_volume || 0, sell_value: r.sell_value || 0, sell_frequency: r.sell_frequency || 0 }; });
-}
-
 function importDomesticTrading(targetDb) {
   return bulkImport(targetDb, 'domestic_trading',
     `INSERT INTO domestic_trading(trade_date,buy_volume,buy_value,buy_frequency,sell_volume,sell_value,sell_frequency)
@@ -438,13 +430,6 @@ function importIndustryTrading(targetDb) {
      VALUES(@trade_date,@industry,@members,@shares,@market_cap,@volume,@value,@frequency,@per,@pbv)
      ON CONFLICT(trade_date,industry) DO UPDATE SET members=excluded.members,shares=excluded.shares,market_cap=excluded.market_cap,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,per=excluded.per,pbv=excluded.pbv`,
     r => { const td = epochToDate(r.date); if (!td || !r.industry) return null; return { trade_date: td, industry: r.industry, members: r.members || 0, shares: r.shares || 0, market_cap: r.market_cap || 0, volume: r.volume || 0, value: r.value || 0, frequency: r.frequency || 0, per: r.per || 0, pbv: r.pbv || 0 }; });
-}
-
-function importSectoralMovement(targetDb) {
-  return bulkImport(targetDb, 'sectoral_movement',
-    `INSERT INTO sectoral_movement(trade_date,sector_name,change_pct) VALUES(@trade_date,@sector_name,@change_pct)
-     ON CONFLICT(trade_date,sector_name) DO UPDATE SET change_pct=excluded.change_pct`,
-    r => { const td = epochToDate(r.date); if (!td || !r.name) return null; return { trade_date: td, sector_name: r.name, change_pct: r.change || 0 }; });
 }
 
 function importDailyIndex(targetDb) {
@@ -693,8 +678,8 @@ module.exports = {
   importStockScreener, importDividends, importStockSplits, importCompanyProfiles,
   importCompanyDetails, getIdxApiStatus,
   importBrokerSummary, importMarketCalendar, importCompanyAnnouncement,
-  importForeignTrading, importDomesticTrading, importIndustryTrading,
-  importSectoralMovement, importDailyIndex, importTopMovers, importActiveStocks,
+  importDomesticTrading, importIndustryTrading,
+  importDailyIndex, importTopMovers, importActiveStocks,
   importCompanySuspend, importRightOfferings, importParticipantBrokers,
   importTradingSS, importTradingDaily, importIndexChart, importIndexList,
   importFinancialReports, importIssuedHistory, importAdditionalListings,

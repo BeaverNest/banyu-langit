@@ -314,18 +314,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ca2_date ON company_announcements(ann_date);
   CREATE INDEX IF NOT EXISTS idx_ca2_code ON company_announcements(company_code);
 
-  CREATE TABLE IF NOT EXISTS foreign_trading (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trade_date TEXT NOT NULL,
-    buy_volume INTEGER DEFAULT 0,
-    buy_value REAL DEFAULT 0,
-    buy_frequency INTEGER DEFAULT 0,
-    sell_volume INTEGER DEFAULT 0,
-    sell_value REAL DEFAULT 0,
-    sell_frequency INTEGER DEFAULT 0,
-    UNIQUE(trade_date)
-  );
-
   CREATE TABLE IF NOT EXISTS domestic_trading (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT NOT NULL,
@@ -353,15 +341,6 @@ db.exec(`
     UNIQUE(trade_date, industry)
   );
   CREATE INDEX IF NOT EXISTS idx_it_date ON industry_trading(trade_date);
-
-  CREATE TABLE IF NOT EXISTS sectoral_movement (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trade_date TEXT NOT NULL,
-    sector_name TEXT NOT NULL,
-    change_pct REAL DEFAULT 0,
-    UNIQUE(trade_date, sector_name)
-  );
-  CREATE INDEX IF NOT EXISTS idx_sm_date ON sectoral_movement(trade_date);
 
   CREATE TABLE IF NOT EXISTS daily_index (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

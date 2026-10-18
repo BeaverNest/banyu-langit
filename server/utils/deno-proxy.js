@@ -280,10 +280,8 @@ function runBridgeImport(db, idxBridge, logSync) {
     if (typeof idxBridge.importBrokerSummary === 'function') results.broker = idxBridge.importBrokerSummary(db);
     if (typeof idxBridge.importMarketCalendar === 'function') results.calendar = idxBridge.importMarketCalendar(db);
     if (typeof idxBridge.importCompanyAnnouncement === 'function') results.announcement = idxBridge.importCompanyAnnouncement(db);
-    if (typeof idxBridge.importForeignTrading === 'function') results.foreign = idxBridge.importForeignTrading(db);
     if (typeof idxBridge.importDomesticTrading === 'function') results.domestic = idxBridge.importDomesticTrading(db);
     if (typeof idxBridge.importIndustryTrading === 'function') results.industry = idxBridge.importIndustryTrading(db);
-    if (typeof idxBridge.importSectoralMovement === 'function') results.sectoral = idxBridge.importSectoralMovement(db);
     if (typeof idxBridge.importDailyIndex === 'function') results.daily_index = idxBridge.importDailyIndex(db);
     if (typeof idxBridge.importTopMovers === 'function') results.top_movers = idxBridge.importTopMovers(db);
     if (typeof idxBridge.importActiveStocks === 'function') results.active = idxBridge.importActiveStocks(db);
@@ -334,10 +332,8 @@ function runSelectiveBridgeImport(db, idxBridge, logSync, modules) {
     company_profile: ['importCompanyProfiles', 'importCompanyDetails'],
     broker_summary: ['importBrokerSummary'],
     announcements: ['importCompanyAnnouncement'],
-    foreign_trading: ['importForeignTrading'],
     domestic_trading: ['importDomesticTrading'],
     industry_trading: ['importIndustryTrading'],
-    sectoral: ['importSectoralMovement'],
     daily_index: ['importDailyIndex'],
     top_movers: ['importTopMovers'],
     active_stocks: ['importActiveStocks'],

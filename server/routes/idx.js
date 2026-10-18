@@ -2388,9 +2388,9 @@ module.exports = function(upload) {
       // All 39 tables — safe call with fallback
       const extras = [
         ['broker', 'importBrokerSummary'], ['calendar', 'importMarketCalendar'],
-        ['announcement', 'importCompanyAnnouncement'], ['foreign', 'importForeignTrading'],
+        ['announcement', 'importCompanyAnnouncement'],
         ['domestic', 'importDomesticTrading'], ['industry', 'importIndustryTrading'],
-        ['sectoral', 'importSectoralMovement'], ['daily_index', 'importDailyIndex'],
+        ['daily_index', 'importDailyIndex'],
         ['top_movers', 'importTopMovers'], ['active', 'importActiveStocks'],
         ['suspend', 'importCompanySuspend'], ['rights', 'importRightOfferings'],
         ['participants', 'importParticipantBrokers'], ['trading_ss', 'importTradingSS'],
