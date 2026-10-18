@@ -45,6 +45,7 @@ const YAHOO_SYMBOL_MAP = {
   // JANGAN petakan CPO ke CPO=F: itu CPO CME dalam USD, bukan FCPO Malaysia (MYR).
   'COAL_API2': 'MTF=F', 'ZINC': 'ZNC=F',
   'CSI300': '000300.SS',
+  'CORN': 'ZC=F', 'SOYMEAL': 'ZM=F',
   'ALUMUNIUM': 'ALI=F', 'ALUMINIUM': 'ALI=F',
   'TIMAH': 'SNNY=F', 'TIN': 'SNNY=F',
   'PERAK': 'SI=F',
