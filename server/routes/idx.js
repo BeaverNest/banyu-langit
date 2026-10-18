@@ -3767,12 +3767,24 @@ module.exports = function(upload) {
         if (scoreHist.length) scoreHist.reverse();
       } catch (e) {}
 
-      // ── 7. Fundamental snapshot ──
+      // ── 7. Fundamental snapshot — dari financial_ratios (PIT) ──
+      // idx_fundamental hanya menyimpan 3 snapshot dan kolom sales/profit/assets/
+      // eps-nya 0 untuk banyak emiten, sehingga Financials & Fundachart kosong.
       let fundamental = null;
       try {
-        const { latestFundDate } = require('../db');
-        const fm = latestFundDate();
-        if (fm) fundamental = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(fm, code);
+        const fr = db.prepare(`SELECT period, sales, ebt, profit, assets, liabilities, equity,
+             eps, book_value, per, pbv, der, roa, roe, npm
+             FROM financial_ratios WHERE code=? ORDER BY period DESC LIMIT 1`).get(code);
+        if (fr) {
+          fundamental = {
+            ...fr,
+            eps_trailing: fr.eps,                       // nama field yang dipakai UI
+            snapshot_month: String(fr.period).slice(0, 7),
+            fs_date: fr.period,
+            fiscal_year: String(fr.period).slice(0, 4),
+            fs_type: 'QUARTERLY'
+          };
+        }
       } catch (e) {}
 
       // ── 7b. Ownership from balance_position ──
@@ -3858,21 +3870,22 @@ module.exports = function(upload) {
       // ── 7f. YoY Growth (compare same month 1 year ago) ──
       let fundGrowth = null;
       try {
-        if (fundamental && fundamental.snapshot_month) {
-          const curMonth = fundamental.snapshot_month; // e.g. "2026-02"
-          const yParts = curMonth.split('-');
-          const yoyMonth = (parseInt(yParts[0]) - 1) + '-' + yParts[1]; // e.g. "2025-02"
-          const prev = db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=? AND code=?').get(yoyMonth, code);
+        if (fundamental && fundamental.period) {
+          const curPeriod = fundamental.period;                 // YYYY-MM-DD
+          const yParts = curPeriod.split('-');
+          const yoyPeriod = (parseInt(yParts[0]) - 1) + '-' + yParts.slice(1).join('-');
+          const prev = db.prepare(`SELECT period, sales, profit, eps AS eps_trailing, equity, assets
+                                   FROM financial_ratios WHERE code=? AND period=?`).get(code, yoyPeriod);
           if (prev) {
             const pctChg = (cur, prv) => (prv && prv !== 0) ? Math.round((cur - prv) / Math.abs(prv) * 10000) / 100 : null;
             fundGrowth = {
-              period: yoyMonth + ' → ' + curMonth,
+              period: yoyPeriod + ' → ' + curPeriod,
               revenue_growth: pctChg(fundamental.sales, prev.sales),
               profit_growth: pctChg(fundamental.profit, prev.profit),
               eps_growth: pctChg(fundamental.eps_trailing, prev.eps_trailing),
               equity_growth: pctChg(fundamental.equity, prev.equity),
               assets_growth: pctChg(fundamental.assets, prev.assets),
-              prev_snapshot: yoyMonth
+              prev_snapshot: yoyPeriod.slice(0, 7)
             };
           }
         }
@@ -3893,48 +3906,21 @@ module.exports = function(upload) {
           return fd;
         }
 
-        const allSnaps = db.prepare('SELECT snapshot_month, fs_date, fiscal_year, fs_type, sales, ebt, profit, profit_attr, eps_trailing, book_value, assets, liabilities, equity, roe, roa, npm, per, pbv, der FROM idx_fundamental WHERE code=? ORDER BY snapshot_month').all(code);
-        // Normalize fs_date and snap to nearest quarter end
-        function snapToQuarterEnd(nfd) {
-          // Given YYYY-MM-DD, snap to nearest standard quarter end: 03-31, 06-30, 09-30, 12-31
-          var parts = nfd.split('-');
-          var y = parts[0], m = parseInt(parts[1] || '1');
-          if (m <= 3) return y + '-03-31';
-          if (m <= 6) return y + '-06-30';
-          if (m <= 9) return y + '-09-30';
-          return y + '-12-31';
-        }
-
-        const byQtr = {};
-        allSnaps.forEach(s => {
-          const nfd = normalizeFsDate(s.fs_date) || s.snapshot_month;
-          const qKey = snapToQuarterEnd(nfd);
-          s._norm_fs_date = qKey;
-          // Keep latest snapshot per quarter-end key
-          if (!byQtr[qKey] || s.snapshot_month > byQtr[qKey].snapshot_month) byQtr[qKey] = s;
-        });
-        fundHistory = Object.values(byQtr).sort((a, b) => a._norm_fs_date.localeCompare(b._norm_fs_date));
-
-        // Remove content-duplicate entries (same sales+profit as previous = stale data)
-        var cleaned = [];
-        for (var fi = 0; fi < fundHistory.length; fi++) {
-          var cur = fundHistory[fi];
-          if (fi > 0) {
-            var prev = fundHistory[fi - 1];
-            if (Math.abs((cur.sales || 0) - (prev.sales || 0)) < 0.01 && Math.abs((cur.profit || 0) - (prev.profit || 0)) < 0.01) continue;
-          }
-          cleaned.push(cur);
-        }
-        fundHistory = cleaned;
-
-        // Label quarters from snapped date
-        fundHistory.forEach(fh => {
-          const fd = fh._norm_fs_date || '';
-          const parts = fd.split('-');
-          const year = parts[0] || '';
-          const m = parseInt(parts[1] || '0');
-          fh.quarter_label = m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'FY';
-          fh.period_label = year.slice(2) + ' ' + fh.quarter_label;
+        const rows = db.prepare(`SELECT period, sales, ebt, profit, assets, liabilities, equity,
+             eps, book_value, per, pbv, der, roa, roe, npm
+             FROM financial_ratios WHERE code=? ORDER BY period`).all(code);
+        fundHistory = rows.map(r => {
+          const m = parseInt(String(r.period).slice(5, 7) || '0');
+          const ql = m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'FY';
+          return {
+            ...r,
+            eps_trailing: r.eps,
+            snapshot_month: String(r.period).slice(0, 7),
+            fs_date: r.period,
+            _norm_fs_date: r.period,
+            quarter_label: ql,
+            period_label: String(r.period).slice(2, 4) + ' ' + ql
+          };
         });
       } catch (e) {}
 
