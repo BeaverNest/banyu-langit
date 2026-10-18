@@ -708,21 +708,6 @@ function sdTabOwnership(d) {
 
     // Kiri: stacked bar + tabel
     h += '<div>';
-    h += '<div style="display:flex;height:26px;border-radius:4px;overflow:hidden;margin-bottom:4px">';
-    rowsC.slice().sort(function (a, b) { return b.lv - a.lv; }).forEach(function (r, i) {
-      if (r.lv <= 0) return;
-      h += '<div title="Lokal ' + r.l + ' ' + r.lv.toFixed(2) + '%" style="width:' + r.lv + '%;background:' + LOC_C[i % LOC_C.length] + '"></div>';
-    });
-    rowsC.slice().sort(function (a, b) { return b.fv - a.fv; }).forEach(function (r, i) {
-      if (r.fv <= 0) return;
-      h += '<div title="Asing ' + r.l + ' ' + r.fv.toFixed(2) + '%" style="width:' + r.fv + '%;background:' + FOR_C[i % FOR_C.length] + '"></div>';
-    });
-    h += '</div>';
-    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:8px">';
-    h += '<span><b style="color:#60a5fa">Lokal ' + Number(own.local_pct).toFixed(2) + '%</b></span>';
-    h += '<span><b style="color:#f59e0b">Asing ' + Number(own.foreign_pct).toFixed(2) + '%</b></span>';
-    h += '</div>';
-
     h += '<table class="bei-tbl" style="font-size:11px;width:100%"><thead style="font-size:9px"><tr>';
     h += '<th class="al">Kategori</th><th class="ar">Lokal</th><th class="ar">Asing</th><th class="ar">Total</th><th class="ar">Δ12m</th></tr></thead><tbody>';
     rowsC.forEach(function (r) {
