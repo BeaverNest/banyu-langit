@@ -9,6 +9,17 @@ var PHASE_COLORS = {
   markdown: { bg: 'rgba(249,115,22,0.12)', color: '#f97316', icon: '📉', label: 'MARKDOWN' }
 };
 
+// Tinggi chart di Stock Information. Dulu tinggi di-hardcode (price 360px, funda 300px,
+// flow 180px) sehingga di jendela lebar plotnya memanjang tapi tetap pendek dan terlihat
+// gepeng. Sekarang diturunkan dari tinggi viewport dengan batas bawah/atas supaya tetap
+// masuk akal di layar pendek maupun tinggi.
+function sdChartHeight(minH, ratio, maxH) {
+  var H = Math.round((window.innerHeight || 900) * ratio);
+  if (H < minH) H = minH;
+  if (H > maxH) H = maxH;
+  return H;
+}
+
 function loadStockDetail() {
   var el = $('sd-content'); if (!el) return;
   renderSDShell(el);
@@ -73,7 +84,7 @@ function renderSDBody() {
   h += '</div>';
 
   // ═══ PRICE CHART — Candlestick + MA ribbon only ═══
-  h += '<div id="sd-price-chart" style="width:100%;height:360px;margin-bottom:6px"></div>';
+  h += '<div id="sd-price-chart" style="width:100%;height:' + sdChartHeight(440, 0.55, 640) + 'px;margin-bottom:6px"></div>';
 
   // ═══ TAB BAR ═══
   var tabs = [
@@ -426,12 +437,12 @@ function sdTabFundachart(d) {
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
   if (hasFH) {
     var ml = sdFcMode==='annual'?'Annual':'Quarterly';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">REVENUE & PROFIT <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-revprofit" style="width:100%;height:300px"></div></div>';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">EPS & ROE <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-epsroe" style="width:100%;height:300px"></div></div>';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BALANCE SHEET <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-bs" style="width:100%;height:300px"></div></div>';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">REVENUE & PROFIT <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-revprofit" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">EPS & ROE <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-epsroe" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BALANCE SHEET <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-bs" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
   }
   if (hasDV) {
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">LIVE PER · PBV · PRICE <span style="font-weight:400;color:var(--t3)">(Daily)</span></div><div id="sd-fc-val" style="width:100%;height:300px"></div></div>';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">LIVE PER · PBV · PRICE <span style="font-weight:400;color:var(--t3)">(Daily)</span></div><div id="sd-fc-val" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
   }
   h += '</div>';
   return h;
@@ -634,14 +645,14 @@ function sdTabAnalysis(d) {
     });
   }
 
-  // 2-col: Score + Commentary
-  h += '<div style="display:grid;grid-template-columns:280px 1fr;gap:10px;margin-top:8px">';
+  // 2-col: Score + Commentary (kolom skor dulu dikunci 280px sehingga radar-nya sempit)
+  h += '<div style="display:grid;grid-template-columns:minmax(340px,34%) 1fr;gap:10px;margin-top:8px">';
 
   // Score radar + values
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
   h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">5-FACTOR SCORE</div>';
   if (d.scoring) {
-    h += '<div id="sd-radar-chart" style="width:100%;height:200px"></div>';
+    h += '<div id="sd-radar-chart" style="width:100%;height:280px"></div>';
     h += '<table class="bei-tbl" style="font-size:12px"><tbody>';
     [{ k: 'score_composite', l: 'Composite', c: 'var(--bl)', bold: true },
      { k: 'score_fundamental', l: 'Fundamental', c: '#22c55e' },
@@ -668,7 +679,7 @@ function sdTabAnalysis(d) {
   if (d.score_history && d.score_history.length >= 3) {
     h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
     h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">SCORE TREND</div>';
-    h += '<div id="sd-score-chart" style="width:100%;height:350px"></div>';
+    h += '<div id="sd-score-chart" style="width:100%;height:' + sdChartHeight(380, 0.45, 560) + 'px"></div>';
     h += '</div>';
   }
 
@@ -780,7 +791,7 @@ function sdTabFlow(d) {
   h += '</div>';
   if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">🔥 Accumulating ' + ff.accum_streak + ' consecutive days</div>';
   if (ff.distrib_streak > 0) h += '<div style="font-size:11px;color:var(--rd);font-weight:600;margin-bottom:6px">⚠ Distributing ' + ff.distrib_streak + ' consecutive days</div>';
-  h += '<div id="sd-fnet-chart" style="width:100%;height:180px"></div>';
+  h += '<div id="sd-fnet-chart" style="width:100%;height:240px"></div>';
   h += '</div>';
 
   // Bid/Offer
@@ -790,7 +801,7 @@ function sdTabFlow(d) {
   var avgR = bo.avg_ratio || 50;
   var boColor = avgR > 55 ? 'var(--gn)' : avgR < 45 ? 'var(--rd)' : 'var(--am)';
   h += '<div style="text-align:center;margin-bottom:8px"><div style="font-size:32px;font-weight:800;font-family:var(--fm);color:' + boColor + '">' + avgR.toFixed(1) + '%</div><div style="font-size:10px;color:var(--t3)">20D Avg Bid Ratio</div></div>';
-  h += '<div id="sd-bo-chart" style="width:100%;height:180px"></div>';
+  h += '<div id="sd-bo-chart" style="width:100%;height:240px"></div>';
   h += '</div>';
 
   h += '</div>';
