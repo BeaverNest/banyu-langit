@@ -1081,15 +1081,18 @@ module.exports = function(upload) {
           const key = code + '|' + type + '|' + (cum || '') + '|' + (rec || '');
           if (seen.has(key)) continue;               // file bisa tumpang tindih antar-sumber
           seen.add(key);
+          // Nominal dividen ADA di kolom "Proceed Ratio" (15 kolom, bukan 9).
+          const procRaw = r.proceed_ratio == null ? '' : String(r.proceed_ratio).trim();
+          const procNum = procRaw === '' ? null : parseFloat(procRaw.replace(/,/g, ''));
+          const procOk = procNum != null && isFinite(procNum);
           insA.run(code, r.issuer || '', r.security_name || '', type, cum, rec, dist,
                    r.exercise_ratio != null ? String(r.exercise_ratio) : null,
-                   '', null, '', '', '', '', year);
+                   r.exercise_instr || '', procOk ? procNum : null, r.proceed_instr || '',
+                   '', '', '', year);
           nA++;
-          // bei_dividends: cum_date & dps NOT NULL. KSEI TIDAK memuat nominal
-          // dividen (hanya tanggal), jadi dps=0 berarti "tidak tersedia",
-          // bukan "dividen nol". Nominal harus dari sumber lain.
+          // dps = Proceed Ratio (nominal per saham). 0 hanya bila sumber kosong.
           if (type === 'CASH DIVIDEND' && cum) {
-            insD.run(code, 'CASH', cum, rec, dist, 0, year);
+            insD.run(code, 'CASH', cum, rec, dist, procOk ? procNum : 0, year);
             nD++;
           }
         }

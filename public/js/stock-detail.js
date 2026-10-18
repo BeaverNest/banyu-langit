@@ -287,10 +287,10 @@ function sdTabFinancials(d) {
   var dv = (d.dividend_history || []).slice(0, 10);
   if (dv.length) {
     h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">RIWAYAT DIVIDEN <span style="font-weight:400;color:var(--t3);font-size:9px">tanggal saja — sumber KSEI tidak memuat nominal</span></div>';
-    h += '<table class="bei-tbl" style="width:100%;font-size:11px"><thead><tr><th class="al">Cum</th><th class="al">Recording</th><th class="al">Payment</th></tr></thead><tbody>';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">RIWAYAT DIVIDEN <span style="font-weight:400;color:var(--t3);font-size:9px">nominal = Proceed Ratio (KSEI)</span></div>';
+    h += '<table class="bei-tbl" style="width:100%;font-size:11px"><thead><tr><th class="al">Cum</th><th class="al">Recording</th><th class="al">Payment</th><th class="ar">DPS</th></tr></thead><tbody>';
     dv.forEach(function (x) {
-      h += '<tr><td class="al" style="font-family:var(--fm);color:var(--t2)">' + esc(x.cum_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.recording_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.payment_date || '—') + '</td></tr>';
+      h += '<tr><td class="al" style="font-family:var(--fm);color:var(--t2)">' + esc(x.cum_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.recording_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.payment_date || '—') + '</td><td class="ar" style="font-family:var(--fm);color:' + (x.dps > 0 ? 'var(--t1)' : 'var(--t3)') + '">' + (x.dps > 0 ? Number(x.dps).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—') + '</td></tr>';
     });
     h += '</tbody></table></div>';
   }
