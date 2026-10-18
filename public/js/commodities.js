@@ -119,8 +119,13 @@ function cmdTable(cmd){
   if(cmd.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(cmd.tv)+'" target="_blank" style="font-size:10px;padding:3px 10px;border-radius:4px;background:var(--bl);color:#fff;text-decoration:none;font-weight:600">📈 TradingView</a>';
   h+='</div>';
 
-  h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:var(--bgH,var(--bgH))">';
-  var cols=[['code','Code','al'],['','Name','al'],['close','Close','ar'],['chg','Chg%','ar'],['value','Value','ar'],['fnet','F.Net','ar']];
+  // table-layout:fixed + colgroup -> lebar kolom tidak ditentukan panjang nama,
+  // dan header/isi memakai sumbu yang sama.
+  h+='<table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">';
+  h+='<colgroup><col style="width:62px"><col><col style="width:92px"><col style="width:78px"><col style="width:96px"><col style="width:96px"></colgroup>';
+  h+='<thead><tr style="background:var(--bgH,var(--bgH))">';
+  // dulu ditulis 'al'/'ar' -> CSS tidak valid, header tertinggal di kiri
+  var cols=[['code','Code','left'],['','Name','left'],['close','Close','right'],['chg','Chg%','right'],['value','Value','right'],['fnet','F.Net','right']];
   for(var i=0;i<cols.length;i++){
     var ck=cols[i][0],cl=cols[i][1],ca=cols[i][2];
     var arrow=cmdSort===ck?(cmdDir==='desc'?' ▼':' ▲'):'';
@@ -136,7 +141,7 @@ function cmdTable(cmd){
     var fn=s.fnet_val||0;
     h+='<tr style="border-top:1px solid var(--b1,var(--b1))">';
     h+='<td style="padding:4px 8px"><span style="color:var(--bl);font-weight:700;cursor:pointer;font-family:monospace" onclick="if(typeof gsOpen===\'function\')gsOpen(\''+s.code+'\')">'+s.code+'</span></td>';
-    h+='<td style="padding:4px 8px;font-size:9px;color:var(--t2)">'+((s.name||'').substring(0,30))+'</td>';
+    h+='<td style="padding:4px 8px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.name||'')+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600">'+(s.close||0).toLocaleString()+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(chg>0?'var(--gn)':chg<0?'var(--rd)':'#888')+'">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace">'+cmdFmt(s.value||0)+'</td>';
