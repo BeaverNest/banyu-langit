@@ -3025,7 +3025,7 @@ module.exports = function(upload) {
           const d5 = rows[4] ? rows[4].close : now;
           const d20 = rows[19] ? rows[19].close : now;
           return {
-            code: t.code, name: t.name || t.code, close: now,
+            code: t.code, name: t.name || t.code, close: now, date: rows[0].trade_date,
             chg_pct: d1 > 0 ? Math.round((now - d1) / d1 * 10000) / 100 : 0,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0
@@ -3045,6 +3045,7 @@ module.exports = function(upload) {
           const d20 = rows[19] ? rows[19].close : now;
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
+            date: rows[0].trade_date,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
             linked_sector: t.linked_sector || ''
@@ -3079,26 +3080,39 @@ module.exports = function(upload) {
         }
       } catch (e) {}
 
-      // Foreign flow aggregate
+      // Foreign flow aggregate — dari idx_daily (per saham), BUKAN foreign_trading.
+      // foreign_trading berhenti 2026-09-30 sehingga angka 30 Sep tampil sebagai "hari ini".
       try {
-        const ffRows = db.prepare('SELECT trade_date, buy_value, sell_value FROM foreign_trading ORDER BY trade_date DESC LIMIT 20').all();
-        if (ffRows.length) {
-          const netToday = ffRows[0] ? (ffRows[0].buy_value - ffRows[0].sell_value) : 0;
-          const net5d = ffRows.slice(0, 5).reduce((s, r) => s + (r.buy_value - r.sell_value), 0);
-          const net20d = ffRows.reduce((s, r) => s + (r.buy_value - r.sell_value), 0);
-          idx.foreign_flow = { net_today: netToday, net_5d: net5d, net_20d: net20d };
+        const ffDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 20').all().map(r => r.trade_date);
+        if (ffDates.length) {
+          const rows = db.prepare(`SELECT trade_date, SUM((foreign_buy-foreign_sell)*close) AS net
+                                   FROM idx_daily WHERE trade_date >= ? AND close>0 GROUP BY trade_date`)
+                           .all(ffDates[ffDates.length - 1]);
+          const netByDate = {};
+          rows.forEach(r => { netByDate[r.trade_date] = r.net || 0; });
+          const ordered = ffDates.filter(d => netByDate[d] !== undefined);
+          if (ordered.length) {
+            idx.foreign_flow = {
+              as_of: ordered[0],
+              net_today: netByDate[ordered[0]] || 0,
+              net_5d: ordered.slice(0, 5).reduce((a, d) => a + netByDate[d], 0),
+              net_20d: ordered.slice(0, 20).reduce((a, d) => a + netByDate[d], 0)
+            };
+          }
         }
       } catch (e) {}
 
       // Market breadth
       try {
         if (today) {
-          const stocks = db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close > 0 AND volume > 0').all(today);
+          // Harus sama dengan aturan breadth_history: close>0, minimal 50 bar.
+          // Sebelumnya volume>0 + 20 bar -> total 834 vs 964 di histori (persen tak sebanding).
+          const stocks = db.prepare('SELECT code, close FROM idx_daily WHERE trade_date=? AND close > 0').all(today);
           let aboveMA20 = 0, aboveMA50 = 0, aboveMA200 = 0, total = 0, newHigh = 0, newLow = 0;
 
           for (const s of stocks) {
             const hist = db.prepare('SELECT close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 200').all(s.code);
-            if (hist.length < 20) continue;
+            if (hist.length < 50) continue;
             total++;
             const closes = hist.map(r => r.close).reverse();
             const n = closes.length;
@@ -3162,99 +3176,76 @@ module.exports = function(upload) {
       // ── Level 4: Sector Ranking ──
       let sectors = [];
       try {
-        // Get last 2 dates from sectoral_movement to compute daily change
-        const smDates = db.prepare('SELECT DISTINCT trade_date FROM sectoral_movement ORDER BY trade_date DESC LIMIT 2').all();
-        // Also get ~20 trading days ago for 20D change
-        const smDates20 = db.prepare('SELECT DISTINCT trade_date FROM sectoral_movement ORDER BY trade_date DESC LIMIT 22').all();
-        const sm20Date = smDates20.length >= 20 ? smDates20[19].trade_date : (smDates20.length ? smDates20[smDates20.length - 1].trade_date : null);
-        const sm20 = {};
-        if (sm20Date) {
-          db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(sm20Date)
-            .forEach(r => { sm20[r.sector_name] = r.change_pct || 0; });
-        }
+        // Dihitung dari idx_daily + company_profiles.sector.
+        // Sumber lama (sectoral_movement) punya DUA cacat: berhenti 2026-09-30, dan
+        // change_pct-nya kumulatif (Technology -44%, Composite -24,7%) bukan harian.
+        // Blok lama lalu menghitung persen-dari-persen -> mis. "+104,26% sehari".
+        const SECTOR_MAP = {
+          'IDX Sector Basic Materials': 'Barang Baku',
+          'IDX Sector Industrials': 'Perindustrian',
+          'IDX Sector Consumer Cyclicals': 'Barang Konsumen Non-Primer',
+          'IDX Sector Consumer Non-Cyclicals': 'Barang Konsumen Primer',
+          'IDX Sector Energy': 'Energi',
+          'IDX Sector Financials': 'Keuangan',
+          'IDX Sector Healthcare': 'Kesehatan',
+          'IDX Sector Infrastructures': 'Infrastruktur',
+          'IDX Sector Properties & Real Estate': 'Properti & Real Estat',
+          'IDX Sector Technology': 'Teknologi',
+          'IDX Sector Transportation & Logistic': 'Transportasi & Logistik'
+        };
+        const INV = {};
+        Object.keys(SECTOR_MAP).forEach(k => { INV[SECTOR_MAP[k]] = k; });
+        const ihsgDailyChg = idx.ihsg ? idx.ihsg.chg_1d : 0;
 
-        if (smDates.length >= 2) {
-          const latestSM = smDates[0].trade_date;
-          const prevSM = smDates[1].trade_date;
-          const smLatest = db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(latestSM);
-          const smPrev = {};
-          db.prepare('SELECT sector_name, change_pct FROM sectoral_movement WHERE trade_date=?').all(prevSM)
-            .forEach(r => { smPrev[r.sector_name] = r.change_pct || 0; });
+        const sDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 21').all().map(r => r.trade_date);
+        const d20 = sDates.length >= 21 ? sDates[20] : null;
 
-          // Map: sectoral_movement (English) → company_profiles.sector (Indonesian)
-          const SECTOR_MAP = {
-            'IDX Sector Basic Materials': 'Barang Baku',
-            'IDX Sector Industrials': 'Perindustrian',
-            'IDX Sector Consumer Cyclicals': 'Barang Konsumen Non-Primer',
-            'IDX Sector Consumer Non-Cyclicals': 'Barang Konsumen Primer',
-            'IDX Sector Energy': 'Energi',
-            'IDX Sector Financials': 'Keuangan',
-            'IDX Sector Healthcare': 'Kesehatan',
-            'IDX Sector Infrastructures': 'Infrastruktur',
-            'IDX Sector Properties & Real Estate': 'Properti & Real Estat',
-            'IDX Sector Technology': 'Teknologi',
-            'IDX Sector Transportation & Logistic': 'Transportasi & Logistik'
-          };
+        if (today) {
+          const perfRows = db.prepare(`
+            SELECT cp.sector AS sector, d.code, d.close, d.prev_close, d.value AS val,
+                   p.close AS close20,
+                   ((d.foreign_buy - d.foreign_sell) * d.close) AS fnet_day
+            FROM idx_daily d
+            JOIN company_profiles cp ON d.code = cp.code
+            LEFT JOIN idx_daily p ON p.code = d.code AND p.trade_date = ?
+            WHERE d.trade_date = ? AND d.close > 0
+              AND cp.sector IS NOT NULL AND cp.sector != ''
+          `).all(d20, today);
 
-          const ihsgDailyChg = idx.ihsg ? idx.ihsg.chg_1d : 0;
+          // Foreign net 20 sesi per sektor (satu query, bukan per sektor).
+          const fnet20 = {};
+          if (d20) {
+            db.prepare(`SELECT cp.sector AS sector, SUM((d.foreign_buy-d.foreign_sell)*d.close) AS fnet
+                        FROM idx_daily d JOIN company_profiles cp ON d.code=cp.code
+                        WHERE d.trade_date >= ? AND d.close > 0
+                        GROUP BY cp.sector`).all(d20)
+              .forEach(r => { fnet20[r.sector] = r.fnet || 0; });
+          }
 
-          sectors = smLatest.filter(sm => sm.sector_name !== 'Composite Index').map(sm => {
-            const todayVal = sm.change_pct || 0;
-            const prevVal = smPrev[sm.sector_name] || 0;
-            const dailyChg = prevVal > 0 ? Math.round((todayVal - prevVal) / prevVal * 10000) / 100 : 0;
+          const byS = {};
+          for (const r of perfRows) {
+            const b = byS[r.sector] || (byS[r.sector] = { n: 0, d1: 0, d20: 0, n20: 0, top: [] });
+            b.n++;
+            if (r.prev_close > 0) b.d1 += (r.close - r.prev_close) * 1.0 / r.prev_close * 100;
+            if (r.close20 > 0) { b.d20 += (r.close - r.close20) * 1.0 / r.close20 * 100; b.n20++; }
+            b.top.push({ code: r.code, val: r.val || 0 });
+          }
 
-            // Map to Indonesian sector name in company_profiles
-            const cpSector = SECTOR_MAP[sm.sector_name] || '';
-
-            // Foreign flow per sector (last 20 days) — JOIN idx_daily with company_profiles
-            let fnet20d = 0;
-            if (cpSector) {
-              try {
-                const sfRow = db.prepare(
-                  `SELECT SUM((d.foreign_buy - d.foreign_sell) * d.close) as fnet
-                   FROM idx_daily d JOIN company_profiles cp ON d.code=cp.code
-                   WHERE cp.sector=? AND d.trade_date >= date(?, '-30 days') AND d.close > 0`
-                ).get(cpSector, latestSM);
-                fnet20d = sfRow?.fnet || 0;
-              } catch (e) {}
-            }
-
-            // Top stocks — by composite score if available, else by value
-            let topStocks = [];
-            if (cpSector) {
-              try {
-                // Try with scores first
-                let top = [];
-                try {
-                  top = db.prepare(
-                    `SELECT d.code FROM idx_daily d
-                     JOIN company_profiles cp ON d.code=cp.code
-                     LEFT JOIN daily_scores s ON d.code=s.code AND s.calc_date=(SELECT MAX(calc_date) FROM daily_scores)
-                     WHERE d.trade_date=? AND cp.sector=? AND d.close > 0
-                     ORDER BY COALESCE(s.score_composite, 0) DESC LIMIT 5`
-                  ).all(today, cpSector);
-                } catch (e) {}
-                // Fallback: order by trading value
-                if (!top.length) {
-                  top = db.prepare(
-                    `SELECT d.code FROM idx_daily d
-                     JOIN company_profiles cp ON d.code=cp.code
-                     WHERE d.trade_date=? AND cp.sector=? AND d.close > 0
-                     ORDER BY d.value DESC LIMIT 5`
-                  ).all(today, cpSector);
-                }
-                topStocks = top.map(r => r.code);
-              } catch (e) {}
-            }
-
-            // 20D change from sectoral_movement
-            const val20ago = sm20[sm.sector_name] || 0;
-            const chg20d = val20ago > 0 ? Math.round((todayVal - val20ago) / val20ago * 10000) / 100 : 0;
-
+          sectors = Object.keys(byS).map(name => {
+            const b = byS[name];
+            b.top.sort((x, y) => y.val - x.val);
+            const chg = b.n ? b.d1 / b.n : 0;
+            const c20 = b.n20 ? b.d20 / b.n20 : 0;
             return {
-              sector: sm.sector_name, cp_sector: cpSector, chg_pct: dailyChg, chg_20d: chg20d,
-              rs_vs_ihsg: dailyChg - ihsgDailyChg,
-              fnet_20d: fnet20d, top_stocks: topStocks
+              sector: INV[name] || name,
+              cp_sector: name,
+              chg_pct: Math.round(chg * 100) / 100,
+              chg_20d: Math.round(c20 * 100) / 100,
+              rs_vs_ihsg: Math.round((chg - ihsgDailyChg) * 100) / 100,
+              fnet_20d: fnet20[name] || 0,
+              top_stocks: b.top.slice(0, 5).map(x => x.code),
+              members: b.n,
+              method: 'equal_weight'
             };
           }).sort((a, b) => (b.rs_vs_ihsg || 0) - (a.rs_vs_ihsg || 0));
         }
