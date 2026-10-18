@@ -149,6 +149,7 @@ function sdRenderTab(tabId) {
     if (tabId === 'analysis') {
       if (d.scoring) sdDrawRadar(d.scoring);
       if (d.score_history && d.score_history.length >= 3) sdDrawScoreChart(d.score_history);
+      sdDrawAnalysisCharts(d);
     }
     if (tabId === 'flow') {
       if (d.chart) sdDrawFnetChart(d.chart);
@@ -618,6 +619,33 @@ function sdTabAnalysis(d) {
     h += '</div>';
   }
 
+  // Historis tambahan (dari 500 bar harga)
+  if (d.chart && d.chart.length >= 60) {
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">JARAK KE MA <span style="font-weight:400;color:var(--t3)">(250 sesi, %)</span></div>';
+    h += '<div id="sd-an-ma" style="width:100%;height:' + sdChartHeight(280, 0.32, 380) + 'px"></div></div>';
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">ARUS ASING <span style="font-weight:400;color:var(--t3)">(60 sesi, bar = harian, garis = kumulatif)</span></div>';
+    h += '<div id="sd-an-ff" style="width:100%;height:' + sdChartHeight(280, 0.32, 380) + 'px"></div></div>';
+    h += '</div>';
+  }
+
+  // 52W range
+  if (d.stats && d.stats.peak_52w && d.stats.low_52w && d.current) {
+    var lo = d.stats.low_52w, hi = d.stats.peak_52w, px = d.current.close;
+    var pos = hi > lo ? Math.max(0, Math.min(100, (px - lo) / (hi - lo) * 100)) : 0;
+    h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:5px"><span style="font-weight:700;color:var(--t1);font-size:11px">POSISI RENTANG 52 MINGGU</span><span>' + pos.toFixed(0) + '% dari low</span></div>';
+    h += '<div style="position:relative;height:10px;background:linear-gradient(90deg,#ef4444 0%,#f59e0b 50%,#22c55e 100%);border-radius:5px;opacity:.75">';
+    h += '<div style="position:absolute;left:' + pos.toFixed(1) + '%;top:-4px;width:3px;height:18px;background:#fff;border-radius:2px;transform:translateX(-1px)"></div></div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);font-family:var(--fm);margin-top:4px"><span>' + lo.toLocaleString() + '</span><span>' + px.toLocaleString() + '</span><span>' + hi.toLocaleString() + '</span></div>';
+    if (d.stats.drawdown_from_peak != null) {
+      h += '<div style="font-size:10px;color:var(--t3);margin-top:3px">Drawdown dari peak ' + d.stats.drawdown_from_peak + '% · ' + (d.stats.pct_from_low || 0) + '% di atas low · ATR ' + (d.stats.atr || 0) + ' · vol ' + (d.stats.volatility_ann || 0) + '%</div>';
+    }
+    h += '</div>';
+  }
+
   // Phase history table
   if (d.phases && d.phases.length) {
     h += '<div style="margin-top:10px">';
@@ -881,6 +909,64 @@ function sdDrawBOChart(boData) {
       { type: 'line', data: boData.map(function() { return 50; }), symbol: 'none', lineStyle: { color: '#555', type: 'dashed', width: 1 }, silent: true }
     ]
   }, true);
+}
+
+// ═══ ANALYSIS: MA DISTANCE + FOREIGN FLOW ═══
+function sdDrawAnalysisCharts(d) {
+  var rows = (d.chart || []).slice(-250);
+  if (rows.length < 60) return;
+
+  function sma(arr, n, i) {
+    if (i < n - 1) return null;
+    var s = 0;
+    for (var k = i - n + 1; k <= i; k++) s += arr[k];
+    return s / n;
+  }
+  var closes = rows.map(function (r) { return r.close; });
+  var dist = function (n) {
+    return rows.map(function (r, i) {
+      var m = sma(closes, n, i);
+      return m ? Math.round((r.close - m) / m * 10000) / 100 : null;
+    });
+  };
+  var dates = rows.map(function (r) { return r.date; });
+  var fmtDate = { fontSize: 8, interval: Math.floor(rows.length / 6) };
+
+  var el1 = document.getElementById('sd-an-ma');
+  if (el1) {
+    var c1 = BL.init(el1, 'sd-an-ma'); if (c1) c1.setOption({
+      grid: { left: 42, right: 14, top: 20, bottom: 22 },
+      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: { type: 'category', data: dates, axisLabel: fmtDate, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } },
+      series: [
+        { name: 'vs MA20', type: 'line', data: dist(20), symbol: 'none', lineStyle: { width: 1.2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
+        { name: 'vs MA50', type: 'line', data: dist(50), symbol: 'none', lineStyle: { width: 1.2, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } },
+        { name: 'vs MA200', type: 'line', data: dist(200), symbol: 'none', lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' },
+          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 0 }] } }
+      ]
+    });
+  }
+
+  var ff = (d.chart || []).slice(-60);
+  var el2 = document.getElementById('sd-an-ff');
+  if (el2 && ff.length) {
+    var net = ff.map(function (r) { return (r.fnet || 0) * (r.close || 0) / 1e9; }); // miliar
+    var cum = [], acc = 0;
+    net.forEach(function (v) { acc += v; cum.push(Math.round(acc * 100) / 100); });
+    var c2 = BL.init(el2, 'sd-an-ff'); if (c2) c2.setOption({
+      grid: { left: 46, right: 14, top: 20, bottom: 22 },
+      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: { type: 'category', data: ff.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(ff.length / 5) }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: [{ type: 'value', axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
+              { type: 'value', axisLabel: { fontSize: 8 }, splitLine: { show: false } }],
+      series: [
+        { name: 'Harian (miliar)', type: 'bar', data: net.map(function (v) { return Math.round(v * 100) / 100; }),
+          itemStyle: { color: function (p) { return p.value >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'; } }, barMaxWidth: 8 },
+        { name: 'Kumulatif', type: 'line', yAxisIndex: 1, data: cum, symbol: 'none', lineStyle: { width: 1.6, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
+      ]
+    });
+  }
 }
 
 // ═══ SCORE TREND CHART ═══
