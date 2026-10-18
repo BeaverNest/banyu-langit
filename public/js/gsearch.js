@@ -267,7 +267,7 @@ function renderTickerPage(d) {
     var frUnit = d.financial_ratios_unit === 'million' ? 1e6 : 1;
 
     if (!hasIdx && !hasRatios) {
-      h += '<div style="color:var(--t3);padding:30px;text-align:center">No fundamental data for ' + esc(code) + '<br><span style="font-size:10px">Sync via Settings → Sync Center (Full Sync)</span></div>';
+      h += '<div style="color:var(--t3);padding:30px;text-align:center">No fundamental data for ' + esc(code) + '<br><span style="font-size:10px">Fundamental data is synced automatically every day</span></div>';
     } else {
 
     // ─── ① VALUATION SNAPSHOT ───
