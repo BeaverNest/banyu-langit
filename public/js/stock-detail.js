@@ -263,6 +263,7 @@ function sdTabFinancials(d) {
 
   // NPM
   h += row('Net Profit Margin', fu.npm ? fu.npm.toFixed(2) + '%' : '—', { color: (fu.npm||0) < 0 ? 'var(--rd)' : 'var(--t1)' });
+  if (fu.npm_note) h += '<tr><td colspan="2" style="font-size:9px;color:var(--t3);padding:0 0 4px 0">' + esc(fu.npm_note) + '</td></tr>';
 
   // Gross Profit Margin (if available from backend)
   if (fu.gpm != null) {
@@ -723,6 +724,10 @@ function sdTabOwnership(d) {
     if (lPct > 0) h += '<div style="width:' + lPct + '%;background:var(--bl);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;min-width:35px">L ' + lPct.toFixed(1) + '%</div>';
     if (fPct > 0) h += '<div style="width:' + fPct + '%;background:var(--am);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;min-width:35px">F ' + fPct.toFixed(1) + '%</div>';
     h += '</div>';
+    if (own.basis === 'ksei_scripless' && own.scripless_pct != null) {
+      h += '<div style="font-size:9px;color:var(--t3);margin-bottom:8px">Basis: saham tercatat di KSEI ('
+         + Number(own.scripless_pct).toFixed(1) + '% dari saham beredar)</div>';
+    }
     var invTypes = [{k:'is',l:'Insurance'},{k:'cp',l:'Corporate'},{k:'pf',l:'Pension'},{k:'ib',l:'IB/Broker'},{k:'id',l:'Individual'},{k:'mf',l:'Mutual Fund'},{k:'sc',l:'Securities'},{k:'fd',l:'Foundation'},{k:'ot',l:'Others'}];
     h += '<table class="bei-tbl" style="font-size:11px"><thead style="font-size:10px"><tr><th class="al">Type</th><th class="ar">Local</th><th class="ar">Foreign</th></tr></thead><tbody>';
     var bk = own.breakdown || {}, bkL = bk.local || {}, bkF = bk.foreign || {};
@@ -787,7 +792,8 @@ function sdTabFlow(d) {
   h += sdFlowCard('5D Net', ff.fnet_5d);
   h += sdFlowCard('10D Net', ff.fnet_10d);
   h += sdFlowCard('20D Net', ff.fnet_20d);
-  h += sdFlowCard('Total', ff.fnet_total);
+  var totLbl = ff.fnet_total_since ? 'Total sejak ' + String(ff.fnet_total_since).slice(0, 7) : 'Total';
+  h += sdFlowCard(totLbl, ff.fnet_total);
   h += '</div>';
   if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">🔥 Accumulating ' + ff.accum_streak + ' consecutive days</div>';
   if (ff.distrib_streak > 0) h += '<div style="font-size:11px;color:var(--rd);font-weight:600;margin-bottom:6px">⚠ Distributing ' + ff.distrib_streak + ' consecutive days</div>';

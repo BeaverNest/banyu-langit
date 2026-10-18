@@ -3784,6 +3784,12 @@ module.exports = function(upload) {
             fiscal_year: String(fr.period).slice(0, 4),
             fs_type: 'QUARTERLY'
           };
+          // NPM bank tidak sebanding: `sales` = pendapatan bunga bersih, sementara
+          // `profit` termasuk pendapatan non-operasional -> rasio bisa >100%.
+          if (/financial/i.test(fr.sector || '')) {
+            fundamental.npm = null;
+            fundamental.npm_note = 'Bank: NPM tidak sebanding (sales = pendapatan bunga bersih)';
+          }
         }
       } catch (e) {}
 
@@ -3799,6 +3805,9 @@ module.exports = function(upload) {
             foreign_total: bpRow.foreign_total || 0,
             total: totalShares,
             foreign_pct: totalShares > 0 ? Math.round(bpRow.foreign_total / totalShares * 10000) / 100 : 0,
+            basis: 'ksei_scripless',
+            scripless_pct: (last.listed_shares || 0) > 0
+              ? Math.round(totalShares / last.listed_shares * 10000) / 100 : null,
             local_pct: totalShares > 0 ? Math.round(bpRow.local_total / totalShares * 10000) / 100 : 0,
             breakdown: {
               local: { is: bpRow.local_is||0, cp: bpRow.local_cp||0, pf: bpRow.local_pf||0, ib: bpRow.local_ib||0, id: bpRow.local_id||0, mf: bpRow.local_mf||0, sc: bpRow.local_sc||0, fd: bpRow.local_fd||0, ot: bpRow.local_ot||0 },
@@ -4326,7 +4335,10 @@ module.exports = function(upload) {
         freq_analysis: freqSummary,
         freq_events: freqAnalysis.slice(-100),
         stats: { peak_52w: peak52w, low_52w: low52w, drawdown_from_peak: drawdownFromPeak, pct_from_low: pctFromLow, atr, volatility_ann: volatility, rs_vs_ihsg: rsVsIhsg, total_days: n },
-        foreign: { fnet_5d: fnet5, fnet_10d: fnet10, fnet_20d: fnet20, fnet_total: fnetTotal, accum_streak: accumStreak, distrib_streak: distribStreak },
+        foreign: { fnet_5d: fnet5, fnet_10d: fnet10, fnet_20d: fnet20, fnet_total: fnetTotal,
+                   fnet_total_since: data.length ? data[0].trade_date : null,
+                   fnet_total_days: data.length,
+                   accum_streak: accumStreak, distrib_streak: distribStreak },
         bid_offer: { data: boData, avg_ratio: avgBidRatio },
         scoring, score_history: scoreHist || [],
         fundamental,
