@@ -2508,6 +2508,46 @@ module.exports = function(upload) {
   let eodFetcher;
   try { eodFetcher = require('./eod-fetcher'); } catch (e) { /* module not available */ }
 
+  // ═══ UPSERT CUSTOM OHLC (jalur kedua: sumber non-Yahoo, mis. investing/TE) ═══
+  // Body: {code, name?, category?, rows:[{date, close, open?, high?, low?, volume?}]}
+  // Dipakai skrip host yang punya akses ke rail lain (investing pinned ids, Trading Economics).
+  router.post('/custom/upsert', (req, res) => {
+    try {
+      const code = String(req.body.code || '').toUpperCase().trim();
+      const category = String(req.body.category || 'custom').trim();
+      const name = String(req.body.name || code);
+      const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+      if (!code) return res.status(400).json({ error: 'code required' });
+      if (!rows.length) return res.status(400).json({ error: 'rows required' });
+
+      let written = 0;
+      db.transaction(() => {
+        const up = db.prepare(
+          `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume) VALUES(?,?,?,?,?,?,?)
+           ON CONFLICT(trade_date, code) DO UPDATE SET
+           open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`);
+        for (const r of rows) {
+          if (!r || !r.date || !(r.close > 0)) continue;
+          up.run(r.date, code, r.open ?? r.close, r.high ?? r.close, r.low ?? r.close, r.close, r.volume ?? 0);
+          written++;
+        }
+      })();
+
+      const dr = db.prepare('SELECT MIN(trade_date) f, MAX(trade_date) l FROM custom_ohlc WHERE code=?').get(code);
+      const cnt = db.prepare('SELECT COUNT(*) c FROM custom_ohlc WHERE code=?').get(code).c;
+      if (written > 0) {
+        db.prepare(
+          `INSERT INTO custom_tickers(code, name, category, source, rows, first_date, last_date, updated_at)
+           VALUES(?,?,?,?,?,?,?,datetime('now'))
+           ON CONFLICT(code) DO UPDATE SET
+           rows=excluded.rows, first_date=excluded.first_date, last_date=excluded.last_date,
+           category=excluded.category, source=excluded.source, updated_at=datetime('now')`
+        ).run(code, name, category, String(req.body.source || 'external'), cnt, dr.f, dr.l);
+      }
+      res.json({ ok: true, code, written, total_rows: cnt, date_range: { first: dr.f, last: dr.l } });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ═══ EOD REFRESH SEMUA CUSTOM TICKER (untuk dijadwalkan, mis. harian) ═══
   router.post('/custom/fetch-all', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
@@ -2999,12 +3039,12 @@ module.exports = function(upload) {
         const cmdTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
         commodities = cmdTickers.map(t => {
           const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
-          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '' };
+          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0 };
           const now = rows[0].close;
           const d5 = rows[4] ? rows[4].close : now;
           const d20 = rows[19] ? rows[19].close : now;
           return {
-            code: t.code, name: t.name || t.code, close: now,
+            code: t.code, name: t.name || t.code, close: now, points: rows.length,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
             linked_sector: t.linked_sector || ''

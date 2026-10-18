@@ -155,13 +155,17 @@ function mrRenderCommodity(cmds) {
   h += '<th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Linked Sector</th>';
   h += '</tr>';
   cmds.forEach(function(c) {
-    var chg5 = c.chg_5d || 0, chg20 = c.chg_20d || 0;
-    var trend = chg20 > 5 ? '🟢 ▲ Up' : chg20 < -5 ? '🔴 ▼ Down' : chg20 > 2 ? '🟡 ↗ Mild Up' : chg20 < -2 ? '🟡 ↘ Mild Down' : '⚪ → Flat';
+    var pts = c.points || 0;
+    var thin = pts > 0 && pts < 6;                 // histori belum cukup untuk hitung 5D/20D
+    var chg5v = thin ? null : (c.chg_5d || 0);
+    var chg20v = thin ? null : (c.chg_20d || 0);
+    var chg5 = chg5v === null ? 0 : chg5v, chg20 = chg20v === null ? 0 : chg20v;
+    var trend = thin ? '⚪ histori ' + pts + ' titik' : (chg20 > 5 ? '🟢 ▲ Up' : chg20 < -5 ? '🔴 ▼ Down' : chg20 > 2 ? '🟡 ↗ Mild Up' : chg20 < -2 ? '🟡 ↘ Mild Down' : '⚪ → Flat');
     h += '<tr style="border-bottom:1px solid var(--b1)">';
     h += '<td style="padding:4px 8px;font-weight:600;color:var(--bl)">' + esc(c.name || c.code) + '</td>';
     h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm)">' + (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg5 > 0 ? 'color:var(--gn)' : chg5 < 0 ? 'color:var(--rd)' : '') + '">' + (chg5 > 0 ? '+' : '') + chg5.toFixed(1) + '%</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg5 > 0 ? 'color:var(--gn)' : chg5 < 0 ? 'color:var(--rd)' : '') + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(1) + '%') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%') + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px">' + trend + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px;color:var(--t3)">' + esc(c.linked_sector || '-') + '</td>';
     h += '</tr>';

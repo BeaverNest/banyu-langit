@@ -41,7 +41,9 @@ const YAHOO_SYMBOL_MAP = {
   'WTI OIL': 'CL=F', 'WTI': 'CL=F', 'BRENT OIL': 'BZ=F', 'BRENT': 'BZ=F',
   'COPPER': 'HG=F', 'TEMBAGA': 'HG=F', 'PLATINUM': 'PL=F',
   'NATGAS': 'NG=F', 'PALLADIUM': 'PA=F',
-  'CPO': 'CPO=F', 'NICKEL': 'NIY=F',
+  // JANGAN petakan NICKEL ke NIY=F: itu Nikkei/Yen futures (JPY), bukan nikel.
+  // JANGAN petakan CPO ke CPO=F: itu CPO CME dalam USD, bukan FCPO Malaysia (MYR).
+  'COAL_API2': 'MTF=F', 'ZINC': 'ZNC=F',
   'ALUMUNIUM': 'ALI=F', 'ALUMINIUM': 'ALI=F',
   'TIMAH': 'SNNY=F', 'TIN': 'SNNY=F',
   'PERAK': 'SI=F',
