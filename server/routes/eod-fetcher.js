@@ -41,7 +41,7 @@ const YAHOO_SYMBOL_MAP = {
   'WTI OIL': 'CL=F', 'WTI': 'CL=F', 'BRENT OIL': 'BZ=F', 'BRENT': 'BZ=F',
   'COPPER': 'HG=F', 'TEMBAGA': 'HG=F', 'PLATINUM': 'PL=F',
   'NATGAS': 'NG=F', 'PALLADIUM': 'PA=F',
-  'CPO': 'FCPO=F', 'NICKEL': 'NIY=F',
+  'CPO': 'CPO=F', 'NICKEL': 'NIY=F',
   'ALUMUNIUM': 'ALI=F', 'ALUMINIUM': 'ALI=F',
   'TIMAH': 'SNNY=F', 'TIN': 'SNNY=F',
   'PERAK': 'SI=F',
@@ -49,6 +49,9 @@ const YAHOO_SYMBOL_MAP = {
   'USDIDR': 'USDIDR=X', 'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X',
   'USDJPY': 'USDJPY=X', 'AUDUSD': 'AUDUSD=X', 'USDCNY': 'USDCNY=X',
   'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
+  // Macro (dipakai blok Macro Signals: VIX, DXY, US10Y). BDI TIDAK tersedia di Yahoo
+  // (^BDI/BDIY/BDI=F semuanya 404) — jangan dipetakan ke simbol palsu.
+  'DXY': 'DX-Y.NYB', 'US10Y': '^TNX',
 };
 
 async function fetchYahoo(code, range = '1y') {

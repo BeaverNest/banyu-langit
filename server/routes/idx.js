@@ -2508,6 +2508,45 @@ module.exports = function(upload) {
   let eodFetcher;
   try { eodFetcher = require('./eod-fetcher'); } catch (e) { /* module not available */ }
 
+  // ═══ EOD REFRESH SEMUA CUSTOM TICKER (untuk dijadwalkan, mis. harian) ═══
+  router.post('/custom/fetch-all', async (req, res) => {
+    if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
+    try {
+      const tickers = db.prepare('SELECT code, name, category FROM custom_tickers ORDER BY code').all();
+      const detail = [];
+      for (const t of tickers) {
+        try {
+          const r = await eodFetcher.fetchEOD(t.code, t.category, process.env.ALPHA_VANTAGE_KEY || '', false);
+          let written = 0;
+          db.transaction(() => {
+            const up = db.prepare(
+              `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume) VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(trade_date, code) DO UPDATE SET
+               open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`);
+            for (const row of (r.rows || [])) {
+              if (!row.date || !row.close) continue;
+              up.run(row.date, t.code, row.open, row.high, row.low, row.close, row.volume);
+              written++;
+            }
+          })();
+          const dr = db.prepare('SELECT MIN(trade_date) f, MAX(trade_date) l FROM custom_ohlc WHERE code=?').get(t.code);
+          const cnt = db.prepare('SELECT COUNT(*) c FROM custom_ohlc WHERE code=?').get(t.code).c;
+          db.prepare(`UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime('now') WHERE code=?`)
+            .run(cnt, dr.f, dr.l, t.code);
+          detail.push({ code: t.code, ok: true, written, last: dr.l });
+        } catch (e) {
+          detail.push({ code: t.code, ok: false, error: e.message });
+        }
+      }
+      res.json({
+        ok: true,
+        refreshed: detail.filter(x => x.ok).length,
+        failed: detail.filter(x => !x.ok).length,
+        detail,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.post('/custom/fetch-eod', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found. Place eod-fetcher.js in server/routes/' });
     try {
@@ -3046,6 +3085,39 @@ module.exports = function(upload) {
           };
         }
       } catch (e) {}
+
+      // ── Breadth history 30 sesi (sebelumnya selalu [] — tidak pernah diisi) ──
+      // Dihitung dari idx_daily dengan rolling sum, bukan N+1 query per saham.
+      try {
+        const dates230 = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 231').all().map(r => r.trade_date);
+        if (dates230.length >= 60) {
+          const from = dates230[dates230.length - 1];
+          const rows = db.prepare('SELECT code, trade_date, close FROM idx_daily WHERE trade_date >= ? AND close > 0 ORDER BY code, trade_date').all(from);
+          const byCode = {};
+          for (const r of rows) (byCode[r.code] = byCode[r.code] || []).push(r);
+          const agg = {};
+          for (const code of Object.keys(byCode)) {
+            const arr = byCode[code];
+            let s20 = 0, s50 = 0;
+            for (let i = 0; i < arr.length; i++) {
+              s20 += arr[i].close; if (i >= 20) s20 -= arr[i - 20].close;
+              s50 += arr[i].close; if (i >= 50) s50 -= arr[i - 50].close;
+              if (i < 50) continue;                       // butuh MA50 lebih dulu
+              const d = arr[i].trade_date;
+              if (!agg[d]) agg[d] = { a20: 0, a50: 0, n: 0 };
+              agg[d].n++;
+              if (arr[i].close > s20 / 20) agg[d].a20++;
+              if (arr[i].close > s50 / 50) agg[d].a50++;
+            }
+          }
+          idx.breadth_history = Object.keys(agg).sort().slice(-30).map(d => ({
+            date: d,
+            pct_above_ma20: agg[d].n ? Math.round(agg[d].a20 / agg[d].n * 100) : 0,
+            pct_above_ma50: agg[d].n ? Math.round(agg[d].a50 / agg[d].n * 100) : 0,
+            total: agg[d].n,
+          }));
+        }
+      } catch (e) { }
 
       // ── Level 4: Sector Ranking ──
       let sectors = [];

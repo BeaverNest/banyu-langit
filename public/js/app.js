@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={mkt:false,idx:false,diary:false,analysis:false,pf:false,ins:false};
+var tabLoaded={mkt:false,idx:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -52,14 +52,12 @@ function stab(n,el){
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;if(typeof loadScreener==='function')loadScreener();}
   if(n==='pf'&&!tabLoaded.pf){tabLoaded.pf=true;if(typeof loadPortfolio==='function')loadPortfolio();}
-  if(n==='ins'&&!tabLoaded.ins){tabLoaded.ins=true;if(typeof chkIns==='function')chkIns();}
+  if(n==='bt'&&!tabLoaded.bt){tabLoaded.bt=true;if(typeof loadBacktest==='function')loadBacktest();}
 
   // Re-trigger load for tabs that need refresh
   if(n==='mkt')loadMktOverview();
   if(n==='idx'&&typeof loadMarketIntel==='function')loadMarketIntel();
   if(n==='analysis'&&typeof loadMarketRegime==='function')loadMarketRegime();
-  if(n==='pf'&&typeof loadPortfolio==='function')loadPortfolio();
-  if(n==='ins'&&typeof chkIns==='function')chkIns();
 }
 
 // Market sub-tabs
@@ -87,15 +85,12 @@ function anaSubTab(n,b){
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
   if(n==='correlation'&&typeof loadCorrelationView==='function')loadCorrelationView();
-  if(n==='backtest'&&typeof loadBacktest==='function')loadBacktest();
   if(n==='scoring'&&typeof loadScoring==='function')loadScoring();
   if(n==='portbuilder'&&typeof loadPortfolioBuilder==='function')loadPortfolioBuilder();
   if(n==='stockdetail'&&typeof loadStockDetail==='function')loadStockDetail();
-  if(n==='tearsheet'&&typeof loadTearsheet==='function')loadTearsheet();
 }
 
-// Insider sub-tabs (compat)
-function sins(n,b){var panel=b.closest('.tpanel');panel.querySelectorAll('.wt-b').forEach(function(x){x.classList.remove('on')});b.classList.add('on');panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});$('i-'+n).classList.add('on');}
+
 
 // ═══ MARKET OVERVIEW — IDX instant, global async ═══
 var mktCache={};

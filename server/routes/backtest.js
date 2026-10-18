@@ -68,7 +68,20 @@ function buildCtx(hist,di,fund){
     LongTrend:(c>(ma20||0)&&c>(ma50||0)&&c>(ma200||0))?1:0,
     Bullish_MACD:macd&&macd.macd>macd.signal&&macd.histogram>0?1:0,Bearish_MACD:macd&&macd.macd<macd.signal&&macd.histogram<0?1:0,
     MACDCross:0,BullishWeak_MACD:macd&&macd.macd>macd.signal&&macd.histogram<0?1:0,
-    PER:(fund&&fund.per)||0,PBV:(fund&&fund.pbv)||0,ROE:(fund&&fund.roe)||0,MktCap:(fund&&fund.mkt_cap)||0,
+    PER:(fund&&fund.eps>0)?Math.round(c/fund.eps*100)/100:((fund&&fund.per)||0),
+    PBV:(fund&&fund.book_value>0)?Math.round(c/fund.book_value*100)/100:((fund&&fund.pbv)||0),
+    ROE:(fund&&fund._roePit!=null)?fund._roePit:((fund&&fund.roe)||0),
+    MktCap:(fund&&fund.book_value>0&&fund.equity>0)?Math.round(c/fund.book_value*fund.equity*1e9):((fund&&fund.mkt_cap)||0),
+    // ── Sisa kolom akuntansi (point-in-time) ──
+    DER:(fund&&fund.der)||0,
+    ROA:(fund&&fund.assets>0)?Math.round((fund.profit*4/(fund._q||1))/fund.assets*10000)/100:0,
+    NPM:(fund&&fund.sales>0)?Math.round(fund.profit/fund.sales*10000)/100:0,
+    EPS:(fund&&fund.eps)||0, BookValue:(fund&&fund.book_value)||0,
+    SalesYTD:(fund&&fund.sales)||0, ProfitYTD:(fund&&fund.profit)||0, EBT:(fund&&fund.ebt)||0,
+    Assets:(fund&&fund.assets)||0, Liabilities:(fund&&fund.liabilities)||0, Equity:(fund&&fund.equity)||0,
+    SalesGrowth:(fund&&fund._salesGrowth!=null)?fund._salesGrowth:0,
+    ProfitGrowth:(fund&&fund._profitGrowth!=null)?fund._profitGrowth:0,
+    FundAgeDays:(fund&&fund.period&&r.trade_date)?Math.round((Date.parse(r.trade_date)-Date.parse(fund.period))/86400000):0,
     PnlPct:0,DaysHeld:0,EntryPrice:0,
   };
 }
@@ -112,6 +125,14 @@ router.post('/run', (req, res) => {
     const rcProbePos = Math.max(1, parseInt(req.body.rc_probe_pos) || 1);
     const rcLiquidate = req.body.rc_liquidate === true || req.body.rc_liquidate === 'true';
 
+    // ── FRIKSI & REALISME EKSEKUSI (D + E). Semua bisa dioverride dari request. ──
+    // Fee: 0,15% beli + 0,25% jual = 0,40% bolak-balik (retail IDX all-in).
+    const feeBuyPct = req.body.fee_buy_pct != null ? parseFloat(req.body.fee_buy_pct) : 0.15;
+    const feeSellPct = req.body.fee_sell_pct != null ? parseFloat(req.body.fee_sell_pct) : 0.25;
+    const liqCapPct = req.body.liq_cap_pct != null ? parseFloat(req.body.liq_cap_pct) : 5;
+    // Eksekusi T+1: sinyal dari close hari t diisi di OPEN hari t+1 (default).
+    const execAtOpen = !(req.body.exec_at_open === false || req.body.exec_at_open === 'false');
+
     // Risk state machine
     let rcMode = 'normal'; // normal | freeze | probe
     let rcConsecLoss = 0;
@@ -133,10 +154,11 @@ router.post('/run', (req, res) => {
     const adMap = {}; allDates.forEach((d, i) => { adMap[d] = i; });
 
     const caMap = loadCAs();
-    const { latestFundDate } = require('../db');
-    const fm = latestFundDate();
-    const fundMap = {};
-    if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
+    // (C) Point-in-time: tiap tanggal hanya melihat periode yang SUDAH terbit
+    // (period + tenggat statutori + buffer <= tanggal transaksi), bukan snapshot terbaru.
+    const fundLagBuffer = parseInt(req.body.fund_lag_buffer) || 0;
+    const fundMap = makePitFund(fundLagBuffer);
+    const sectorMeta = loadSectorMeta();
 
     // Determine which codes to test based on scope
     let scopeCodes = null; // null = all
@@ -144,13 +166,17 @@ router.post('/run', (req, res) => {
     if (scopeType === 'stock' && scopeValue) {
       scopeCodes = new Set(scopeValue.split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
       if (scopeCodes.size === 0) scopeCodes = null;
-    } else if (scopeType === 'sector' && scopeValue && fm) {
-      const sectorRows = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND UPPER(sector)=?').all(fm, scopeValue);
-      if (sectorRows.length) scopeCodes = new Set(sectorRows.map(r => r.code));
+    } else if (scopeType === 'sector' && scopeValue) {
+      const sv = scopeValue.toUpperCase();
+      const sectorRows = Object.entries(sectorMeta.byCode)
+        .filter(([, v]) => (v.sector || '').toUpperCase() === sv).map(([c]) => c);
+      if (sectorRows.length) scopeCodes = new Set(sectorRows);
       else return res.json({ error: 'Sector not found: ' + scopeValue + '. Check available sectors.' });
-    } else if (scopeType === 'industry' && scopeValue && fm) {
-      const indRows = db.prepare('SELECT code FROM idx_fundamental WHERE snapshot_month=? AND UPPER(industry)=?').all(fm, scopeValue);
-      if (indRows.length) scopeCodes = new Set(indRows.map(r => r.code));
+    } else if (scopeType === 'industry' && scopeValue) {
+      const iv = scopeValue.toUpperCase();
+      const indRows = Object.entries(sectorMeta.byCode)
+        .filter(([, v]) => (v.industry || '').toUpperCase() === iv).map(([c]) => c);
+      if (indRows.length) scopeCodes = new Set(indRows);
       else return res.json({ error: 'Industry not found: ' + scopeValue + '. Check available industries.' });
     } else if (scopeType === 'score_top' && scopeValue) {
       // Dynamic universe: top N scored stocks per date
@@ -194,6 +220,7 @@ router.post('/run', (req, res) => {
       if (!hbc[r.code]) hbc[r.code] = [];
       const a = caMap[r.code];
       r.ac = a ? adjP(r.close, r.trade_date, a) : r.close;
+      r.ao = a ? adjP(r.open_price || r.close, r.trade_date, a) : (r.open_price || r.close);
       r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close);
       r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close);
       hbc[r.code].push(r);
@@ -215,6 +242,12 @@ router.post('/run', (req, res) => {
     let dReturns = [];
     let daysExp = 0;
     let prevDD = 0; // previous day's drawdown % for max DD reduce
+    let prevTotEq = 0; // ekuitas kemarin — HARUS persist antar hari (dipakai return harian di bawah)
+    // Antrean order (E): sinyal dari close hari t diisi di open hari t+1.
+    let pendingExit = [];   // [{code, reason}]
+    let pendingEntry = [];  // [{code}]
+    const blocked = { ARA: 0, ARB: 0, no_open: 0 }; // order yang gagal dieksekusi
+    let feePaid = 0;
 
     // Benchmark: try idx_indices first, then idx_daily (for single stock benchmark)
     let benchData = db.prepare('SELECT trade_date,close FROM idx_indices WHERE index_code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0]);
@@ -228,10 +261,6 @@ router.post('/run', (req, res) => {
 
     for (let di = 0; di < allDates.length; di++) {
       const td = allDates[di];
-      const prevEq = cap + openPos.reduce((s, p) => {
-        const i = dIdx[p.code] ? dIdx[p.code][td] : -1;
-        return s + (i >= 0 ? hbc[p.code][i].ac * p.shares : p.ep * p.shares);
-      }, 0);
 
       // ── Exits ──
       for (let pi = openPos.length - 1; pi >= 0; pi--) {
@@ -239,8 +268,13 @@ router.post('/run', (req, res) => {
         const hist = hbc[pos.code];
         const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
         if (idx < 0 || !hist[idx]) continue;
-        const cur = hist[idx].ac;
-        const pnlP = (cur - pos.ep) / pos.ep * 100;
+        // (E) Bar SINYAL = sesi terakhir yang sudah selesai. Tanpa ini, sinyal dibaca dari
+        // close hari ini lalu diisi di close hari ini juga — tidak dapat dieksekusi.
+        const sIdx = execAtOpen ? idx - 1 : idx;
+        if (sIdx < 0 || !hist[sIdx]) continue;
+        const sigClose = hist[sIdx].ac;
+        const prevBar = sIdx > 0 ? hist[sIdx - 1] : null;
+        const pnlP = (sigClose - pos.ep) / pos.ep * 100;
         const days = di - pos.edi;
         if (pnlP < pos.mae) pos.mae = pnlP;
         if (pnlP > pos.mfe) pos.mfe = pnlP;
@@ -254,7 +288,8 @@ router.post('/run', (req, res) => {
         // Priority 2: Exit formula signal
         else if (days >= 1) {
           try {
-            const ctx = buildCtx(hist, idx, fundMap[pos.code]);
+            fundMap.__set(hist[sIdx].trade_date);
+            const ctx = buildCtx(hist, sIdx, fundMap[pos.code]);
             ctx.PnlPct = Math.round(pnlP * 100) / 100;
             ctx.DaysHeld = days;
             ctx.EntryPrice = pos.ep;
@@ -264,13 +299,21 @@ router.post('/run', (req, res) => {
         }
 
         if (reason) {
-          const pnl = (cur - pos.ep) * pos.shares;
+          // (D) Blokir jual: lantai ARB atau tidak ada open -> posisi tertahan, dicoba sesi berikutnya.
+          const blk = fillBlocked(hist[idx], prevBar ? prevBar.ac : 0, 'sell');
+          if (blk) { blocked[blk]++; continue; }
+          const px = execAtOpen ? hist[idx].ao : hist[idx].ac;
+          const gross = px * pos.shares;
+          const sellFee = gross * (feeSellPct / 100);
+          const buyCost = pos.ep * pos.shares * (1 + feeBuyPct / 100);
+          const netPnl = (gross - sellFee) - buyCost;
           const posVal = pos.ep * pos.shares;
-          cap += cur * pos.shares;
+          cap += gross - sellFee;
+          feePaid += sellFee;
           trades.push({
-            code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: td, xp: cur,
+            code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: td, xp: px,
             shares: pos.shares, pv: Math.round(posVal),
-            pnl: Math.round(pnl), pnlP: Math.round(pnlP * 100) / 100,
+            pnl: Math.round(netPnl), pnlP: Math.round(netPnl / buyCost * 10000) / 100,
             bars: days, ppb: days > 0 ? Math.round(pnlP / days * 100) / 100 : 0,
             reason, mae: Math.round(pos.mae * 100) / 100, mfe: Math.round(pos.mfe * 100) / 100,
           });
@@ -278,7 +321,7 @@ router.post('/run', (req, res) => {
 
           // ── Risk Control: track consecutive losses ──
           if (riskControl) {
-            if (pnl > 0) { rcConsecLoss = 0; if (rcMode === 'probe') { rcMode = 'normal'; } }
+            if (netPnl > 0) { rcConsecLoss = 0; if (rcMode === 'probe') { rcMode = 'normal'; } }
             else { rcConsecLoss++; }
           }
         }
@@ -302,11 +345,15 @@ router.post('/run', (req, res) => {
           const hist = hbc[pos.code];
           const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
           const cur = (idx >= 0 && hist[idx]) ? hist[idx].ac : pos.ep;
-          const pnl = (cur - pos.ep) * pos.shares;
-          const pnlP = (cur - pos.ep) / pos.ep * 100;
+          const gross = cur * pos.shares;
+          const sellFee = gross * (feeSellPct / 100);
+          const buyCost = pos.ep * pos.shares * (1 + feeBuyPct / 100);
+          const pnl = (gross - sellFee) - buyCost;
+          const pnlP = pnl / buyCost * 100;
           const days = di - pos.edi;
           const posVal = pos.ep * pos.shares;
-          cap += cur * pos.shares;
+          cap += gross - sellFee;
+          feePaid += sellFee;
           trades.push({
             code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: td, xp: cur,
             shares: pos.shares, pv: Math.round(posVal),
@@ -341,20 +388,42 @@ router.post('/run', (req, res) => {
           const hist = hbc[code];
           const idx = dIdx[code] ? dIdx[code][td] : -1;
           if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;
+          // (E) Sinyal dibaca dari close sesi SEBELUMNYA; eksekusi di open hari ini.
+          const sIdx = execAtOpen ? idx - 1 : idx;
+          if (sIdx < 0 || !hist[sIdx]) continue;
           try {
-            const ctx = buildCtx(hist, idx, fundMap[code]);
+            fundMap.__set(hist[sIdx].trade_date);
+            const ctx = buildCtx(hist, sIdx, fundMap[code]);
             const tk = tokenize(entryF);
-            if (!tk.error && evalF(tk, ctx)) cands.push({ code, price: hist[idx].ac, value: hist[idx].value || 0 });
+            if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[idx].value || 0 });
           } catch (e) { /* skip */ }
         }
         cands.sort((a, b) => (b.value || 0) - (a.value || 0));
-        for (const c of cands.slice(0, slots)) {
-          const alloc = cap / Math.max(1, slots);
-          const sh = Math.floor(Math.floor(alloc / c.price) / 100) * 100;
-          const cost = sh * c.price;
+        let slotsLeft = slots;
+        for (const c of cands) {
+          if (slotsLeft <= 0) break;
+          const hist = hbc[c.code];
+          const bar = hist[c.idx];
+          const prevBar = c.sIdx > 0 ? hist[c.sIdx - 1] : null;
+          // (D) Tidak bisa beli kalau open hari ini di ARA, atau tidak ada open.
+          const blk = fillBlocked(bar, prevBar ? prevBar.ac : 0, 'buy');
+          if (blk) { blocked[blk]++; continue; }
+          const px = execAtOpen ? bar.ao : bar.ac;
+          if (!px || px <= 0) { blocked.no_open++; continue; }
+          const alloc = cap / Math.max(1, slotsLeft);
+          let sh = Math.floor(Math.floor(alloc / px) / 100) * 100;
+          // (D) Plafon likuiditas: maks liqCapPct% dari nilai transaksi hari pengisian.
+          if (bar.value > 0) {
+            const liqCapSh = Math.floor((bar.value * liqCapPct / 100) / px / 100) * 100;
+            if (liqCapSh < sh) sh = liqCapSh;
+          }
+          const buyFee = sh * px * (feeBuyPct / 100);
+          const cost = sh * px + buyFee;
           if (sh < 100 || cost > cap) continue;
           cap -= cost;
-          openPos.push({ code: c.code, ed: td, ep: c.price, shares: sh, edi: di, mae: 0, mfe: 0 });
+          feePaid += buyFee;
+          openPos.push({ code: c.code, ed: td, ep: px, shares: sh, edi: di, mae: 0, mfe: 0 });
+          slotsLeft--;
         }
       }
 
@@ -367,7 +436,11 @@ router.post('/run', (req, res) => {
       const dd = peak > 0 ? (peak - totEq) / peak * 100 : 0;
       if (dd > maxDD) maxDD = dd;
       prevDD = dd; // store for next day's max DD reduce check
-      const dr = prevEq > 0 ? (totEq - prevEq) / prevEq : 0;
+      // Return harian = perubahan ekuitas TOTAL terhadap kemarin. Versi lama memakai ulang
+      // ekuitas hari ini yang ditandai dengan close hari ini juga, sehingga selisihnya nol di
+      // hampir semua hari -> stdDR = 0 -> sharpe = 0 dan std_error = 0. Terukur 2026-10-17.
+      const dr = prevTotEq > 0 ? (totEq - prevTotEq) / prevTotEq : 0;
+      prevTotEq = totEq;
       dReturns.push(dr);
       const bv = bStart > 0 && bMap[td] ? bMap[td] / bStart * initCap : initCap;
       equity.push({ date: td, equity: Math.round(totEq), benchmark: Math.round(bv), drawdown: Math.round(dd * 100) / 100, positions: openPos.length });
@@ -467,8 +540,16 @@ router.post('/run', (req, res) => {
         mcR.push({ fe: Math.round(eq), ar, mdd: Math.round(mdd * 100) / 100, low: Math.round(low) });
         mcCurves.push(curve);
       }
-      mcR.sort((a, b) => a.fe - b.fe);
-      const pct = (p) => mcR[Math.min(Math.floor(p / 100 * mcR.length), mcR.length - 1)];
+      // Persentil WAJIB dihitung per metrik. `fe` konstan di seluruh run (mengocok urutan
+      // tidak mengubah jumlah akhir), sehingga mengurutkan array by `fe` tidak mengurutkan
+      // apa pun — pct() lalu memilih run ACAK, dan mdd/low yang path-dependent jadi tak
+      // bermakna. Diukur 2026-10-17: mdd dilaporkan [113.80, 131.47, 161.61, 98.86, 134.47,
+      // 195.14, 118.11, 94.22, 126.44] — tidak monoton; rentang sahnya 136.0-271.6.
+      const pctOf = (key, p) => {
+        const s = mcR.map(r => r[key]).sort((a, b) => a - b);
+        return s[Math.min(Math.floor(p / 100 * s.length), s.length - 1)];
+      };
+      const pctl = (p) => ({ fe: pctOf('fe', p), ar: pctOf('ar', p), mdd: pctOf('mdd', p), low: pctOf('low', p) });
       // Build band data: at each trade#, get min/median/max equity
       const bandLen = tPnls.length + 1;
       const bands = [];
@@ -476,12 +557,12 @@ router.post('/run', (req, res) => {
         const vals = mcCurves.map(c => c[i] || initCap).sort((a, b) => a - b);
         bands.push({ min: vals[0], p25: vals[Math.floor(vals.length * 0.25)], med: vals[Math.floor(vals.length * 0.5)], p75: vals[Math.floor(vals.length * 0.75)], max: vals[vals.length - 1] });
       }
-      mc = { runs: mcN, p: { p1: pct(1), p5: pct(5), p10: pct(10), p25: pct(25), p50: pct(50), p75: pct(75), p90: pct(90), p95: pct(95), p99: pct(99) }, bands: bands.length > 200 ? bands.filter((_, i) => i % Math.ceil(bands.length / 200) === 0 || i === bands.length - 1) : bands };
+      mc = { runs: mcN, p: { p1: pctl(1), p5: pctl(5), p10: pctl(10), p25: pctl(25), p50: pctl(50), p75: pctl(75), p90: pctl(90), p95: pctl(95), p99: pctl(99) }, bands: bands.length > 200 ? bands.filter((_, i) => i % Math.ceil(bands.length / 200) === 0 || i === bands.length - 1) : bands };
     }
 
     // Available sectors/industries for scope dropdown
-    const sectors = fm ? db.prepare("SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!='' AND sector IS NOT NULL ORDER BY sector").all(fm).map(r => r.sector) : [];
-    const industries = fm ? db.prepare("SELECT DISTINCT industry FROM idx_fundamental WHERE snapshot_month=? AND industry!='' AND industry IS NOT NULL ORDER BY industry").all(fm).map(r => r.industry) : [];
+    const sectors = sectorMeta.sectors;
+    const industries = sectorMeta.industries;
 
     // ═══ BASELINE COMPARISON — when score_top, auto-run with scope=all ═══
     let baseline = null;
@@ -588,6 +669,8 @@ router.post('/run', (req, res) => {
       period: { start: allDates[0], end: lastD, days: allDates.length },
       benchmark, formula: entryF, exit_formula: exitF,
       params: { max_positions: maxPos, scope_type: scopeType, scope_value: scopeValue, lot_method: lotMethod, force_cutloss: forceCutloss, cutloss_pct: cutlossPct,
+        fee_buy_pct: feeBuyPct, fee_sell_pct: feeSellPct, liq_cap_pct: liqCapPct, exec_at_open: execAtOpen, fee_paid: Math.round(feePaid), blocked_orders: blocked,
+        fund_source: 'financial_ratios (point-in-time)', fund_lag_buffer_days: fundLagBuffer, fund_lookup_stats: fundMap.__stats,
         risk_control: riskControl, rc_dd_freeze: -rcDDFreeze, rc_cl_freeze: rcCLFreeze, rc_cooldown: rcCooldown, rc_probe_pos: rcProbePos, rc_liquidate: rcLiquidate,
         rc_stats: riskControl ? { freeze_count: rcFreezeCount, probe_count: rcProbeCount, final_mode: rcMode, final_consec_loss: rcConsecLoss } : null },
       scope_options: { sectors, industries },
@@ -609,7 +692,7 @@ router.get('/variables', (req, res) => {
     { cat: 'Foreign Flow', vars: ['ForeignNet (Rp)', 'ForeignBuy (Rp)', 'ForeignSell (Rp)', 'Foreign_5D (5-day net Rp)'] },
     { cat: 'Range', vars: ['HHV20 (20d high)', 'LLV20 (20d low)'] },
     { cat: 'Freq Analysis', vars: ['TickRatio (val/tx vs avg)', 'RelFreq (freq vs 20d avg)', 'isBlockTrade (0/1)', 'isRetailFrenzy (0/1)', 'isSmartAccum (0/1)', 'isDryUp (0/1)'] },
-    { cat: 'Fundamental', vars: ['PER', 'PBV', 'ROE', 'MktCap'] },
+    { cat: 'Fundamental (point-in-time)', vars: ['PER', 'PBV', 'ROE', 'ROA', 'NPM', 'DER', 'MktCap', 'EPS', 'BookValue', 'SalesYTD', 'ProfitYTD', 'EBT', 'Assets', 'Liabilities', 'Equity', 'SalesGrowth (YoY %)', 'ProfitGrowth (YoY %)', 'FundAgeDays (umur laporan)'] },
     { cat: 'Exit Only', vars: ['PnlPct (current P&L %)', 'DaysHeld (bars since entry)', 'EntryPrice'] },
     { cat: 'Logic', vars: ['AND', 'OR', '> < >= <= == !=', '( ) for grouping'] },
   ]});
@@ -618,10 +701,7 @@ router.get('/variables', (req, res) => {
 // ═══ SCOPE OPTIONS ═══
 router.get('/scopes', (req, res) => {
   try {
-    const { latestFundDate } = require('../db');
-    const fm = latestFundDate();
-    const sectors = fm ? db.prepare("SELECT DISTINCT sector FROM idx_fundamental WHERE snapshot_month=? AND sector!='' AND sector IS NOT NULL ORDER BY sector").all(fm).map(r => r.sector) : [];
-    const industries = fm ? db.prepare("SELECT DISTINCT industry FROM idx_fundamental WHERE snapshot_month=? AND industry!='' AND industry IS NOT NULL ORDER BY industry").all(fm).map(r => r.industry) : [];
+    const { sectors, industries } = loadSectorMeta();
     res.json({ sectors, industries });
   } catch (e) { console.error('Scopes error:', e.message); res.json({ sectors: [], industries: [], error: e.message }); }
 });
@@ -634,6 +714,109 @@ router.get('/dates', (req, res) => {
 // ═══ WALK FORWARD ENGINE (P2 Sprint 13) ═══
 
 // Helper: run a simplified backtest on a date window, return { return_pct, trades, win_rate, profit_factor, max_dd }
+// ═══ FRIKSI IDX — konstanta DIVERIFIKASI dari rail kita sendiri, 2026-10-17 ═══
+// Tangga tick : 963/963 close pada 2026-10-16 persis kelipatan tick pitanya.
+// ARB -15%    : lantai terendah yang pernah tercetak (Agu-Okt 2026) = -15,00%.
+// ARA bertingkat: +35% (<500), +25% (500-5.000), +20% (>5.000) — maksimum tercetak per pita.
+// Kalau bursa mengubah aturan, VERIFIKASI ULANG dari rail sebelum memakai ulang angka ini.
+function idxTick(p) { return p < 200 ? 1 : p < 500 ? 2 : p < 2000 ? 5 : p < 5000 ? 10 : 25; }
+function araPct(prev) { return prev < 500 ? 0.35 : prev <= 5000 ? 0.25 : 0.20; }
+const ARB_PCT = 0.15;
+// Default friksi (retail IDX all-in): 0,15% beli + 0,25% jual, plafon likuiditas 5% nilai transaksi.
+const FEE_BUY_DEFAULT = 0.15, FEE_SELL_DEFAULT = 0.25, LIQ_CAP_DEFAULT = 5;
+
+// ═══ POINT-IN-TIME FUNDAMENTAL (C) — dari financial_ratios, bukan snapshot terbaru ═══
+// Kenapa: /run dulu memakai SATU snapshot (MAX(snapshot_month)) untuk seluruh sejarah, sehingga
+// formula PER/PBV/ROE membaca data 2026 saat mensimulasi 2020. Di sini tiap tanggal hanya melihat
+// periode yang SUDAH terbit: period + tenggat lapor statutori (+ buffer) <= tanggal transaksi.
+// Tenggat: Q1/Q3 30 hari, semester 60 hari, tahunan 90 hari (dasar: praktik pelaporan BEI).
+function addDaysStr(d, n) {
+  const [y, m, dd] = d.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, dd) + n * 86400000;
+  const x = new Date(t);
+  return x.toISOString().slice(0, 10);
+}
+
+// Metadata sektor/industri dari tabel RIWAYAT (label stabil — bukan input harga/valuasi, jadi
+// tidak perlu per-tanggal). Menggantikan daftar dari snapshot terbaru idx_fundamental.
+let _sectorMeta = null;
+function loadSectorMeta() {
+  if (_sectorMeta) return _sectorMeta;
+  const rows = db.prepare("SELECT code,sector,industry,period FROM financial_ratios WHERE sector IS NOT NULL AND sector!='' ORDER BY period").all();
+  const byCode = {};
+  for (const r of rows) byCode[r.code] = { sector: r.sector, industry: r.industry || '' };
+  const sectors = [...new Set(Object.values(byCode).map(v => v.sector))].sort();
+  const industries = [...new Set(Object.values(byCode).map(v => v.industry).filter(Boolean))].sort();
+  return (_sectorMeta = { byCode, sectors, industries });
+}
+
+function makePitFund(bufferDays) {
+  const rows = db.prepare('SELECT code,period,sector,industry,assets,liabilities,equity,sales,profit,ebt,eps,book_value,der,roe FROM financial_ratios').all();
+  const byCode = {};
+  for (const r of rows) {
+    const m = parseInt(r.period.slice(5, 7), 10);
+    if (m !== 3 && m !== 6 && m !== 9 && m !== 12) continue;   // buang periode bukan kuartal
+    const q = m === 3 ? 1 : m === 6 ? 2 : m === 9 ? 3 : 4;
+    const statutory = m === 12 ? 90 : m === 6 ? 60 : 30;
+    r._avail = addDaysStr(r.period, statutory + (bufferDays || 0));
+    // ROE PIT: laba kumulatif YTD ditahunkan lalu dibagi ekuitas (dibandingkan dengan kolom roe
+    // tersimpan: BBCA H1-26 -> hitungan 21,83% vs tersimpan 21,45%, konvensinya cocok).
+    r._roePit = r.equity > 0 ? Math.round((r.profit * 4 / q) / r.equity * 10000) / 100 : 0;
+    (byCode[r.code] = byCode[r.code] || []).push(r);
+  }
+  for (const c of Object.keys(byCode)) byCode[c].sort((a, b) => (a.period < b.period ? -1 : 1));
+  // Growth YoY: bandingkan periode yang sama tahun lalu (kuartal yang sama, bukan kuartal sebelumnya —
+  // sales/profit bersifat kumulatif YTD, jadi YoY antarkuartal setara itu perbandingan yang sah).
+  for (const c of Object.keys(byCode)) {
+    const arr = byCode[c]; const byYM = {};
+    for (const r of arr) byYM[r.period.slice(0, 7)] = r;
+    for (const r of arr) {
+      const prevYM = (parseInt(r.period.slice(0, 4), 10) - 1) + r.period.slice(4, 7);
+      const p = byYM[prevYM];
+      r._salesGrowth = (p && p.sales > 0 && r.sales > 0) ? Math.round((r.sales / p.sales - 1) * 10000) / 100 : null;
+      r._profitGrowth = (p && p.profit !== 0 && r.profit != null) ? Math.round((r.profit / p.profit - 1) * 10000) / 100 : null;
+    }
+  }
+
+  let curDate = '';
+  const stats = { lookups: 0, hits: 0, misses: 0, no_code: 0 };
+  const resolve = (code) => {
+    stats.lookups++;
+    const arr = byCode[code];
+    if (!arr) { stats.no_code++; return null; }
+    // binary search: tanggal terakhir yang sudah terbit <= curDate (tidak bergantung urutan tanggal)
+    let lo = 0, hi = arr.length - 1, best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid]._avail <= curDate) { best = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    if (best < 0) { stats.misses++; return null; }
+    stats.hits++;
+    return arr[best];
+  };
+  const fundMap = new Proxy({}, {
+    get(_, prop) {
+      if (prop === '__set') return (d) => { curDate = d || ''; };
+      if (prop === '__stats') return stats;
+      if (typeof prop !== 'string') return undefined;
+      return resolve(prop);
+    },
+    has() { return true; },
+  });
+  return fundMap;
+}
+
+// Kenapa order tidak bisa dieksekusi di open hari ini (null = boleh).
+function fillBlocked(bar, prevClose, side) {
+  const o = bar.ao;
+  if (!o || o <= 0) return 'no_open';
+  if (prevClose > 0) {
+    if (side === 'buy' && o >= prevClose * (1 + araPct(prevClose))) return 'ARA';
+    if (side === 'sell' && o <= prevClose * (1 - ARB_PCT)) return 'ARB';
+  }
+  return null;
+}
+
 function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct) {
   const dates = allDates.filter(d => d >= windowStart && d <= windowEnd);
   if (dates.length < 3) return null;
@@ -649,17 +832,24 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
       const hist = hbc[pos.code]; if (!hist) continue;
       const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
       if (idx < 0 || !hist[idx]) continue;
-      const cur = hist[idx].ac;
-      const pnlP = (cur - pos.ep) / pos.ep * 100;
+      const sIdx = idx - 1; if (sIdx < 0 || !hist[sIdx]) continue;   // (E) sinyal dari close sesi sebelumnya
+      const sigClose = hist[sIdx].ac;
+      const pnlP = (sigClose - pos.ep) / pos.ep * 100;
       const days = di - pos.edi;
       let reason = null;
       if (forceCutloss && pnlP <= cutlossPct) reason = 'cutloss';
       else if (days >= 1) {
-        try { const ctx = buildCtx(hist, idx, fundMap[pos.code]); ctx.PnlPct = Math.round(pnlP * 100) / 100; ctx.DaysHeld = days; ctx.EntryPrice = pos.ep; const tk = tokenize(exitF); if (!tk.error && evalF(tk, ctx)) reason = 'exit'; } catch {}
+        try { fundMap.__set(hist[sIdx].trade_date); const ctx = buildCtx(hist, sIdx, fundMap[pos.code]); ctx.PnlPct = Math.round(pnlP * 100) / 100; ctx.DaysHeld = days; ctx.EntryPrice = pos.ep; const tk = tokenize(exitF); if (!tk.error && evalF(tk, ctx)) reason = 'exit'; } catch {}
       }
       if (reason) {
-        cap += cur * pos.shares;
-        trades.push({ pnl: (cur - pos.ep) * pos.shares, pnlP: Math.round(pnlP * 100) / 100 });
+        // (D) blokir jual di lantai ARB / tanpa open
+        const prevB = sIdx > 0 ? hist[sIdx - 1] : null;
+        if (fillBlocked(hist[idx], prevB ? prevB.ac : 0, 'sell')) continue;
+        const px = hist[idx].ao;
+        const gross = px * pos.shares, sf = gross * (FEE_SELL_DEFAULT / 100);
+        const bc = pos.ep * pos.shares * (1 + FEE_BUY_DEFAULT / 100);
+        cap += gross - sf;
+        trades.push({ pnl: (gross - sf) - bc, pnlP: Math.round(((gross - sf) - bc) / bc * 10000) / 100 });
         openPos.splice(pi, 1);
       }
     }
@@ -672,15 +862,27 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
         const hist = hbc[code];
         const idx = dIdx[code] ? dIdx[code][td] : -1;
         if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;
-        try { const ctx = buildCtx(hist, idx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, price: hist[idx].ac, value: hist[idx].value || 0 }); } catch {}
+        const sIdx = idx - 1; if (sIdx < 0 || !hist[sIdx]) continue;   // (E) sinyal dari close sesi sebelumnya
+        try { fundMap.__set(hist[sIdx].trade_date); const ctx = buildCtx(hist, sIdx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[idx].value || 0 }); } catch {}
       }
       cands.sort((a, b) => (b.value || 0) - (a.value || 0));
-      for (const c of cands.slice(0, slots)) {
-        const alloc = cap / Math.max(1, slots);
-        const sh = Math.floor(Math.floor(alloc / c.price) / 100) * 100;
-        if (sh < 100 || sh * c.price > cap) continue;
-        cap -= sh * c.price;
-        openPos.push({ code: c.code, ep: c.price, shares: sh, edi: di });
+      let slotsLeft = slots;
+      for (const c of cands) {
+        if (slotsLeft <= 0) break;
+        const h2 = hbc[c.code], bar = h2[c.idx], prevB = c.sIdx > 0 ? h2[c.sIdx - 1] : null;
+        if (fillBlocked(bar, prevB ? prevB.ac : 0, 'buy')) continue;   // (D) tidak bisa beli di ARA
+        const px = bar.ao; if (!px || px <= 0) continue;
+        const alloc = cap / Math.max(1, slotsLeft);
+        let sh = Math.floor(Math.floor(alloc / px) / 100) * 100;
+        if (bar.value > 0) {                                     // (D) plafon likuiditas
+          const lc = Math.floor((bar.value * LIQ_CAP_DEFAULT / 100) / px / 100) * 100;
+          if (lc < sh) sh = lc;
+        }
+        const buyFee = sh * px * (FEE_BUY_DEFAULT / 100);
+        if (sh < 100 || sh * px + buyFee > cap) continue;
+        cap -= sh * px + buyFee;
+        openPos.push({ code: c.code, ep: px, shares: sh, edi: di });
+        slotsLeft--;
       }
     }
     // Equity
@@ -736,17 +938,18 @@ router.post('/walk-forward', (req, res) => {
 
     // Load all history
     const caMap = loadCAs();
-    const { latestFundDate } = require('../db');
-    const fm = latestFundDate();
-    const fundMap = {};
-    if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
+    // (C) Point-in-time: tiap tanggal hanya melihat periode yang SUDAH terbit
+    // (period + tenggat statutori + buffer <= tanggal transaksi), bukan snapshot terbaru.
+    const fundLagBuffer = parseInt(req.body.fund_lag_buffer) || 0;
+    const fundMap = makePitFund(fundLagBuffer);
+    const sectorMeta = loadSectorMeta();
 
     const fullDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
     const lb = 210;
     const minDate = fullDates[Math.max(0, fullDates.indexOf(allDates[0]) - lb)] || allDates[0];
     const hbc = {};
     db.prepare('SELECT code,trade_date,open_price,high,low,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date>=? AND close>0 ORDER BY code,trade_date').all(minDate)
-      .forEach(r => { if (!hbc[r.code]) hbc[r.code] = []; const a = caMap[r.code]; r.ac = a ? adjP(r.close, r.trade_date, a) : r.close; r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close); r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close); hbc[r.code].push(r); });
+      .forEach(r => { if (!hbc[r.code]) hbc[r.code] = []; const a = caMap[r.code]; r.ac = a ? adjP(r.close, r.trade_date, a) : r.close; r.ao = a ? adjP(r.open_price || r.close, r.trade_date, a) : (r.open_price || r.close); r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close); r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close); hbc[r.code].push(r); });
     const dIdx = {};
     for (const code of Object.keys(hbc)) { dIdx[code] = {}; hbc[code].forEach((r, i) => { dIdx[code][r.trade_date] = i; }); }
 

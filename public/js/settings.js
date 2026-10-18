@@ -18,7 +18,7 @@ function setTab(tab,el){
   document.querySelectorAll('.smod-nav-item').forEach(function(x){x.classList.remove('on')});
   if(el)el.classList.add('on');
   else{var t=document.querySelector('.smod-nav-item[onclick*="'+tab+'"]');if(t)t.classList.add('on');}
-  var titles={sync:'🔄 Sync Center',dbstats:'🗄 Database',upload:'📤 BEI Upload',ca:'⚡ Corp Actions',tags:'🏷 Tags',export:'📥 Export',prefs:'🎨 Prefs',custom:'📌 Custom Tickers',eod:'🌐 EOD Fetcher'};
+  var titles={sync:'🔄 Sync Center',dbstats:'🗄 Database',upload:'📤 BEI Upload',ca:'⚡ Corp Actions',tags:'🏷 Tags',export:'📥 Export',prefs:'🎨 Prefs',custom:'🌐 Market Data'};
   var t=titles[tab]||tab;
   $('smod-title').innerHTML='<span class="sbh-icon">'+t.split(' ')[0]+'</span> '+t.split(' ').slice(1).join(' ');
   var c=$('smod-content');
@@ -31,7 +31,6 @@ function setTab(tab,el){
   else if(tab==='export')renderSetExport(c);
   else if(tab==='prefs')renderSetPrefs(c);
   else if(tab==='custom')renderSetCustom(c);
-  else if(tab==='eod')renderSetEOD(c);
 }
 
 // ═══════════════════════════════════════════════
@@ -838,6 +837,15 @@ var CT_CATEGORIES = [
 function renderSetCustom(c) {
   var h = '';
 
+  // ── Status & auto-refresh (menggantikan update manual per-ticker) ──
+  h += '<div style="border:1px solid var(--b1);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--bgH)">';
+  h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  h += '<div style="font-size:12px;color:var(--t2)"><b>🔄 Auto-refresh harian</b> — dijalankan pipeline pasar ≈19:05 WIB, tidak perlu update manual.</div>';
+  h += '<button id="ct-refresh-btn" style="margin-left:auto;padding:6px 14px;background:var(--or);color:#000;border:none;border-radius:4px;font-weight:700;cursor:pointer" onclick="ctRefreshAll(this)">🔄 Refresh sekarang</button>';
+  h += '</div>';
+  h += '<div id="ct-status" style="margin-top:8px;font-size:11px;color:var(--t3);font-family:var(--fm)">memuat status…</div>';
+  h += '</div>';
+
   // ── Upload section ──
   h += '<div style="border:1px solid var(--b1);border-radius:6px;padding:14px;margin-bottom:14px;background:var(--bgH)">';
   h += '<div style="font-weight:700;margin-bottom:10px;color:var(--t1);font-size:14px">Add / Update Ticker</div>';
@@ -917,6 +925,7 @@ function renderSetCustom(c) {
   });
 
   ctLoadTable();
+  ctLoadStatus();
 }
 
 // Auto-detect separator from first line (count separators OUTSIDE quotes)
@@ -1136,230 +1145,44 @@ async function ctUpload() {
   }
 }
 
+// ── Status & refresh massal (menggantikan update manual per-ticker) ──
+function ctLoadStatus() {
+  var el = document.getElementById('ct-status');
+  if (!el) return;
+  fetch('/api/idx/custom/tickers').then(function(r) { return r.json(); }).then(function(rows) {
+    if (!rows.length) { el.textContent = 'belum ada ticker'; return; }
+    var last = rows.map(function(x) { return x.last_date || ''; }).sort().pop();
+    var upd = rows.map(function(x) { return x.updated_at || ''; }).sort().pop();
+    // Toleransi 3 hari: FX (USDIDR) punya bar Minggu sementara bursa/komoditas tutup —
+    // tanpa toleransi, setiap akhir pekan akan salah lapor "tertinggal".
+    var lastMs = Date.parse(last);
+    var stale = rows.filter(function(x) {
+      var d = Date.parse(x.last_date || '');
+      return isFinite(d) && isFinite(lastMs) && (lastMs - d) > 3 * 86400000;
+    }).length;
+    el.innerHTML = rows.length + ' ticker · data terakhir <b>' + last + '</b> · diperbarui ' + (upd || '').substring(0, 16) +
+      (stale ? ' · <span style="color:var(--am)">' + stale + ' tertinggal >3 hari</span>' : ' · <span style="color:var(--gn)">semua seragam</span>');
+  }).catch(function() { el.textContent = 'gagal memuat status'; });
+}
+
+async function ctRefreshAll(btn) {
+  var old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Menyegarkan…'; }
+  try {
+    var r = await fetch('/api/idx/custom/fetch-all', { method: 'POST' });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showT('Refresh selesai', d.refreshed + ' ticker diperbarui' + (d.failed ? ', ' + d.failed + ' gagal' : ''));
+    ctLoadStatus(); ctLoadTable();
+  } catch (e) { showT('Error', e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
+}
+
 async function ctDelete(code) {
   if (!confirm('Delete custom ticker ' + code + ' and all its data?')) return;
   try {
     await fetch('/api/idx/custom/tickers/' + code, { method: 'DELETE' });
     ctLoadTable();
-    showT('Deleted', code + ' removed');
-  } catch (e) { showT('Error', e.message); }
-}
-
-// ═══════════════════════════════════════════════
-// EOD FETCHER — Alpha Vantage + CoinGecko
-// ═══════════════════════════════════════════════
-
-var _eodLoading = false;
-
-function renderSetEOD(c) {
-  var h = '';
-
-  // ── Add Ticker Form ──
-  h += '<div style="border:1px solid var(--b2);border-radius:8px;padding:16px;margin-bottom:16px;background:var(--bg1)">';
-  h += '<div style="font-weight:700;font-size:13px;color:var(--t1);margin-bottom:12px">🌐 Fetch EOD Data from API</div>';
-  h += '<div style="font-size:10px;color:var(--t3);margin-bottom:12px">Yahoo Finance: US stocks, indices, commodities, forex (no key, full history) · CoinGecko: crypto (no key, 365 days)</div>';
-
-  h += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:10px">';
-  // Code
-  h += '<div><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;margin-bottom:2px">Ticker *</div>';
-  h += '<input id="eod-code" style="width:120px;background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:6px 8px;color:var(--t1);font-family:var(--fm);font-size:12px;text-transform:uppercase" placeholder="AAPL, BTC..."></div>';
-  // Name
-  h += '<div><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;margin-bottom:2px">Name</div>';
-  h += '<input id="eod-name" style="width:180px;background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:6px 8px;color:var(--t1);font-size:12px" placeholder="Apple Inc."></div>';
-  // Category
-  h += '<div><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;margin-bottom:2px">Category</div>';
-  h += '<select id="eod-category" style="background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:6px 8px;color:var(--t1);font-size:12px">';
-  h += '<option value="global_index">🌍 Global Index/Stock</option>';
-  h += '<option value="crypto">₿ Crypto</option>';
-  h += '<option value="commodity">📦 Commodity</option>';
-  h += '<option value="currency">💱 Currency (Forex)</option>';
-  h += '<option value="custom">📌 Custom</option>';
-  h += '</select></div>';
-  // Full history toggle
-  h += '<div><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;margin-bottom:2px">History</div>';
-  h += '<select id="eod-full" style="background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:6px 8px;color:var(--t1);font-size:12px">';
-  h += '<option value="0">Latest ~100 days</option>';
-  h += '<option value="1">Full (20yr stock / 1yr crypto)</option>';
-  h += '</select></div>';
-  // Fetch button
-  h += '<button id="eod-fetch-btn" onclick="eodFetchOne()" style="padding:6px 16px;border-radius:4px;border:none;background:var(--bl);color:#fff;font-weight:700;font-size:12px;cursor:pointer">⚡ Fetch</button>';
-  h += '</div>';
-
-  h += '<div id="eod-result" style="font-size:11px;color:var(--t2)"></div>';
-  h += '</div>';
-
-  // ── Quick Add ──
-  h += '<div style="border:1px solid var(--b2);border-radius:8px;padding:16px;margin-bottom:16px;background:var(--bg1)">';
-  h += '<div style="font-weight:700;font-size:13px;color:var(--t1);margin-bottom:8px">⚡ Quick Add Popular</div>';
-  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
-
-  // US Stocks
-  h += '<span style="font-size:9px;color:var(--t3);width:100%;font-weight:700">US Stocks:</span>';
-  ['SPY|S&P 500 ETF','QQQ|Nasdaq 100 ETF','AAPL|Apple','MSFT|Microsoft','NVDA|Nvidia','TSLA|Tesla','GOOGL|Google','AMZN|Amazon','META|Meta'].forEach(function(s) {
-    var parts = s.split('|');
-    h += '<button class="bei-sort-btn" onclick="eodQuickAdd(\'' + parts[0] + '\',\'' + parts[1] + '\',\'global_index\')" style="font-size:10px;padding:3px 8px" title="' + parts[1] + '">' + parts[0] + '</button>';
-  });
-
-  // Crypto
-  h += '<span style="font-size:9px;color:var(--t3);width:100%;font-weight:700;margin-top:6px">Crypto:</span>';
-  ['BTC|Bitcoin','ETH|Ethereum','SOL|Solana','BNB|BNB','XRP|Ripple','ADA|Cardano','DOGE|Dogecoin','DOT|Polkadot','AVAX|Avalanche','LINK|Chainlink'].forEach(function(s) {
-    var parts = s.split('|');
-    h += '<button class="bei-sort-btn" onclick="eodQuickAdd(\'' + parts[0] + '\',\'' + parts[1] + '\',\'crypto\')" style="font-size:10px;padding:3px 8px" title="' + parts[1] + '">' + parts[0] + '</button>';
-  });
-
-  // Forex
-  h += '<span style="font-size:9px;color:var(--t3);width:100%;font-weight:700;margin-top:6px">Forex:</span>';
-  ['USDIDR|USD/IDR','EURUSD|EUR/USD','GBPUSD|GBP/USD','USDJPY|USD/JPY'].forEach(function(s) {
-    var parts = s.split('|');
-    h += '<button class="bei-sort-btn" onclick="eodQuickAdd(\'' + parts[0] + '\',\'' + parts[1] + '\',\'currency\')" style="font-size:10px;padding:3px 8px" title="' + parts[1] + '">' + parts[0] + '</button>';
-  });
-
-  h += '</div></div>';
-
-  // ── Existing API tickers + Sync ──
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
-  h += '<span style="font-weight:700;color:var(--t1);font-size:13px">API-sourced Tickers</span>';
-  h += '<button onclick="eodSyncAllStale()" style="padding:4px 12px;border-radius:4px;border:1px solid var(--bl);background:transparent;color:var(--bl);font-size:11px;font-family:var(--f);cursor:pointer;font-weight:600" title="Update all tickers with data older than 7 days">🔄 Sync Stale</button>';
-  h += '<span id="eod-sync-status" style="font-size:10px;color:var(--t3)"></span>';
-  h += '</div>';
-  h += '<div id="eod-table" style="font-size:12px"><span style="color:var(--t3)">Loading...</span></div>';
-
-  c.innerHTML = h;
-  eodLoadTable();
-}
-
-async function eodFetchOne() {
-  var code = ($('eod-code') || {}).value || '';
-  code = code.trim().toUpperCase();
-  if (!code) { showT('⚠', 'Enter a ticker code'); return; }
-  var name = ($('eod-name') || {}).value || code;
-  var category = ($('eod-category') || {}).value || 'custom';
-  var full = ($('eod-full') || {}).value === '1';
-
-  var btn = $('eod-fetch-btn');
-  var res = $('eod-result');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Fetching...'; }
-  if (res) res.innerHTML = '<span style="color:var(--t3)">Fetching ' + code + '...</span>';
-
-  try {
-    var r = await fetch('/api/idx/custom/fetch-eod', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code, name: name, category: category, full_history: full })
-    });
-    var d = await r.json();
-    if (d.error) {
-      if (res) res.innerHTML = '<span style="color:var(--rd)">❌ ' + d.error + '</span>';
-    } else {
-      if (res) res.innerHTML = '<span style="color:var(--gn)">✅ ' + code + ': ' + d.inserted + ' new + ' + d.updated + ' updated = ' + d.total_rows + ' total (' + (d.date_range.first || '') + ' ~ ' + (d.date_range.last || '') + ')</span>';
-      // Clear inputs
-      if ($('eod-code')) $('eod-code').value = '';
-      if ($('eod-name')) $('eod-name').value = '';
-      eodLoadTable();
-    }
-  } catch (e) {
-    if (res) res.innerHTML = '<span style="color:var(--rd)">❌ ' + e.message + '</span>';
-  }
-  if (btn) { btn.disabled = false; btn.textContent = '⚡ Fetch'; }
-}
-
-function eodQuickAdd(code, name, category) {
-  if ($('eod-code')) $('eod-code').value = code;
-  if ($('eod-name')) $('eod-name').value = name;
-  if ($('eod-category')) $('eod-category').value = category;
-  eodFetchOne();
-}
-
-function eodLoadTable() {
-  fetch('/api/idx/custom/tickers').then(function(r) { return r.json(); }).then(function(rows) {
-    var el = $('eod-table'); if (!el) return;
-    // Filter to show only API-sourced tickers
-    var apiRows = rows.filter(function(r) { return r.source && r.source !== 'csv' && r.source !== 'manual'; });
-    if (!apiRows.length) { el.innerHTML = '<div style="color:var(--t3);padding:8px">No API-sourced tickers yet. Use the form above to fetch data.</div>'; return; }
-
-    var today = new Date().toISOString().split('T')[0];
-    var h = '<table style="width:100%;border-collapse:collapse">';
-    h += '<tr style="border-bottom:1px solid var(--b2)">';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Code</th>';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Name</th>';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Source</th>';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Category</th>';
-    h += '<th style="text-align:right;padding:5px 8px;color:var(--t3);font-size:10px">Rows</th>';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Range</th>';
-    h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:10px">Status</th>';
-    h += '<th style="padding:5px 8px;font-size:10px"></th>';
-    h += '</tr>';
-
-    apiRows.forEach(function(r) {
-      var srcColor = r.source === 'coingecko' ? '#f59e0b' : r.source === 'av_stock' ? '#0ea5e9' : r.source === 'av_forex' ? '#22c55e' : 'var(--t2)';
-      var srcLabel = r.source === 'coingecko' ? 'CoinGecko' : r.source === 'av_stock' ? 'Alpha V.' : r.source === 'av_forex' ? 'AV Forex' : r.source || '-';
-      var catColor = r.category === 'commodity' ? 'var(--am)' : r.category === 'global_index' ? 'var(--bl)' : r.category === 'currency' ? 'var(--gn)' : r.category === 'crypto' ? '#f59e0b' : 'var(--t2)';
-      var stale = false, staleDays = 0;
-      if (r.last_date) {
-        var diff = Math.floor((new Date(today) - new Date(r.last_date)) / 86400000);
-        if (diff > 7) { stale = true; staleDays = diff; }
-      }
-
-      h += '<tr style="border-bottom:1px solid var(--b1)">';
-      h += '<td style="padding:5px 8px;color:var(--bl);font-weight:700;font-size:12px">' + r.code + '</td>';
-      h += '<td style="padding:5px 8px;color:var(--t2);font-size:12px">' + (r.name || '-') + '</td>';
-      h += '<td style="padding:5px 8px"><span style="font-size:10px;color:' + srcColor + ';font-weight:600">' + srcLabel + '</span></td>';
-      h += '<td style="padding:5px 8px"><span style="background:var(--bgH);padding:2px 8px;border-radius:3px;font-size:10px;color:' + catColor + ';border:1px solid ' + catColor + '33">' + (r.category || 'custom') + '</span></td>';
-      h += '<td style="padding:5px 8px;text-align:right;color:var(--t1);font-family:var(--fm);font-size:12px">' + (r.rows || 0).toLocaleString() + '</td>';
-      h += '<td style="padding:5px 8px;color:var(--t3);font-size:10px;font-family:var(--fm)">' + (r.first_date || '') + ' ~ ' + (r.last_date || '') + '</td>';
-      h += '<td style="padding:5px 8px;font-size:10px">';
-      if (stale) h += '<span title="Data ' + staleDays + ' hari tertinggal" style="color:var(--rd);cursor:help">⚠ ' + staleDays + 'd ago</span>';
-      else h += '<span style="color:var(--gn)">✓ Fresh</span>';
-      h += '</td>';
-      h += '<td style="padding:5px 8px;white-space:nowrap">';
-      h += '<button id="eod-sync-' + r.code + '" style="background:none;border:none;color:var(--bl);cursor:pointer;font-size:13px;padding:0 4px" onclick="eodSyncOne(\'' + r.code + '\',\'' + esc(r.name || '') + '\',\'' + esc(r.category || '') + '\')" title="Refresh data">🔄</button>';
-      h += '<button style="background:none;border:none;color:var(--rd);cursor:pointer;font-size:14px;padding:0 4px" onclick="eodDelete(\'' + r.code + '\')" title="Delete">🗑</button>';
-      h += '</td></tr>';
-    });
-    h += '</table>';
-    el.innerHTML = h;
-  }).catch(function() {
-    var el = $('eod-table'); if (el) el.innerHTML = '<span style="color:var(--rd)">Failed to load</span>';
-  });
-}
-
-async function eodSyncOne(code, name, category) {
-  var btn = $('eod-sync-' + code);
-  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
-  try {
-    var r = await fetch('/api/idx/custom/fetch-eod', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code, name: name, category: category })
-    });
-    var d = await r.json();
-    if (d.error) showT('⚠', code + ': ' + d.error);
-    else showT('✅', code + ': +' + d.inserted + ' new, ' + d.updated + ' updated');
-    eodLoadTable();
-  } catch (e) { showT('Error', e.message); }
-  if (btn) { btn.textContent = '🔄'; btn.disabled = false; }
-}
-
-async function eodSyncAllStale() {
-  var st = $('eod-sync-status');
-  if (st) st.textContent = 'Syncing stale tickers...';
-  try {
-    var r = await fetch('/api/idx/custom/sync-stale', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stale_days: 7 })
-    });
-    var d = await r.json();
-    if (d.error) { if (st) st.textContent = '⚠ ' + d.error; return; }
-    var ok = (d.results || []).filter(function(r) { return !r.error; }).length;
-    var fail = (d.results || []).filter(function(r) { return r.error; }).length;
-    if (st) st.textContent = '✅ ' + ok + ' synced' + (fail ? ', ' + fail + ' failed' : '');
-    eodLoadTable();
-  } catch (e) { if (st) st.textContent = '⚠ ' + e.message; }
-}
-
-async function eodDelete(code) {
-  if (!confirm('Delete ' + code + ' and all its OHLC data?')) return;
-  try {
-    await fetch('/api/idx/custom/tickers/' + code, { method: 'DELETE' });
-    eodLoadTable();
     showT('Deleted', code + ' removed');
   } catch (e) { showT('Error', e.message); }
 }
