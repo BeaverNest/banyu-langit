@@ -3301,7 +3301,14 @@ module.exports = function(upload) {
             'US10Y':  { emoji: '📈', high: 4.5, low: 3.5, label: '10Y Yield',      highBear: true },
             'BDI':    { emoji: '🚢', high: 2000, low: 1000, label: 'Baltic Dry',   highBear: false },
             'BAID':   { emoji: '🚢', high: 2000, low: 1000, label: 'Baltic Dirty', highBear: false },
-            'USDIDR': { emoji: '💱', high: 16500, low: 15500, label: 'USD/IDR',    highBear: true }
+            'USDIDR': { emoji: '💱', high: 16500, low: 15500, label: 'USD/IDR',    highBear: true },
+            // Ambang di bawah ini DIPATOK, bukan diturunkan dari jendela data 4 bulan.
+            // Tanpa ini, rule default memakai now*1.1/now*0.9 sehingga label berubah
+            // mengikuti rentangnya sendiri (narrative fitting).
+            'REAL10Y':    { emoji: '🏦', high: 2.0,  low: 0.5,  label: 'Real Yield 10Y',  highBear: true },
+            'SLOPE10Y2Y': { emoji: '📐', high: 1.5,  low: 0.0,  label: '10Y-2Y Spread',   highBear: false },
+            'HYOAS':      { emoji: '🧯', high: 5.0,  low: 3.5,  label: 'HY OAS',          highBear: true },
+            'USDCNY':     { emoji: '🇨🇳', high: 7.3,  low: 6.9,  label: 'USD/CNY',         highBear: true }
           };
 
           macroTickers.forEach(t => {
@@ -3317,18 +3324,20 @@ module.exports = function(upload) {
             let bull = 0, bear = 0, detail = '';
             if (rule.highBear) {
               // High = bearish (VIX, DXY, US10Y, USDIDR)
-              if (now > rule.high) { bear += 1; detail = 'Above ' + rule.high + ' — bearish'; }
-              else if (now < rule.low) { bull += 1; detail = 'Below ' + rule.low + ' — bullish'; }
+              if (now > rule.high) { bear = 1; detail = 'Above ' + rule.high + ' — bearish'; }
+              else if (now < rule.low) { bull = 1; detail = 'Below ' + rule.low + ' — bullish'; }
               else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
-              if (chg5 > 3) { bear += 1; detail += ', rising fast'; }
-              else if (chg5 < -3) { bull += 1; detail += ', falling fast'; }
+              // Momentum hanya MENENTUKAN arah bila level netral; tidak boleh menambah
+              // arah berlawanan (dulu HYOAS bisa bull=1 DAN bear=1 sekaligus).
+              if (chg5 > 3) { if (!bull && !bear) bear = 1; detail += ', rising fast'; }
+              else if (chg5 < -3) { if (!bull && !bear) bull = 1; detail += ', falling fast'; }
             } else {
               // High = bullish (BDI)
-              if (now > rule.high) { bull += 1; detail = 'Above ' + rule.high + ' — bullish'; }
-              else if (now < rule.low) { bear += 1; detail = 'Below ' + rule.low + ' — bearish'; }
+              if (now > rule.high) { bull = 1; detail = 'Above ' + rule.high + ' — bullish'; }
+              else if (now < rule.low) { bear = 1; detail = 'Below ' + rule.low + ' — bearish'; }
               else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
-              if (chg5 > 3) { bull += 1; detail += ', rising'; }
-              else if (chg5 < -3) { bear += 1; detail += ', falling'; }
+              if (chg5 > 3) { if (!bull && !bear) bull = 1; detail += ', rising'; }
+              else if (chg5 < -3) { if (!bull && !bear) bear = 1; detail += ', falling'; }
             }
 
             bullPoints += bull;
