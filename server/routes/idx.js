@@ -888,43 +888,39 @@ module.exports = function(upload) {
     } catch (e) { res.json({ total_gaps: 0, error: e.message }); }
   });
 
-  // ═══ SECTORAL MOVEMENT — historical sector performance from BEI ═══
+  // ═══ SECTORAL MOVEMENT — return harian sektor, dihitung dari idx_daily ═══
+  // Sumber lama (sectoral_movement) berhenti 2026-09-30 DAN menyimpan change_pct
+  // kumulatif; kode lama lalu menghitung persen-dari-persen -> angka tak bermakna.
   router.get('/sectoral', (req, res) => {
     try {
       const days = Math.min(parseInt(req.query.days) || 60, 500);
+      const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT ?')
+        .all(days).map(r => r.trade_date).reverse();
+      if (dates.length < 2) return res.json({ sectors: [], dates: [], data: {}, total: 0 });
       const rows = db.prepare(`
-        SELECT trade_date, sector_name, change_pct FROM sectoral_movement
-        WHERE trade_date IN (SELECT DISTINCT trade_date FROM sectoral_movement ORDER BY trade_date DESC LIMIT ?)
-        ORDER BY trade_date, sector_name
-      `).all(days);
-      // Group by sector → time series to compute % change
-      const bySector = {};
-      rows.forEach(r => {
-        if (!bySector[r.sector_name]) bySector[r.sector_name] = [];
-        bySector[r.sector_name].push({ date: r.trade_date, val: r.change_pct || 0 });
-      });
-      // Sort each sector by date, compute daily pct change
+        SELECT d.trade_date AS dt, cp.sector AS sector,
+               AVG((d.close - d.prev_close) * 1.0 / d.prev_close * 100) AS chg,
+               COUNT(*) AS n
+        FROM idx_daily d
+        JOIN company_profiles cp ON d.code = cp.code
+        WHERE d.trade_date >= ? AND d.close > 0 AND d.prev_close > 0
+          AND cp.sector IS NOT NULL AND cp.sector != ''
+        GROUP BY d.trade_date, cp.sector
+      `).all(dates[0]);
       const dateMap = {};
-      const sectors = Object.keys(bySector).sort();
-      sectors.forEach(sec => {
-        const ts = bySector[sec].sort((a, b) => a.date.localeCompare(b.date));
-        for (let i = 0; i < ts.length; i++) {
-          const dt = ts[i].date;
-          if (!dateMap[dt]) dateMap[dt] = {};
-          if (i > 0 && ts[i - 1].val > 0) {
-            dateMap[dt][sec] = Math.round((ts[i].val - ts[i - 1].val) / ts[i - 1].val * 10000) / 100;
-          } else {
-            dateMap[dt][sec] = 0;
-          }
-        }
-      });
-      const dates = Object.keys(dateMap).sort();
-      // Remove first date (no prev to compare)
-      if (dates.length > 1) {
-        delete dateMap[dates[0]];
-        dates.shift();
+      const sectorSet = new Set();
+      for (const r of rows) {
+        sectorSet.add(r.sector);
+        (dateMap[r.dt] = dateMap[r.dt] || {})[r.sector] = Math.round(r.chg * 100) / 100;
       }
-      res.json({ sectors, dates, data: dateMap, total: rows.length });
+      res.json({
+        sectors: Array.from(sectorSet).sort(),
+        dates: dates.filter(d => dateMap[d]),
+        data: dateMap,
+        total: rows.length,
+        method: 'equal_weight',
+        source: 'idx_daily'
+      });
     } catch (e) { res.json({ sectors: [], dates: [], data: {}, error: e.message }); }
   });
 
