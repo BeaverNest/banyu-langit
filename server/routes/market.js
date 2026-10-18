@@ -138,6 +138,131 @@ router.get('/idx-indices', (req, res) => {
   }
 });
 
+// ═══ MARKET OVERVIEW v2 — satu sumber + konteks ═══
+// Sumber: idx_indices (indeks IDX), idx_daily (tape + sektor), custom_ohlc
+// (global/makro/komoditas/FX, diisi pipeline harian). TIDAK memakai Yahoo live
+// supaya angkanya identik dengan Market Regime dan punya tanggal.
+const OV_LABEL = {
+  SPX: ['S&P 500', 'Wall Street'], VIX: ['VIX', 'Volatilitas'],
+  DXY: ['DXY', 'Dolar index'], US10Y: ['US 10Y', 'Yield 10 tahun'],
+  COAL: ['Coal', 'Newcastle, USD/t'], CPO: ['CPO', 'Malaysia, MYR/t'],
+  NICKEL: ['Nikel', 'USD/t'], TIN: ['Timah', 'USD/t'],
+  COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'USD/t'],
+  ZINC: ['Zinc', 'USD/t'], WTI: ['WTI', 'Minyak'], BRENT: ['Brent', 'Minyak'],
+  NATGAS: ['Nat Gas', 'Gas alam'], GOLD: ['Emas', 'USD/oz'],
+  USDIDR: ['USD/IDR', 'Rupiah'], USDCNY: ['USD/CNY', 'Yuan'],
+};
+const OV_LINK = {
+  COAL: 'Energi', WTI: 'Energi', BRENT: 'Energi', NATGAS: 'Energi',
+  CPO: 'Barang Konsumen Primer',
+  NICKEL: 'Barang Baku', TIN: 'Barang Baku', COPPER: 'Barang Baku',
+  ALUMINIUM: 'Barang Baku', ZINC: 'Barang Baku',
+};
+
+router.get('/market/overview', (req, res) => {
+  try {
+    const pct = (a, b) => (a != null && b != null && b > 0) ? Math.round((a - b) / b * 10000) / 100 : null;
+
+    function stats(rows) {                       // rows DESC (terbaru dulu)
+      if (!rows || !rows.length) return null;
+      const asc = rows.map(r => r.close).reverse();
+      const n = asc.length, last = asc[n - 1];
+      const back = k => (n > k ? asc[n - 1 - k] : null);
+      return {
+        price: last,
+        date: rows[0].trade_date,
+        chg_1d: pct(last, back(1)),
+        chg_5d: pct(last, back(5)),
+        chg_20d: pct(last, back(20)),
+        // persentil posisi harga saat ini dalam rentang 1 tahun (0-100)
+        pctl: n >= 60 ? Math.round(asc.filter(v => v < last).length / n * 100) : null,
+        points: n
+      };
+    }
+
+    function fromOhlc(code) {
+      const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 260').all(code);
+      const st = stats(rows);
+      if (!st) return null;
+      const [label, desc] = OV_LABEL[code] || [code, code];
+      return Object.assign({ code, label, desc, linked_sector: OV_LINK[code] || '' }, st);
+    }
+
+    function fromIndex(code, label, desc) {
+      const rows = db.prepare('SELECT trade_date, close FROM idx_indices WHERE index_code=? ORDER BY trade_date DESC LIMIT 60').all(code);
+      const st = stats(rows);
+      return st ? Object.assign({ code, label, desc }, st) : null;
+    }
+
+    // ── TAPE ──
+    let tape = null;
+    try {
+      const tDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 21').all().map(r => r.trade_date);
+      if (tDates.length >= 21) {
+        const vals = {};
+        db.prepare(`SELECT trade_date, SUM(value) v FROM idx_daily WHERE trade_date >= ? AND close>0 GROUP BY trade_date`)
+          .all(tDates[tDates.length - 1]).forEach(r => { vals[r.trade_date] = r.v || 0; });
+        const ord = tDates.filter(d => vals[d] !== undefined);
+        const vToday = vals[ord[0]] || 0;
+        const prev = ord.slice(1, 21).map(d => vals[d]).filter(v => v > 0);
+        const ma20 = prev.length ? prev.reduce((a, b) => a + b, 0) / prev.length : 0;
+        const rows = db.prepare('SELECT close, prev_close FROM idx_daily WHERE trade_date=? AND close>0 AND prev_close>0').all(ord[0]);
+        let adv = 0, dec = 0, ara = 0, arb = 0;
+        for (const r of rows) {
+          const c = (r.close - r.prev_close) * 1.0 / r.prev_close;
+          if (c > 0) adv++; else if (c < 0) dec++;
+          const lim = r.prev_close < 500 ? 0.35 : r.prev_close <= 5000 ? 0.25 : 0.20;
+          if (c >= lim * 0.995) ara++;
+          if (c <= -0.15 * 0.995) arb++;
+        }
+        tape = { date: ord[0], value: vToday, value_ma20: ma20, value_ratio: ma20 > 0 ? Math.round(vToday / ma20 * 100) / 100 : null, advancers: adv, decliners: dec, ara, arb };
+      }
+    } catch (e) {}
+
+    // ── SEKTOR (equal-weighted, dari harga saham) ──
+    let sectors = [];
+    try {
+      const dts = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 2').all().map(r => r.trade_date);
+      if (dts.length === 2) {
+        db.prepare(`SELECT cp.sector sector,
+                    AVG((d.close-d.prev_close)*1.0/d.prev_close*100) chg, COUNT(*) n
+                    FROM idx_daily d JOIN company_profiles cp ON d.code=cp.code
+                    WHERE d.trade_date=? AND d.close>0 AND d.prev_close>0 AND cp.sector!=''
+                    GROUP BY cp.sector`).all(dts[0])
+          .forEach(r => sectors.push({ sector: r.sector, chg_1d: Math.round(r.chg * 100) / 100, members: r.n }));
+        sectors.sort((a, b) => b.chg_1d - a.chg_1d);
+      }
+    } catch (e) {}
+
+    const idxItems = [
+      ['COMPOSITE', 'IHSG', 'Composite'],
+      ['LQ45', 'LQ45', '45 saham likuid'],
+      ['IDX30', 'IDX30', '30 saham besar'],
+      ['IDX80', 'IDX80', '80 saham'],
+      ['IDXHIDIV20', 'HIDIV20', 'Dividen tinggi'],
+      ['IDXBUMN20', 'BUMN20', 'BUMN'],
+      ['KOMPAS100', 'KOMPAS100', '100 saham'],
+      ['ISSI', 'ISSI', 'Syariah'],
+    ].map(([c, l, d]) => fromIndex(c, l, d)).filter(Boolean);
+
+    const globalItems = ['SPX', 'VIX', 'DXY', 'US10Y'].map(fromOhlc).filter(Boolean);
+    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'ZINC', 'WTI', 'BRENT', 'NATGAS', 'GOLD'].map(fromOhlc).filter(Boolean);
+    const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
+
+    res.json({
+      as_of: (idxItems[0] && idxItems[0].date) || null,
+      tape,
+      sections: [
+        { id: 'idx', title: 'IDX', icon: '📊', items: idxItems },
+        { id: 'sectors', title: 'SEKTOR (1 hari)', icon: '🧩', sectors },
+        { id: 'global', title: 'RISIKO GLOBAL', icon: '🌐', items: globalItems },
+        { id: 'commodities', title: 'KOMODITAS → SEKTOR', icon: '🛢', items: commodityItems },
+        { id: 'fx', title: 'FX', icon: '💱', items: fxItems },
+      ]
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ═══ MARKET OVERVIEW — IDX indices from DB + global from Yahoo ═══
 router.get('/market', async (req, res) => {
   const cat = req.query.cat || 'indices';

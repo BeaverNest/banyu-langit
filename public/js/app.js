@@ -92,42 +92,58 @@ function anaSubTab(n,b){
 
 
 
-// ═══ MARKET OVERVIEW — IDX instant, global async ═══
+// ═══ MARKET OVERVIEW — satu sumber (custom_ohlc/idx_indices) + konteks ═══
 var mktCache={};
 async function loadMktOverview(){
   var el=$('ml-ov');if(!el)return;
   if(mktCache._ov&&Date.now()-mktCache._ov.ts<60000){el.innerHTML=mktCache._ov.html;return;}
   el.innerHTML='<div class="ne">Loading...</div>';
   try{
-    // Fetch all 3 categories — indices now uses DB for IDX
-    var [idx,cmd,cur]=await Promise.all([
-      fetch('/api/market?cat=indices').then(function(r){return r.json()}),
-      fetch('/api/market?cat=commodities').then(function(r){return r.json()}),
-      fetch('/api/market?cat=currencies').then(function(r){return r.json()})
-    ]);
+    var d=await fetch('/api/market/overview').then(function(r){return r.json()});
+    if(d.error)throw new Error(d.error);
+    function num(v,dec){if(v==null||isNaN(v))return '—';return Number(v).toLocaleString(undefined,{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0});}
+    function pc(v){if(v==null||isNaN(v))return '—';return (v>0?'+':'')+Number(v).toFixed(1)+'%';}
+    function cls(v){return v==null?'':(v>0?'up':v<0?'dn':'');}
     var h='';
-    function renderSection(title,icon,data){
-      h+='<div class="mkt-section-h">'+icon+' '+title+'</div>';
-      data.forEach(function(m){
-        var c=m.change>0?'up':m.change<0?'dn':'fl';
-        var ar=m.change>0?'▲':m.change<0?'▼':'';
-        var s=m.change>0?'+':'';
-        var pr=m.price?m.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
-        var ch=m.price?ar+' '+s+m.change.toFixed(2)+'%':'—';
-        var srcBadge=m.source==='idx'?' <span style="font-size:7px;color:var(--gn);vertical-align:super">IDX</span>':'';
-        h+='<div class="mkt-item"><span class="mkt-label">'+esc(m.label)+srcBadge+'</span><span class="mkt-desc">'+esc(m.desc)+'</span><span class="mkt-price">'+pr+'</span><span class="mkt-chg '+c+'">'+ch+'</span></div>';
-      });
+
+    // ── TAPE ──
+    if(d.tape){
+      var t=d.tape;
+      h+='<div class="mkt-tape">'
+        +'<span><b>'+(t.value/1e12).toFixed(2)+' T</b> nilai</span>'
+        +'<span class="'+cls(t.value_ratio-1)+'">'+(t.value_ratio!=null?t.value_ratio.toFixed(2)+'× MA20':'—')+'</span>'
+        +'<span>'+t.advancers+' naik / '+t.decliners+' turun</span>'
+        +'<span>ARA '+t.ara+' · ARB '+t.arb+'</span>'
+        +'<span class="mkt-asof">'+esc(t.date)+'</span></div>';
     }
-    // Split indices into IDX and Global
-    var idxIndices=idx.filter(function(m){return m.source==='idx'});
-    var globalIndices=idx.filter(function(m){return m.source!=='idx'});
-    if(idxIndices.length)renderSection('IDX INDICES','📊',idxIndices);
-    if(globalIndices.length)renderSection('GLOBAL','🌐',globalIndices);
-    renderSection('COMMODITIES','🛢',cmd);
-    renderSection('CURRENCIES','💱',cur);
+
+    (d.sections||[]).forEach(function(sec){
+      h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
+      if(sec.sectors){
+        h+='<div class="mkt-secs">';
+        sec.sectors.forEach(function(x){
+          h+='<span class="mkt-sec '+cls(x.chg_1d)+'"><b>'+esc(x.sector)+'</b> '+pc(x.chg_1d)+'</span>';
+        });
+        h+='</div>';
+        return;
+      }
+      h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span><span class="mkt-pct">1Y</span></div>';
+      (sec.items||[]).forEach(function(i){
+        h+='<div class="mkt-item">'
+          +'<span class="mkt-label">'+esc(i.label)+'</span>'
+          +'<span class="mkt-desc">'+esc(i.desc||'')+(i.linked_sector?' <span class="mkt-link">→ '+esc(i.linked_sector)+'</span>':'')+'</span>'
+          +'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>'
+          +'<span class="mkt-chg '+cls(i.chg_1d)+'">'+pc(i.chg_1d)+'</span>'
+          +'<span class="mkt-sm '+cls(i.chg_5d)+'">'+pc(i.chg_5d)+'</span>'
+          +'<span class="mkt-sm '+cls(i.chg_20d)+'">'+pc(i.chg_20d)+'</span>'
+          +'<span class="mkt-pct">'+(i.pctl!=null?'p'+i.pctl:'—')+'</span>'
+          +'</div>';
+      });
+    });
+    h+='<div class="mkt-foot">1Y = persentil posisi harga dalam 1 tahun (p96 = mendekati tertinggi). "—" = histori belum cukup.</div>';
     mktCache._ov={html:h,ts:Date.now()};
     el.innerHTML=h;
-  }catch(e){el.innerHTML='<div class="ne">Failed to load</div>';}
+  }catch(e){el.innerHTML='<div class="ne">Failed to load: '+esc(e.message)+'</div>';}
 }
 
 // ═══ WATCHLIST DROPDOWN TOGGLE ═══
