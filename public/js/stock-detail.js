@@ -151,6 +151,7 @@ function sdRenderTab(tabId) {
       if (d.score_history && d.score_history.length >= 3) sdDrawScoreChart(d.score_history);
       sdDrawAnalysisCharts(d);
     }
+    if (tabId === 'ownership' && d.ownership) sdDrawOwnershipCharts(d.ownership);
     if (tabId === 'flow') {
       if (d.chart) sdDrawFnetChart(d.chart);
       if (d.bid_offer && d.bid_offer.data) sdDrawBOChart(d.bid_offer.data);
@@ -674,30 +675,83 @@ function sdTabAnalysis(d) {
 // TAB: OWNERSHIP
 // ═══════════════════════════════════════════════════════════════
 function sdTabOwnership(d) {
-  var h = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">';
+  var h = '';
 
-  // Ownership
+  // Ownership — rincian lokal/asing per kategori + riwayat
+  var CAT = [
+    { k: 'mf', l: 'Reksa Dana' }, { k: 'id', l: 'Individu' }, { k: 'cp', l: 'Korporasi' },
+    { k: 'is', l: 'Asuransi' }, { k: 'pf', l: 'Dana Pensiun' }, { k: 'ib', l: 'Bank / IB' },
+    { k: 'sc', l: 'Sekuritas' }, { k: 'fd', l: 'Yayasan' }, { k: 'ot', l: 'Lainnya' }
+  ];
+  var LOC_C = ['#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe', '#dbeafe', '#eff6ff', '#e0e7ff'];
+  var FOR_C = ['#b45309', '#d97706', '#f59e0b', '#fbbf24', '#fcd34d', '#fde68a', '#fef3c7', '#fffbeb', '#fef9c3'];
+
   if (d.ownership) {
     var own = d.ownership;
-    h += '<div style="padding:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--t1)">OWNERSHIP</div><div style="font-size:10px;color:var(--t3)">' + esc(own.snapshot_date) + '</div></div>';
-    var fPct = own.foreign_pct || 0, lPct = own.local_pct || 0;
-    h += '<div style="display:flex;height:28px;border-radius:4px;overflow:hidden;margin-bottom:10px">';
-    if (lPct > 0) h += '<div style="width:' + lPct + '%;background:var(--bl);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;min-width:35px">L ' + lPct.toFixed(1) + '%</div>';
-    if (fPct > 0) h += '<div style="width:' + fPct + '%;background:var(--am);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;min-width:35px">F ' + fPct.toFixed(1) + '%</div>';
+    var pb = own.pct_breakdown || { local: {}, foreign: {} };
+    var hist = own.history || [];
+    var prev = hist.length >= 13 ? hist[hist.length - 13] : null;
+
+    var rowsC = CAT.map(function (c) {
+      var lv = pb.local[c.k] || 0, fv = pb.foreign[c.k] || 0;
+      var pv = prev ? ((prev.local[c.k] || 0) + (prev.foreign[c.k] || 0)) : null;
+      return { k: c.k, l: c.l, lv: lv, fv: fv, tot: lv + fv, delta: pv == null ? null : Math.round((lv + fv - pv) * 100) / 100 };
+    }).filter(function (r) { return r.tot > 0; }).sort(function (a, b) { return b.tot - a.tot; });
+
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:12px">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1)">OWNERSHIP <span style="font-weight:400;color:var(--t3)">per kategori investor · KSEI</span></div>';
+    h += '<div style="font-size:9px;color:var(--t3);font-family:var(--fm)">' + esc(own.snapshot_date) + ' · basis ' + (own.listed_shares || 0).toLocaleString() + ' saham' + (own.scripless_pct != null ? ' · tercatat KSEI ' + Number(own.scripless_pct).toFixed(1) + '%' : '') + '</div>';
     h += '</div>';
-    if (own.basis === 'ksei_scripless' && own.scripless_pct != null) {
-      h += '<div style="font-size:9px;color:var(--t3);margin-bottom:8px">Basis: saham tercatat di KSEI ('
-         + Number(own.scripless_pct).toFixed(1) + '% dari saham beredar)</div>';
-    }
-    var invTypes = [{k:'is',l:'Insurance'},{k:'cp',l:'Corporate'},{k:'pf',l:'Pension'},{k:'ib',l:'IB/Broker'},{k:'id',l:'Individual'},{k:'mf',l:'Mutual Fund'},{k:'sc',l:'Securities'},{k:'fd',l:'Foundation'},{k:'ot',l:'Others'}];
-    h += '<table class="bei-tbl" style="font-size:11px"><thead style="font-size:10px"><tr><th class="al">Type</th><th class="ar">Local</th><th class="ar">Foreign</th></tr></thead><tbody>';
-    var bk = own.breakdown || {}, bkL = bk.local || {}, bkF = bk.foreign || {};
-    invTypes.forEach(function(t) { var lv = bkL[t.k]||0, fv = bkF[t.k]||0; if (!lv && !fv) return; h += '<tr><td class="al" style="color:var(--t3)">' + t.l + '</td><td class="ar" style="font-family:var(--fm)">' + fmtRp(lv) + '</td><td class="ar" style="font-family:var(--fm);color:var(--am)">' + fmtRp(fv) + '</td></tr>'; });
-    h += '</tbody></table></div>';
+
+    h += '<div style="display:grid;grid-template-columns:minmax(360px,42%) 1fr;gap:14px">';
+
+    // Kiri: stacked bar + tabel
+    h += '<div>';
+    h += '<div style="display:flex;height:26px;border-radius:4px;overflow:hidden;margin-bottom:4px">';
+    rowsC.slice().sort(function (a, b) { return b.lv - a.lv; }).forEach(function (r, i) {
+      if (r.lv <= 0) return;
+      h += '<div title="Lokal ' + r.l + ' ' + r.lv.toFixed(2) + '%" style="width:' + r.lv + '%;background:' + LOC_C[i % LOC_C.length] + '"></div>';
+    });
+    rowsC.slice().sort(function (a, b) { return b.fv - a.fv; }).forEach(function (r, i) {
+      if (r.fv <= 0) return;
+      h += '<div title="Asing ' + r.l + ' ' + r.fv.toFixed(2) + '%" style="width:' + r.fv + '%;background:' + FOR_C[i % FOR_C.length] + '"></div>';
+    });
+    h += '</div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:8px">';
+    h += '<span><b style="color:#60a5fa">Lokal ' + Number(own.local_pct).toFixed(2) + '%</b></span>';
+    h += '<span><b style="color:#f59e0b">Asing ' + Number(own.foreign_pct).toFixed(2) + '%</b></span>';
+    h += '</div>';
+
+    h += '<table class="bei-tbl" style="font-size:11px;width:100%"><thead style="font-size:9px"><tr>';
+    h += '<th class="al">Kategori</th><th class="ar">Lokal</th><th class="ar">Asing</th><th class="ar">Total</th><th class="ar">Δ12m</th></tr></thead><tbody>';
+    rowsC.forEach(function (r) {
+      var dl = r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + r.delta.toFixed(2) + ' pp';
+      var dc = r.delta == null ? 'var(--t3)' : r.delta > 0 ? 'var(--gn)' : r.delta < 0 ? 'var(--rd)' : 'var(--t3)';
+      h += '<tr><td class="al" style="color:var(--t2)">' + r.l + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:#60a5fa">' + (r.lv ? r.lv.toFixed(2) : '—') + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:#f59e0b">' + (r.fv ? r.fv.toFixed(2) : '—') + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);font-weight:600">' + r.tot.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + dc + '">' + dl + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">Persen terhadap saham beredar. Δ12m = perubahan komposisi vs snapshot 12 bulan lalu.</div>';
+    h += '</div>';
+
+    // Kanan: grafik riwayat
+    h += '<div>';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--t2);margin-bottom:4px">KOMPOSISI LOKAL vs ASING <span style="font-weight:400;color:var(--t3)">(' + hist.length + ' snapshot)</span></div>';
+    h += '<div id="sd-own-hist" style="width:100%;height:190px"></div>';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--t2);margin:8px 0 4px">TREN KATEGORI UTAMA <span style="font-weight:400;color:var(--t3)">(lokal + asing, % saham beredar)</span></div>';
+    h += '<div id="sd-own-cat" style="width:100%;height:190px"></div>';
+    h += '</div>';
+
+    h += '</div></div>';
   } else {
     h += '<div style="padding:20px;color:var(--t3);background:var(--bg1);border:1px solid var(--b1);border-radius:4px">No ownership data</div>';
   }
+
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
 
   // Dividends
   if (d.dividend_history && d.dividend_history.length) {
@@ -909,6 +963,49 @@ function sdDrawBOChart(boData) {
       { type: 'line', data: boData.map(function() { return 50; }), symbol: 'none', lineStyle: { color: '#555', type: 'dashed', width: 1 }, silent: true }
     ]
   }, true);
+}
+
+// ═══ OWNERSHIP CHARTS ═══
+function sdDrawOwnershipCharts(own) {
+  var hist = own.history || [];
+  if (hist.length < 3) return;
+  var dates = hist.map(function (h) { return h.date; });
+  var xAxis = { type: 'category', data: dates, axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor(dates.length / 6)) }, axisLine: { lineStyle: { color: '#1e2836' } } };
+  var yAxis = { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } };
+
+  var el1 = document.getElementById('sd-own-hist');
+  if (el1) {
+    var c1 = BL.init(el1, 'sd-own-hist'); if (c1) c1.setOption({
+      grid: { left: 40, right: 12, top: 24, bottom: 20 },
+      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: xAxis, yAxis: yAxis,
+      series: [
+        { name: 'Asing', type: 'line', data: hist.map(function (h) { return h.foreign_pct; }), symbol: 'none', lineStyle: { width: 2, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' }, areaStyle: { opacity: 0.12 } },
+        { name: 'Lokal', type: 'line', data: hist.map(function (h) { return h.local_pct; }), symbol: 'none', lineStyle: { width: 2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' }, areaStyle: { opacity: 0.12 } }
+      ]
+    });
+  }
+
+  var el2 = document.getElementById('sd-own-cat');
+  if (el2) {
+    var keys = [
+      { k: 'mf', l: 'Reksa Dana', c: '#a855f7' },
+      { k: 'id', l: 'Individu', c: '#22c55e' },
+      { k: 'cp', l: 'Korporasi', c: '#0ea5e9' },
+      { k: 'is', l: 'Asuransi', c: '#ef4444' },
+      { k: 'pf', l: 'Dana Pensiun', c: '#f59e0b' }
+    ];
+    var last = hist[hist.length - 1];
+    keys.sort(function (a, b) { return ((last.cats[b.k] || 0) - (last.cats[a.k] || 0)); });
+    var c2 = BL.init(el2, 'sd-own-cat'); if (c2) c2.setOption({
+      grid: { left: 40, right: 12, top: 24, bottom: 20 },
+      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: xAxis, yAxis: yAxis,
+      series: keys.slice(0, 4).map(function (k) {
+        return { name: k.l, type: 'line', data: hist.map(function (h) { return (h.cats || {})[k.k] || 0; }), symbol: 'none', lineStyle: { width: 1.6, color: k.c }, itemStyle: { color: k.c } };
+      })
+    });
+  }
 }
 
 // ═══ ANALYSIS: MA DISTANCE + FOREIGN FLOW ═══

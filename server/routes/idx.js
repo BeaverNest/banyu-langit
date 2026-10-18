@@ -3946,20 +3946,55 @@ module.exports = function(upload) {
         const bpRow = db.prepare('SELECT * FROM balance_position WHERE code=? ORDER BY snapshot_date DESC LIMIT 1').get(code);
         if (bpRow) {
           const totalShares = (bpRow.local_total || 0) + (bpRow.foreign_total || 0);
+          // Basis persen = saham beredar (sec_num), bukan hanya yang tercatat scripless,
+          // supaya kartu dan riwayat memakai penyebut yang sama.
+          const secNum = bpRow.sec_num || last.listed_shares || 0;
+          const pcListed = v => secNum > 0 ? Math.round(v / secNum * 10000) / 100 : 0;
           ownership = {
             snapshot_date: bpRow.snapshot_date,
             local_total: bpRow.local_total || 0,
             foreign_total: bpRow.foreign_total || 0,
             total: totalShares,
-            foreign_pct: totalShares > 0 ? Math.round(bpRow.foreign_total / totalShares * 10000) / 100 : 0,
-            basis: 'ksei_scripless',
-            scripless_pct: (last.listed_shares || 0) > 0
-              ? Math.round(totalShares / last.listed_shares * 10000) / 100 : null,
-            local_pct: totalShares > 0 ? Math.round(bpRow.local_total / totalShares * 10000) / 100 : 0,
+            listed_shares: secNum,
+            foreign_pct: pcListed(bpRow.foreign_total || 0),
+            local_pct: pcListed(bpRow.local_total || 0),
+            basis: 'listed_shares',
+            scripless_pct: secNum > 0 ? Math.round(totalShares / secNum * 10000) / 100 : null,
+            pct_breakdown: (function () {
+              const keys = ['is','cp','pf','ib','id','mf','sc','fd','ot'];
+              const out = { local: {}, foreign: {} };
+              keys.forEach(k => {
+                out.local[k] = pcListed(bpRow['local_' + k] || 0);
+                out.foreign[k] = pcListed(bpRow['foreign_' + k] || 0);
+              });
+              return out;
+            })(),
             breakdown: {
               local: { is: bpRow.local_is||0, cp: bpRow.local_cp||0, pf: bpRow.local_pf||0, ib: bpRow.local_ib||0, id: bpRow.local_id||0, mf: bpRow.local_mf||0, sc: bpRow.local_sc||0, fd: bpRow.local_fd||0, ot: bpRow.local_ot||0 },
               foreign: { is: bpRow.foreign_is||0, cp: bpRow.foreign_cp||0, pf: bpRow.foreign_pf||0, ib: bpRow.foreign_ib||0, id: bpRow.foreign_id||0, mf: bpRow.foreign_mf||0, sc: bpRow.foreign_sc||0, fd: bpRow.foreign_fd||0, ot: bpRow.foreign_ot||0 }
-            }
+            },
+            // Riwayat 2022-01 .. sekarang (snapshot bulanan KSEI)
+            history: (function () {
+              try {
+                const rows = db.prepare('SELECT * FROM balance_position WHERE code=? ORDER BY snapshot_date').all(code);
+                const keys = ['is', 'cp', 'pf', 'ib', 'id', 'mf', 'sc', 'fd', 'ot'];
+                return rows.map(r => {
+                  const tot = r.sec_num || 0;
+                  const pc = v => tot > 0 ? Math.round(v / tot * 10000) / 100 : 0;
+                  const local = {}, foreign = {}, cats = {};
+                  keys.forEach(k => {
+                    local[k] = pc(r['local_' + k] || 0);
+                    foreign[k] = pc(r['foreign_' + k] || 0);
+                    cats[k] = pc((r['local_' + k] || 0) + (r['foreign_' + k] || 0));
+                  });
+                  return {
+                    date: r.snapshot_date, total: tot,
+                    local_pct: pc(r.local_total || 0), foreign_pct: pc(r.foreign_total || 0),
+                    local, foreign, cats
+                  };
+                });
+              } catch (e) { return []; }
+            })()
           };
         }
       } catch (e) {}
