@@ -306,35 +306,98 @@ router.get('/quotes', async (req, res) => {
 // ═══ COMMODITY MAPPING — pure SQLite ═══
 router.get('/commodities', (req, res) => {
   try {
-    let td = null;
-    const stockData = {};
-    try {
-      td = latestIdxDate();
-      if (td) {
-        const allTickers = [...new Set(COMMODITY_MAP.flatMap(c => c.tickers))];
-        if (allTickers.length) {
-          const ph = allTickers.map(() => '?').join(',');
-          db.prepare(`SELECT code, name, close, prev_close, volume, value, frequency, foreign_buy, foreign_sell,
-            CASE WHEN prev_close>0 THEN ROUND(CAST((close-prev_close)AS REAL)/prev_close*100,2) ELSE 0 END as chg_pct
-            FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(td, ...allTickers)
-            .forEach(r => {
-              r.fnet_val = ((r.foreign_buy||0) - (r.foreign_sell||0)) * (r.close||0);
-              stockData[r.code] = r;
-            });
-        }
-      }
-    } catch(dbErr) { /* continue without stock data */ }
+    const td = latestIdxDate();
+    if (!td) return res.json({ commodities: [], trade_date: null });
 
-    const result = COMMODITY_MAP.map(c => {
-      const stocks = c.tickers.map(t => stockData[t]).filter(Boolean)
-        .sort((a, b) => (b.value || 0) - (a.value || 0));
+    // ── Mapping dari tabel (bisa diubah tanpa deploy); fallback ke konstanta ──
+    let groups = [];
+    try {
+      groups = db.prepare(`SELECT id,label,tv,descr AS desc,icon,color,commodity_code AS cmd_code,tickers
+                           FROM commodity_groups WHERE active=1 ORDER BY sort_order, id`).all()
+        .map(g => ({ ...g, tickers: String(g.tickers || '').split(',').map(x => x.trim()).filter(Boolean) }));
+    } catch (e) { /* tabel belum ada */ }
+    if (!groups.length) groups = COMMODITY_MAP.map(c => ({ ...c, cmd_code: null }));
+
+    const allTickers = [...new Set(groups.flatMap(g => g.tickers))];
+    const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 21')
+      .all().map(r => r.trade_date);
+    const byCode = {};
+    if (allTickers.length) {
+      const ph = allTickers.map(() => '?').join(',');
+      db.prepare(`SELECT code, trade_date, close, prev_close, volume, value,
+                         foreign_buy, foreign_sell
+                  FROM idx_daily WHERE trade_date >= ? AND code IN (${ph})`)
+        .all(dates[dates.length - 1], ...allTickers)
+        .forEach(r => { (byCode[r.code] = byCode[r.code] || []).push(r); });
+      Object.keys(byCode).forEach(c => byCode[c].sort((a, b) => a.trade_date.localeCompare(b.trade_date)));
+    }
+
+    const pct = (a, b) => (a != null && b != null && b > 0) ? Math.round((a - b) / b * 10000) / 100 : null;
+    const median = arr => {
+      if (!arr.length) return null;
+      const v = arr.slice().sort((a, b) => a - b);
+      const m = Math.floor(v.length / 2);
+      return Math.round((v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2) * 100) / 100;
+    };
+
+    function stockStats(code) {
+      const a = byCode[code];
+      if (!a || !a.length) return null;
+      const n = a.length;
+      const last = a[n - 1];
+      const at = k => (n > k ? a[n - 1 - k] : null);
       return {
-        id: c.id, label: c.label, tv: c.tv, desc: c.desc, icon: c.icon, color: c.color,
-        tickers: c.tickers, stocks,
+        code, name: last.name || code,
+        close: last.close, prev_close: last.prev_close,
+        chg_pct: pct(last.close, last.prev_close),
+        chg_5d: at(5) ? pct(last.close, at(5).close) : null,
+        chg_20d: at(20) ? pct(last.close, at(20).close) : null,
+        value: last.value || 0, volume: last.volume || 0,
+        fnet_val: ((last.foreign_buy || 0) - (last.foreign_sell || 0)) * (last.close || 0)
+      };
+    }
+
+    function cmdStats(code) {
+      if (!code) return null;
+      const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(code);
+      if (!rows.length) return null;
+      const asc = rows.map(r => r.close).reverse();
+      const n = asc.length, last = asc[n - 1];
+      return {
+        code, price: last, date: rows[0].trade_date,
+        chg_1d: pct(last, n > 1 ? asc[n - 2] : null),
+        chg_5d: pct(last, n > 5 ? asc[n - 6] : null),
+        chg_20d: pct(last, n > 20 ? asc[n - 21] : null),
+        points: n
+      };
+    }
+
+    const result = groups.map(g => {
+      const stocks = g.tickers.map(stockStats).filter(Boolean)
+        .sort((a, b) => (b.value || 0) - (a.value || 0));
+      const chgs1 = stocks.map(s => s.chg_pct).filter(v => v != null);
+      const chgs5 = stocks.map(s => s.chg_5d).filter(v => v != null);
+      const chgs20 = stocks.map(s => s.chg_20d).filter(v => v != null);
+      const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
+      const cmd = cmdStats(g.cmd_code);
+      return {
+        id: g.id, label: g.label, tv: g.tv, desc: g.desc, icon: g.icon, color: g.color,
+        tickers: g.tickers, stocks,
+        n: stocks.length, thin: stocks.length > 0 && stocks.length < 3,
+        avg_chg: avg(chgs1), median_chg: median(chgs1),
+        avg_5d: avg(chgs5), avg_20d: avg(chgs20),
+        up: chgs1.filter(v => v > 0).length, down: chgs1.filter(v => v < 0).length,
         total_value: stocks.reduce((s, r) => s + (r.value || 0), 0),
         total_fnet: stocks.reduce((s, r) => s + (r.fnet_val || 0), 0),
-        avg_chg: stocks.length ? Math.round(stocks.reduce((s, r) => s + (r.chg_pct || 0), 0) / stocks.length * 100) / 100 : 0,
+        commodity: cmd,
+        // divergensi: komoditas naik tapi saham turun (atau sebaliknya)
+        divergence: (cmd && cmd.chg_1d != null && avg(chgs1) != null)
+          ? Math.round((cmd.chg_1d - avg(chgs1)) * 100) / 100 : null
       };
+    }).sort((a, b) => {
+      const da = a.divergence == null ? -999 : Math.abs(a.divergence);
+      const dbv = b.divergence == null ? -999 : Math.abs(b.divergence);
+      return dbv - da;
     });
 
     res.json({ commodities: result, trade_date: td });

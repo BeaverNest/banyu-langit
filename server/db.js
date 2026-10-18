@@ -69,6 +69,20 @@ db.exec(`
     notes TEXT DEFAULT ''
   );
 
+  -- Grup komoditas -> emiten IDX (bisa diubah tanpa deploy)
+  CREATE TABLE IF NOT EXISTS commodity_groups (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    tv TEXT DEFAULT '',
+    descr TEXT DEFAULT '',
+    icon TEXT DEFAULT '',
+    color TEXT DEFAULT '',
+    commodity_code TEXT DEFAULT '',
+    tickers TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1
+  );
+
   CREATE TABLE IF NOT EXISTS ticker_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,

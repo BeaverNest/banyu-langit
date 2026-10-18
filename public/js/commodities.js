@@ -19,6 +19,9 @@ function cmdRender(el){
   if(!el)el=document.getElementById('cmd-content');
   if(!el||!cmdData)return;
   var cmds=cmdData.commodities;
+  function pc(v){return v==null?'—':(v>0?'+':'')+Number(v).toFixed(2)+'%';}
+  function cl(v){return v>0?'var(--gn)':v<0?'var(--rd)':'var(--t2)';}
+  function px(v){return Number(v).toLocaleString(undefined,{maximumFractionDigits:2});}
   if(!cmds||!cmds.length){el.innerHTML='<div style="padding:20px;color:var(--t2)">No commodities</div>';return;}
 
   var h='<div style="padding:10px 12px">';
@@ -40,11 +43,32 @@ function cmdRender(el){
     if(c.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(c.tv)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;padding:3px 8px;border-radius:4px;background:var(--bl);color:#fff;text-decoration:none;font-weight:600">📈 Chart</a>';
     h+='</div>';
 
-    // Row 2: stats
-    h+='<div style="display:flex;gap:8px;font-size:10px">';
-    h+='<span style="color:var(--t2)">'+(c.stocks?c.stocks.length:0)+' stocks</span>';
-    h+='<span style="color:'+(ac>0?'var(--gn)':ac<0?'var(--rd)':'#888')+';font-weight:600">Avg: '+(ac>0?'+':'')+ac.toFixed(2)+'%</span>';
-    h+='<span style="color:'+(fn>0?'var(--gn)':fn<0?'var(--rd)':'#888')+';font-weight:600">FNet: '+cmdFmt(fn)+'</span>';
+    // Row 2: harga komoditas
+    var cm=c.commodity;
+    h+='<div style="display:flex;align-items:baseline;gap:6px;font-size:11px;margin-bottom:3px">';
+    if(cm){
+      h+='<b style="font-family:monospace">'+px(cm.price)+'</b>';
+      h+='<span style="color:'+cl(cm.chg_1d)+';font-weight:600">'+pc(cm.chg_1d)+'</span>';
+      h+='<span style="color:var(--t3);font-size:9px">komoditas</span>';
+    } else {
+      h+='<span style="color:var(--t3);font-size:10px">tanpa seri harga</span>';
+    }
+    h+='</div>';
+
+    // Row 3: basket
+    h+='<div style="display:flex;gap:8px;font-size:10px;flex-wrap:wrap">';
+    h+='<span style="color:var(--t2)">'+(c.n||0)+' saham'+(c.thin?' <b style="color:var(--am)">thin</b>':'')+'</span>';
+    h+='<span style="color:'+cl(c.median_chg)+';font-weight:600">Med '+pc(c.median_chg)+'</span>';
+    h+='<span style="color:'+cl(c.avg_chg)+'">Avg '+pc(c.avg_chg)+'</span>';
+    h+='<span style="color:var(--t3)">'+(c.up||0)+'↑/'+(c.down||0)+'↓</span>';
+    h+='<span style="color:'+cl(fn)+';font-weight:600">FNet '+cmdFmt(fn)+'</span>';
+    h+='</div>';
+
+    // Row 4: horizon + divergensi
+    h+='<div style="display:flex;gap:8px;font-size:9px;color:var(--t3);margin-top:2px">';
+    h+='<span>5D <b style="color:'+cl(c.avg_5d)+'">'+pc(c.avg_5d)+'</b></span>';
+    h+='<span>20D <b style="color:'+cl(c.avg_20d)+'">'+pc(c.avg_20d)+'</b></span>';
+    if(c.divergence!=null)h+='<span style="margin-left:auto">div <b style="color:'+(c.divergence>0?'var(--gn)':'var(--rd)')+'">'+(c.divergence>0?'+':'')+c.divergence.toFixed(1)+' pp</b></span>';
     h+='</div>';
 
     // Row 3: ticker chips
