@@ -106,17 +106,6 @@ async function loadMktOverview(){
     function cls(v){return v==null?'':(v>0?'up':v<0?'dn':'');}
     var h='';
 
-    // ── TAPE ──
-    if(d.tape){
-      var t=d.tape;
-      h+='<div class="mkt-tape">'
-        +'<span><b>'+(t.value/1e12).toFixed(2)+' T</b> nilai</span>'
-        +'<span class="'+cls(t.value_ratio-1)+'">'+(t.value_ratio!=null?t.value_ratio.toFixed(2)+'× MA20':'—')+'</span>'
-        +'<span>'+t.advancers+' naik / '+t.decliners+' turun</span>'
-        +'<span>ARA '+t.ara+' · ARB '+t.arb+'</span>'
-        +'<span class="mkt-asof">'+esc(t.date)+'</span></div>';
-    }
-
     (d.sections||[]).forEach(function(sec){
       h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
       if(sec.sectors){
