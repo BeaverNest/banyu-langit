@@ -147,8 +147,8 @@ const OV_LABEL = {
   DXY: ['DXY', 'Dolar index'], US10Y: ['US 10Y', 'Yield 10 tahun'],
   COAL: ['Coal', 'Newcastle, USD/t'], CPO: ['CPO', 'Malaysia, MYR/t'],
   NICKEL: ['Nikel', 'USD/t'], TIN: ['Timah', 'USD/t'],
-  COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'USD/t'],
-  ZINC: ['Zinc', 'USD/t'], WTI: ['WTI', 'Minyak'], BRENT: ['Brent', 'Minyak'],
+  COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'COMEX, USD/t'],
+  WTI: ['WTI', 'NYMEX front-month'], BRENT: ['Brent', 'USD/bbl'],
   NATGAS: ['Nat Gas', 'Gas alam'], GOLD: ['Emas', 'USD/oz'],
   USDIDR: ['USD/IDR', 'Rupiah'], USDCNY: ['USD/CNY', 'Yuan'],
 };
@@ -156,7 +156,7 @@ const OV_LINK = {
   COAL: 'Energi', WTI: 'Energi', BRENT: 'Energi', NATGAS: 'Energi',
   CPO: 'Barang Konsumen Primer',
   NICKEL: 'Barang Baku', TIN: 'Barang Baku', COPPER: 'Barang Baku',
-  ALUMINIUM: 'Barang Baku', ZINC: 'Barang Baku',
+  ALUMINIUM: 'Barang Baku',
 };
 
 router.get('/market/overview', (req, res) => {
@@ -204,7 +204,7 @@ router.get('/market/overview', (req, res) => {
     ].map(([c, l, d]) => fromIndex(c, l, d)).filter(Boolean);
 
     const globalItems = ['SPX', 'VIX', 'DXY', 'US10Y'].map(fromOhlc).filter(Boolean);
-    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'ZINC', 'WTI', 'BRENT', 'NATGAS', 'GOLD'].map(fromOhlc).filter(Boolean);
+    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS', 'GOLD'].map(fromOhlc).filter(Boolean);
     const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
 
     res.json({
