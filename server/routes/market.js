@@ -158,8 +158,20 @@ router.get('/market', async (req, res) => {
           return parseFloat(s.replace(/,/g, '')) || 0;
         }
         const closeNum = parseIDNum(r.close);
-        const pctNum = parseIDNum(String(r.percent || '0').replace('%', ''));
-        return { label: meta.label, desc: meta.desc, price: closeNum, change: pctNum, source: 'idx' };
+        let pctNum = parseIDNum(String(r.percent || '0').replace('%', ''));
+        // index_list.percent selalu "0,00%" (upstream tidak mengirim change),
+        // sehingga SEMUA indeks IDX tampil 0,00%. Hitung dari idx_indices:
+        // dua penutupan terakhir per index_code.
+        let asOf = (r.updated_at || '').slice(0, 10) || null;
+        try {
+          const last2 = db.prepare(`SELECT trade_date, close FROM idx_indices
+                                    WHERE index_code=? ORDER BY trade_date DESC LIMIT 2`).all(code);
+          if (last2.length === 2 && last2[1].close > 0) {
+            pctNum = Math.round((last2[0].close - last2[1].close) / last2[1].close * 10000) / 100;
+            asOf = last2[0].trade_date;
+          }
+        } catch (e) {}
+        return { label: meta.label, desc: meta.desc, price: closeNum, change: pctNum, source: 'idx', date: asOf };
       }).filter(Boolean);
 
       // Global indices from Yahoo (best effort, don't block)
