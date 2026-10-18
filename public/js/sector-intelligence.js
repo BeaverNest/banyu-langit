@@ -564,7 +564,31 @@ function renderTimeline(){
   var chartEl=$('timeline-chart'),legEl=$('timeline-legend');
   if(!chartEl)return;
 
-  var W=chartEl.offsetWidth||700,H=350;
+  // Flow Timeline plot height. This used to be a hard-coded 350 px, which is what made the
+  // chart look "gepeng" (squashed) on a wide window: the plot kept growing horizontally
+  // while the height stayed put. Derive it from the viewport instead, with a floor so short
+  // screens still get a readable plot and a ceiling so it never dominates the page.
+  function secTimelineHeight(){
+    var vh=window.innerHeight||900;
+    var H=Math.round(vh*0.72);
+    if(H<420)H=420;
+    if(H>900)H=900;
+    return H;
+  }
+  // BL's global resize listener only calls chart.resize(), which keeps the old DOM height —
+  // so rebind the height here too (bound once, not on every render).
+  if(!window._secTlResizeBound){
+    window._secTlResizeBound=true;
+    window.addEventListener('resize',function(){
+      var el=$('timeline-chart');if(!el)return;
+      var hh=secTimelineHeight();
+      if(el.offsetHeight!==hh)el.style.height=hh+'px';
+      var inst=BL._instances['sec-timeline'];
+      if(inst&&!inst.isDisposed())inst.resize();
+    });
+  }
+
+  var W=chartEl.offsetWidth||700,H=secTimelineHeight();
 
   var allV=[];
   visible.forEach(function(n){series[n].forEach(function(v){allV.push(v);});});
