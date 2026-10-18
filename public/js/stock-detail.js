@@ -367,25 +367,41 @@ function sdDrawFinCharts(d) {
 var sdFcMode = 'annual';
 
 function sdTabFundachart(d) {
-  var hasFH = d.fund_history && d.fund_history.length >= 2;
-  var hasDV = d.daily_valuation && d.daily_valuation.length >= 5;
-  if (!hasFH && !hasDV) return '<div style="padding:20px;color:var(--t3)">Not enough data for fundachart</div>';
+  var ann = d.annual_series || [];
+  var q = d.quarterly || [];
+  var hasA = ann.length >= 2, hasQ = q.length >= 4;
+  if (!hasA && !hasQ) return '<div style="padding:20px;color:var(--t3)">Not enough data for fundachart</div>';
+  if (!hasA) sdFcMode = 'quarterly';
+
+  function card(id, title, sub, h) {
+    return '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">' + title +
+      ' <span style="font-weight:400;color:var(--t3)">(' + sub + ')</span></div>' +
+      '<div id="' + id + '" style="width:100%;height:' + h + 'px"></div></div>';
+  }
+
+  var mode = sdFcMode === 'annual' ? 'Annual' : 'Quarterly';
   var h = '';
-  if (hasFH) {
-    h += '<div style="display:flex;gap:4px;margin-bottom:10px">';
-    h += '<button onclick="sdFcToggle(\'annual\')" style="padding:5px 16px;font-size:11px;font-weight:' + (sdFcMode==='annual'?'700':'400') + ';color:' + (sdFcMode==='annual'?'#fff':'var(--t3)') + ';background:' + (sdFcMode==='annual'?'var(--am)':'var(--bg1)') + ';border:1px solid ' + (sdFcMode==='annual'?'var(--am)':'var(--b1)') + ';border-radius:4px;cursor:pointer">Annual</button>';
-    h += '<button onclick="sdFcToggle(\'quarterly\')" style="padding:5px 16px;font-size:11px;font-weight:' + (sdFcMode==='quarterly'?'700':'400') + ';color:' + (sdFcMode==='quarterly'?'#fff':'var(--t3)') + ';background:' + (sdFcMode==='quarterly'?'var(--am)':'var(--bg1)') + ';border:1px solid ' + (sdFcMode==='quarterly'?'var(--am)':'var(--b1)') + ';border-radius:4px;cursor:pointer">Quarterly</button>';
-    h += '</div>';
+  h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:10px">';
+  if (hasA) {
+    h += '<button onclick="sdFcToggle(\'annual\')" style="padding:5px 16px;font-size:11px;font-weight:' + (sdFcMode === 'annual' ? '700' : '400') + ';color:' + (sdFcMode === 'annual' ? '#fff' : 'var(--t3)') + ';background:' + (sdFcMode === 'annual' ? 'var(--am)' : 'var(--bg1)') + ';border:1px solid ' + (sdFcMode === 'annual' ? 'var(--am)' : 'var(--b1)') + ';border-radius:4px;cursor:pointer">Annual</button>';
   }
+  if (hasQ) {
+    h += '<button onclick="sdFcToggle(\'quarterly\')" style="padding:5px 16px;font-size:11px;font-weight:' + (sdFcMode === 'quarterly' ? '700' : '400') + ';color:' + (sdFcMode === 'quarterly' ? '#fff' : 'var(--t3)') + ';background:' + (sdFcMode === 'quarterly' ? 'var(--am)' : 'var(--bg1)') + ';border:1px solid ' + (sdFcMode === 'quarterly' ? 'var(--am)' : 'var(--b1)') + ';border-radius:4px;cursor:pointer">Quarterly</button>';
+  }
+  h += '<span style="margin-left:auto;font-size:9px;color:var(--t3);font-family:var(--fm)">' +
+    (sdFcMode === 'annual' ? ann.length + ' tahun' : q.length + ' kuartal') + ' · sumber financial_ratios</span>';
+  h += '</div>';
+
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-  if (hasFH) {
-    var ml = sdFcMode==='annual'?'Annual':'Quarterly';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">REVENUE & PROFIT <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-revprofit" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">EPS & ROE <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-epsroe" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BALANCE SHEET <span style="font-weight:400;color:var(--t3)">(' + ml + ')</span></div><div id="sd-fc-bs" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
-  }
-  if (hasDV) {
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px"><div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">LIVE PER · PBV · PRICE <span style="font-weight:400;color:var(--t3)">(Daily)</span></div><div id="sd-fc-val" style="width:100%;height:' + sdChartHeight(320, 0.35, 420) + 'px"></div></div>';
+  h += card('sd-fc-rp', 'REVENUE &amp; PROFIT + NPM', mode, sdChartHeight(300, 0.34, 400));
+  h += card('sd-fc-er', 'EPS &amp; ROE', mode, sdChartHeight(300, 0.34, 400));
+  h += card('sd-fc-mg', 'MARGIN TREND', mode, sdChartHeight(280, 0.32, 380));
+  h += card('sd-fc-gr', 'PERTUMBUHAN YoY', mode, sdChartHeight(280, 0.32, 380));
+  h += card('sd-fc-bs', 'NERACA &amp; DER', mode, sdChartHeight(300, 0.34, 400));
+  if (sdFcMode === 'annual') h += card('sd-fc-dps', 'DIVIDEN PER SAHAM', 'tahunan', sdChartHeight(300, 0.34, 400));
+  if (d.daily_valuation && d.daily_valuation.length >= 5) {
+    h += card('sd-fc-val', 'LIVE PER · PBV · PRICE', 'harian', sdChartHeight(300, 0.34, 400));
   }
   h += '</div>';
   return h;
@@ -393,142 +409,118 @@ function sdTabFundachart(d) {
 
 function sdFcToggle(mode) { sdFcMode = mode; sdRenderTab('fundachart'); }
 
-function sdPrepareFundaData(d) {
-  var fh = d.fund_history || [];
-  if (fh.length < 1) return { labels: [], data: [] };
-  if (sdFcMode === 'annual') {
-    var fy = fh.filter(function(r) { return r.quarter_label === 'FY'; });
-    if (fy.length < 1) fy = fh.filter(function(r) { return r.quarter_label === 'Q3'; });
-    return { labels: fy.map(function(r) { return r.period_label; }), data: fy };
-  }
-  // Quarterly delta
-  var result = [];
-  var qOrder = ['Q1','Q2','Q3','FY'];
-  for (var i = 0; i < fh.length; i++) {
-    var cur = fh[i], ql = cur.quarter_label, qIdx = qOrder.indexOf(ql);
-    if (qIdx === 0) {
-      result.push({ period_label: cur.period_label, sales: cur.sales||0, profit: cur.profit||0, eps_trailing: cur.eps_trailing||0, roe: cur.roe||0, equity: cur.equity||0, liabilities: cur.liabilities||0, assets: cur.assets||0 });
-    } else {
-      var prev = null;
-      for (var j = i-1; j >= 0; j--) { if (qOrder.indexOf(fh[j].quarter_label) === qIdx-1) { prev = fh[j]; break; } }
-      result.push({
-        period_label: cur.period_label.replace('FY','Q4'),
-        sales: prev ? (cur.sales||0)-(prev.sales||0) : (cur.sales||0),
-        profit: prev ? (cur.profit||0)-(prev.profit||0) : (cur.profit||0),
-        eps_trailing: prev ? (cur.eps_trailing||0)-(prev.eps_trailing||0) : (cur.eps_trailing||0),
-        roe: cur.roe||0, equity: cur.equity||0, liabilities: cur.liabilities||0, assets: cur.assets||0
-      });
-    }
-  }
-  return { labels: result.map(function(r) { return r.period_label; }), data: result };
-}
-
 function sdDrawFundaCharts(d) {
-  var p = sdPrepareFundaData(d), labels = p.labels, fd = p.data;
-  // Helper: format billions/millions for tooltip
-  function fmtB(v) {
-    if (v == null || isNaN(v)) return '—';
-    v = Math.round(v * 100) / 100;
-    if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + ' T';
-    if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(2) + ' B';
-    return v.toFixed(2) + ' M';
-  }
-  function fmtAxis(v) {
-    if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'T';
-    if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(2) + 'B';
-    return v.toFixed(2);
-  }
-  function ttFmt(params) {
-    if (!params || !params.length) return '';
-    var h = '<div style="font-size:10px;font-weight:700;margin-bottom:3px">' + params[0].axisValue + '</div>';
-    params.forEach(function(p) {
-      if (p.value == null) return;
-      var v = typeof p.value === 'number' ? (Math.abs(p.value) >= 100 ? fmtB(p.value) : (Math.round(p.value*100)/100).toLocaleString()) : p.value;
-      h += '<div style="font-size:10px"><span style="color:' + p.color + '">●</span> ' + p.seriesName + ': <b>' + v + '</b></div>';
+  var ann = d.annual_series || [], q = d.quarterly || [];
+  var rows = (sdFcMode === 'annual' && ann.length) ? ann : q;
+  if (!rows.length) return;
+  var labels = rows.map(function (r) { return r.label || r.year || r.period; });
+  var axisX = { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: labels.length > 8 ? 30 : 0 }, axisLine: { lineStyle: { color: '#1e2836' } } };
+  var axisY = function (fmt) { return { type: 'value', axisLabel: { fontSize: 8, formatter: fmt }, splitLine: { lineStyle: { color: '#141c27' } } }; };
+  var fmtRpAx = function (v) { return BL.fmtRp(v * 1e9); };   // nilai dalam miliar
+  var grid = { left: 52, right: 42, top: 22, bottom: 24 };
+  var leg = { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 };
+
+  var el1 = document.getElementById('sd-fc-rp');
+  if (el1) {
+    var c1 = BL.init(el1, 'sd-fc-rp'); if (c1) c1.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
+      yAxis: [axisY(fmtRpAx), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
+      series: [
+        { name: 'Revenue', type: 'bar', data: rows.map(function (r) { return r.sales; }), itemStyle: { color: 'rgba(59,130,246,0.75)' }, barMaxWidth: 26 },
+        { name: 'Profit', type: 'bar', data: rows.map(function (r) { return r.profit; }), itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 26 },
+        { name: 'NPM', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.npm; }), symbolSize: 4, lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
+      ]
     });
-    return h;
   }
 
-  if (fd.length >= 1) {
-    var el1 = $('sd-fc-revprofit');
-    if (el1) { var c1 = BL.init(el1, 'sd-fc-rp'); if (c1) c1.setOption({
-      tooltip: { trigger: 'axis', textStyle: { fontSize: 10 }, formatter: ttFmt },
-      legend: { top: 0, textStyle: { fontSize: 9 } },
-      grid: { left: 55, right: 10, top: 28, bottom: 28 },
-      xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: labels.length > 6 ? 30 : 0 } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: fmtAxis }, splitLine: { lineStyle: { color: '#1e2836' } } },
+  var el2 = document.getElementById('sd-fc-er');
+  if (el2) {
+    var c2 = BL.init(el2, 'sd-fc-er'); if (c2) c2.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
+      yAxis: [axisY('{value}'), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
       series: [
-        { name: 'Revenue', type: 'bar', data: fd.map(function(r){return Math.round(r.sales*100)/100;}), itemStyle: { color: 'rgba(84,112,198,0.7)' }, barMaxWidth: 28 },
-        { name: 'Net Profit', type: 'bar', data: fd.map(function(r){return Math.round(r.profit*100)/100;}), itemStyle: { color: function(p){return (p.value||0)>=0?'rgba(34,197,94,0.7)':'rgba(239,68,68,0.7)';} }, barMaxWidth: 28 }
+        { name: 'EPS', type: 'bar', data: rows.map(function (r) { return r.eps; }), itemStyle: { color: 'rgba(14,165,233,0.75)' }, barMaxWidth: 26 },
+        { name: 'ROE', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.roe; }), symbolSize: 4, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } }
       ]
-    }, true); }
-
-    var el2 = $('sd-fc-epsroe');
-    if (el2) { var c2 = BL.init(el2, 'sd-fc-er'); if (c2) c2.setOption({
-      tooltip: { trigger: 'axis', textStyle: { fontSize: 10 }, formatter: ttFmt },
-      legend: { top: 0, textStyle: { fontSize: 9 } },
-      grid: { left: 50, right: 45, top: 28, bottom: 28 },
-      xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: labels.length > 6 ? 30 : 0 } },
-      yAxis: [
-        { type: 'value', name: 'EPS', nameTextStyle: { fontSize: 8 }, axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#1e2836' } } },
-        { type: 'value', name: 'ROE %', nameTextStyle: { fontSize: 8 }, axisLabel: { fontSize: 8 }, splitLine: { show: false } }
-      ],
-      series: [
-        { name: 'EPS', type: 'bar', data: fd.map(function(r){return Math.round(r.eps_trailing*100)/100;}), itemStyle: { color: function(p){return (p.value||0)>=0?'rgba(14,165,233,0.7)':'rgba(239,68,68,0.7)';} }, barMaxWidth: 28 },
-        { name: 'ROE', type: 'line', yAxisIndex: 1, data: fd.map(function(r){return Math.round(r.roe*100)/100;}), symbol: 'circle', symbolSize: 5, lineStyle: { color: '#22c55e', width: 2 }, itemStyle: { color: '#22c55e' } }
-      ]
-    }, true); }
-
-    var el3 = $('sd-fc-bs');
-    if (el3) { var c3 = BL.init(el3, 'sd-fc-bs'); if (c3) c3.setOption({
-      tooltip: { trigger: 'axis', textStyle: { fontSize: 10 }, formatter: ttFmt },
-      legend: { top: 0, textStyle: { fontSize: 9 } },
-      grid: { left: 55, right: 10, top: 28, bottom: 28 },
-      xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: labels.length > 6 ? 30 : 0 } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: fmtAxis }, splitLine: { lineStyle: { color: '#1e2836' } } },
-      series: [
-        { name: 'Equity', type: 'bar', stack: 'bs', data: fd.map(function(r){return Math.round(r.equity*100)/100;}), itemStyle: { color: 'rgba(34,197,94,0.7)' }, barMaxWidth: 28 },
-        { name: 'Liabilities', type: 'bar', stack: 'bs', data: fd.map(function(r){return Math.round(r.liabilities*100)/100;}), itemStyle: { color: 'rgba(239,68,68,0.5)' }, barMaxWidth: 28 }
-      ]
-    }, true); }
+    });
   }
 
-  // Daily Live Valuation — 3 Y-axes: PER (left), PBV (left-inner), Price (right)
+  // Margins: NPM / ROA / ROE
+  var el3 = document.getElementById('sd-fc-mg');
+  if (el3) {
+    var c3 = BL.init(el3, 'sd-fc-mg'); if (c3) c3.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
+      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } }],
+      series: [
+        { name: 'NPM', type: 'line', data: rows.map(function (r) { return r.npm; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } },
+        { name: 'ROA', type: 'line', data: rows.map(function (r) { return r.roa; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#38bdf8' }, itemStyle: { color: '#38bdf8' } },
+        { name: 'ROE', type: 'line', data: rows.map(function (r) { return r.roe; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } }
+      ]
+    });
+  }
+
+  // Growth YoY
+  var step = sdFcMode === 'annual' ? 1 : 4;
+  var gSales = [], gProfit = [];
+  rows.forEach(function (r, i) {
+    var b = rows[i - step];
+    var f = function (k) { return (b && r[k] != null && b[k]) ? Math.round((r[k] - b[k]) / Math.abs(b[k]) * 10000) / 100 : null; };
+    gSales.push(f('sales')); gProfit.push(f('profit'));
+  });
+  var el4 = document.getElementById('sd-fc-gr');
+  if (el4) {
+    var c4 = BL.init(el4, 'sd-fc-gr'); if (c4) c4.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
+      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } }],
+      series: [
+        { name: 'Revenue YoY', type: 'bar', data: gSales, itemStyle: { color: 'rgba(59,130,246,0.75)' }, barMaxWidth: 22 },
+        { name: 'Profit YoY', type: 'bar', data: gProfit, itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 22 }
+      ]
+    });
+  }
+
+  // Balance sheet + DER
+  var el5 = document.getElementById('sd-fc-bs');
+  if (el5) {
+    var c5 = BL.init(el5, 'sd-fc-bs'); if (c5) c5.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
+      yAxis: [axisY(fmtRpAx), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}x' }, splitLine: { show: false } }],
+      series: [
+        { name: 'Assets', type: 'line', data: rows.map(function (r) { return r.assets; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
+        { name: 'Equity', type: 'line', data: rows.map(function (r) { return r.equity; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
+        { name: 'Liabilities', type: 'line', data: rows.map(function (r) { return r.liabilities; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' } },
+        { name: 'DER', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.der; }), symbolSize: 3, lineStyle: { width: 1, type: 'dashed', color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
+      ]
+    });
+  }
+
+  // DPS per tahun
+  var el6 = document.getElementById('sd-fc-dps');
+  if (el6 && d.dps_by_year && d.dps_by_year.length) {
+    var c6 = BL.init(el6, 'sd-fc-dps'); if (c6) c6.setOption({
+      grid: grid, tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: d.dps_by_year.map(function (x) { return x.year; }), axisLabel: { fontSize: 9 }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: axisY('{value}'),
+      series: [{ name: 'DPS', type: 'bar', data: d.dps_by_year.map(function (x) { return x.dps; }), itemStyle: { color: 'rgba(245,158,11,0.8)' }, barMaxWidth: 30 }]
+    });
+  }
+
+  // Live valuation
   var dv = d.daily_valuation || [];
-  if (dv.length >= 5) {
-    var el4 = $('sd-fc-val');
-    if (el4) { var c4 = BL.init(el4, 'sd-fc-val'); if (c4) c4.setOption({
-      tooltip: { trigger: 'axis', textStyle: { fontSize: 10 }, formatter: function(params) {
-        if (!params || !params.length) return '';
-        var h = '<div style="font-size:10px;color:#888;margin-bottom:3px">' + params[0].axisValue + '</div>';
-        params.forEach(function(p) {
-          if (p.value == null) return;
-          var v = p.seriesName === 'Price' ? p.value.toLocaleString() : (Math.round(p.value*100)/100).toFixed(2);
-          h += '<div style="font-size:10px"><span style="color:' + p.color + '">●</span> ' + p.seriesName + ': <b>' + v + (p.seriesName === 'Live PER' ? 'x' : p.seriesName === 'Live PBV' ? 'x' : '') + '</b></div>';
-        });
-        return h;
-      }},
-      legend: { top: 0, textStyle: { fontSize: 9 } },
-      grid: { left: 45, right: 55, top: 28, bottom: 28 },
-      xAxis: { type: 'category', data: dv.map(function(r){return r.date;}), axisLabel: { fontSize: 8, formatter: function(v){return v.substring(5);} } },
-      yAxis: [
-        { type: 'value', name: 'PER', nameTextStyle: { fontSize: 8, color: '#ff9800' }, scale: true, axisLabel: { fontSize: 8, color: '#ff9800' }, splitLine: { lineStyle: { color: '#1e2836' } } },
-        { type: 'value', name: 'Price', nameTextStyle: { fontSize: 8, color: 'rgba(255,255,255,0.4)' }, scale: true, position: 'right', axisLabel: { fontSize: 8, color: 'rgba(255,255,255,0.4)' }, splitLine: { show: false } },
-        { type: 'value', name: 'PBV', nameTextStyle: { fontSize: 8, color: '#a855f7' }, scale: true, position: 'right', offset: 40, axisLabel: { fontSize: 8, color: '#a855f7' }, splitLine: { show: false } }
-      ],
-      dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+  var el7 = document.getElementById('sd-fc-val');
+  if (el7 && dv.length >= 5) {
+    var c7 = BL.init(el7, 'sd-fc-val'); if (c7) c7.setOption({
+      grid: grid, tooltip: { trigger: 'axis' }, legend: leg,
+      xAxis: { type: 'category', data: dv.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(dv.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: [axisY('{value}'), { type: 'value', axisLabel: { fontSize: 8, formatter: BL.fmtRp }, splitLine: { show: false } }],
       series: [
-        { name: 'Live PER', type: 'line', yAxisIndex: 0, data: dv.map(function(r){return r.live_per;}), symbol: 'none', lineStyle: { color: '#ff9800', width: 2 }, itemStyle: { color: '#ff9800' }, connectNulls: true },
-        { name: 'Live PBV', type: 'line', yAxisIndex: 2, data: dv.map(function(r){return r.live_pbv;}), symbol: 'none', lineStyle: { color: '#a855f7', width: 1.5 }, itemStyle: { color: '#a855f7' }, connectNulls: true },
-        { name: 'Price', type: 'line', yAxisIndex: 1, data: dv.map(function(r){return r.close;}), symbol: 'none', lineStyle: { color: 'rgba(255,255,255,0.4)', width: 1.5, type: 'dashed' }, itemStyle: { color: 'rgba(255,255,255,0.4)' } }
+        { name: 'PER', type: 'line', data: dv.map(function (r) { return r.live_per; }), symbol: 'none', lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
+        { name: 'PBV', type: 'line', data: dv.map(function (r) { return r.live_pbv; }), symbol: 'none', lineStyle: { width: 1.5, color: '#a855f7' }, itemStyle: { color: '#a855f7' } }
       ]
-    }, true); }
+    });
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// TAB: ANALYSIS
-// ═══════════════════════════════════════════════════════════════
 function sdTabAnalysis(d) {
   var h = '';
   var vd = d.verdict || {}, phase = d.phase, stg = d.stage || {};

@@ -4499,6 +4499,7 @@ module.exports = function(upload) {
       } catch (e) {}
 
       let quarterlySeries = [];
+      let annualSeries = [];
       let valuationBand = [];
       let peerMedian = null;
       try {
@@ -4524,14 +4525,31 @@ module.exports = function(upload) {
             quarterlySeries.push({
               period: r.period, label: y.slice(2) + ' ' + qname(r.m),
               sales: qS > 0 ? qS : null, profit: qP, ebt: qE,
+              assets: r.assets, equity: r.equity, liabilities: r.liabilities,
               sales_ytd: r.sales, profit_ytd: r.profit,
-              eps: r.eps, roe: r.roe, der: r.der,
+              eps: r.eps, roe: r.roe, roa: r.roa, der: r.der,
               npm: qS > 0 ? Math.round(qP / qS * 10000) / 100 : null
             });
             prevS = r.sales || 0; prevP = r.profit || 0; prevE = r.ebt || 0;
           });
         });
+        // Seri TAHUNAN = jumlah kuartalan (bukan baris FY, yang basisnya campur)
+        const qAll = quarterlySeries.slice();
         quarterlySeries = quarterlySeries.slice(-12);
+        const byYr = {};
+        qAll.forEach(x => { const y = x.period.slice(0, 4); (byYr[y] = byYr[y] || []).push(x); });
+        annualSeries = Object.keys(byYr).sort().slice(-6).map(y => {
+          const rows = byYr[y];
+          const lastR = rows[rows.length - 1];
+          return {
+            year: y, label: y,
+            sales: Math.round(rows.reduce((a, r) => a + (r.sales || 0), 0) * 100) / 100,
+            profit: Math.round(rows.reduce((a, r) => a + (r.profit || 0), 0) * 100) / 100,
+            eps: lastR.eps, roe: lastR.roe,
+            assets: lastR.assets, equity: lastR.equity, liabilities: lastR.liabilities,
+            quarters: rows.length
+          };
+        });
       } catch (e) {}
 
       try {
@@ -4599,6 +4617,17 @@ module.exports = function(upload) {
         fund_growth: fundGrowth,
         fund_history: fundHistory,
         quarterly: quarterlySeries,
+        annual_series: annualSeries,
+        dps_by_year: (function () {
+          const m = {};
+          (dividendHistory || []).forEach(x => {
+            if (x.dps > 0 && x.cum_date) {
+              const y = String(x.cum_date).slice(0, 4);
+              m[y] = Math.round(((m[y] || 0) + x.dps) * 100) / 100;
+            }
+          });
+          return Object.keys(m).sort().map(y => ({ year: y, dps: m[y] }));
+        })(),
         ttm_profit: ttmProfit,
         valuation_band: valuationBand,
         peers: peerMedian,
