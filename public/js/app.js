@@ -108,7 +108,7 @@ async function loadMktOverview(){
 
     (d.sections||[]).forEach(function(sec){
       h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
-      h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span><span class="mkt-pct">1Y</span></div>';
+      h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span></div>';
       (sec.items||[]).forEach(function(i){
         h+='<div class="mkt-item">'
           +'<span class="mkt-label">'+esc(i.label)+'</span>'
@@ -117,11 +117,9 @@ async function loadMktOverview(){
           +'<span class="mkt-chg '+cls(i.chg_1d)+'">'+pc(i.chg_1d)+'</span>'
           +'<span class="mkt-sm '+cls(i.chg_5d)+'">'+pc(i.chg_5d)+'</span>'
           +'<span class="mkt-sm '+cls(i.chg_20d)+'">'+pc(i.chg_20d)+'</span>'
-          +'<span class="mkt-pct">'+(i.pctl!=null?'p'+i.pctl:'—')+'</span>'
           +'</div>';
       });
     });
-    h+='<div class="mkt-foot">1Y = persentil posisi harga dalam 1 tahun (p96 = mendekati tertinggi). "—" = histori belum cukup.</div>';
     mktCache._ov={html:h,ts:Date.now()};
     el.innerHTML=h;
   }catch(e){el.innerHTML='<div class="ne">Failed to load: '+esc(e.message)+'</div>';}
