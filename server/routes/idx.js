@@ -888,6 +888,91 @@ module.exports = function(upload) {
     } catch (e) { res.json({ total_gaps: 0, error: e.message }); }
   });
 
+  // ═══ KSEI BULANAN — kepemilikan efek (Balancepos) + master (StatisEfek) ═══
+  // Sumber: web.ksei.co.id/archive_download (gratis, bulanan, tanpa login).
+  // Catatan: header Balancepos punya DUA kolom "Total" (lokal & asing) ->
+  // parser WAJIB positional; berbasis nama akan menimpa yang pertama.
+  const KSEI_TYPES = ['IS','CP','PF','IB','ID','MF','SC','FD','OT'];
+
+  router.get('/ksei/status', (req, res) => {
+    try {
+      const bp = db.prepare('SELECT COUNT(*) n, MAX(snapshot_date) d, COUNT(DISTINCT code) c FROM balance_position').get();
+      const hd = db.prepare('SELECT COUNT(*) n, MAX(snapshot_date) d FROM holdings').get();
+      res.json({ balance_position: bp, holdings: hd });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/ksei/import', (req, res) => {
+    try {
+      const snap = String(req.body.snapshot_date || '').slice(0, 10);
+      const bal = Array.isArray(req.body.balance) ? req.body.balance : [];
+      const master = Array.isArray(req.body.master) ? req.body.master : [];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(snap)) return res.status(400).json({ error: 'snapshot_date YYYY-MM-DD wajib' });
+      if (!bal.length) return res.status(400).json({ error: 'balance kosong' });
+      if (req.body.force !== true) {
+        const ex = db.prepare('SELECT COUNT(*) n FROM balance_position WHERE snapshot_date=?').get(snap);
+        if (ex.n > 0) return res.json({ ok: true, skipped: true, reason: 'snapshot sudah ada', snapshot_date: snap, rows: ex.n });
+      }
+
+      const delB = db.prepare('DELETE FROM balance_position WHERE snapshot_date=?');
+      const insB = db.prepare(`INSERT INTO balance_position(
+        snapshot_date,code,sec_num,price,
+        local_is,local_cp,local_pf,local_ib,local_id,local_mf,local_sc,local_fd,local_ot,local_total,
+        foreign_is,foreign_cp,foreign_pf,foreign_ib,foreign_id,foreign_mf,foreign_sc,foreign_fd,foreign_ot,foreign_total
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      const delH = db.prepare('DELETE FROM holdings WHERE snapshot_date=?');
+      const insH = db.prepare(`INSERT INTO holdings(
+        snapshot_date,code,issuer,investor,investor_norm,type,lf,nationality,domicile,holdings,pct
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+      const insI = db.prepare(`INSERT OR REPLACE INTO issued_history(code,issue_date,type,shares,total_shares)
+                               VALUES (?,?,?,?,?)`);
+      const mByCode = {};
+      for (const m of master) mByCode[String(m.code || '').toUpperCase()] = m;
+
+      let nB = 0, nH = 0, nI = 0;
+      const tx = db.transaction(() => {
+        delB.run(snap); delH.run(snap);
+        for (const r of bal) {
+          const code = String(r.code || '').toUpperCase();
+          if (!code) continue;
+          const L = Array.isArray(r.local) ? r.local : [];
+          const F = Array.isArray(r.foreign) ? r.foreign : [];
+          if (L.length !== 9 || F.length !== 9) continue;
+          const lt = r.local_total != null ? r.local_total : L.reduce((a, b) => a + (b || 0), 0);
+          const ft = r.foreign_total != null ? r.foreign_total : F.reduce((a, b) => a + (b || 0), 0);
+          insB.run(snap, code, r.sec_num || 0, r.price || 0,
+            ...L.map(v => v || 0), lt, ...F.map(v => v || 0), ft);
+          nB++;
+          const issuer = (mByCode[code] && mByCode[code].issuer) || '';
+          // pct = pangsa terhadap saham yang TERCATAT di KSEI (scripless),
+          // bukan listed_shares: banyak emiten lama baru sebagian scripless
+          // (ADCP 10%, AALI 20%), sehingga basis sec_num menyesatkan.
+          const base = (lt + ft) || r.sec_num || 0;
+          for (let i = 0; i < 9; i++) {
+            for (const [vals, lf, nat] of [[L, 'L', 'LOCAL'], [F, 'F', 'FOREIGN']]) {
+              const v = vals[i] || 0;
+              if (!v) continue;
+              // investor harus unik per (code, tipe, nasionalitas) -> beri prefiks LOKAL/ASING
+              const invName = (lf === 'L' ? 'LOCAL ' : 'FOREIGN ') + KSEI_TYPES[i];
+              insH.run(snap, code, issuer, invName, KSEI_TYPES[i], 'EQUITY', lf, nat, '', v,
+                base > 0 ? Math.round(v / base * 1000000) / 10000 : 0);
+              nH++;
+            }
+          }
+        }
+        for (const m of master) {
+          const code = String(m.code || '').toUpperCase();
+          if (!code || !m.shares) continue;
+          const dt = m.listing_date || snap;
+          insI.run(code, dt, 'LISTED', m.shares, m.shares);
+          nI++;
+        }
+      });
+      tx();
+      res.json({ ok: true, snapshot_date: snap, balance_rows: nB, holdings_rows: nH, issued_rows: nI });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ═══ SECTORAL MOVEMENT — return harian sektor, dihitung dari idx_daily ═══
   // Sumber lama (sectoral_movement) berhenti 2026-09-30 DAN menyimpan change_pct
   // kumulatif; kode lama lalu menghitung persen-dari-persen -> angka tak bermakna.

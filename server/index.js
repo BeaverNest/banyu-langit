@@ -39,7 +39,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));   // impor KSEI bulanan ~0,5 MB/payload
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/uploads', express.static(uploadDir));
 
