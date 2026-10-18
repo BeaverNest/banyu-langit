@@ -840,60 +840,15 @@ function renderSetCustom(c) {
   // ── Status & auto-refresh (menggantikan update manual per-ticker) ──
   h += '<div style="border:1px solid var(--b1);border-radius:6px;padding:12px 14px;margin-bottom:14px;background:var(--bgH)">';
   h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-  h += '<div style="font-size:12px;color:var(--t2)"><b>🔄 Auto-refresh harian</b> — dijalankan pipeline pasar ≈19:05 WIB, tidak perlu update manual.</div>';
+  h += '<div style="font-size:12px;color:var(--t2)"><b>🔄 Auto-refresh harian</b> — Yahoo via pipeline ≈19:05 WIB, komoditas TE via cron 19:15 WIB. Tidak perlu update manual.</div>';
   h += '<button id="ct-refresh-btn" style="margin-left:auto;padding:6px 14px;background:var(--or);color:#000;border:none;border-radius:4px;font-weight:700;cursor:pointer" onclick="ctRefreshAll(this)">🔄 Refresh sekarang</button>';
   h += '</div>';
   h += '<div id="ct-status" style="margin-top:8px;font-size:11px;color:var(--t3);font-family:var(--fm)">memuat status…</div>';
   h += '</div>';
 
-  // ── Upload section ──
-  h += '<div style="border:1px solid var(--b1);border-radius:6px;padding:14px;margin-bottom:14px;background:var(--bgH)">';
-  h += '<div style="font-weight:700;margin-bottom:10px;color:var(--t1);font-size:14px">Add / Update Ticker</div>';
-
-  // Row 1: Code + Name + Category + Linked Sector
-  h += '<div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr;gap:8px;margin-bottom:10px">';
-  h += '<div><div style="font-size:10px;color:var(--t3);margin-bottom:2px">Code *</div><input id="ct-code" placeholder="EIDO" style="width:100%;background:var(--bg0);border:1px solid var(--b2);padding:5px 8px;color:var(--bl);font-weight:700;text-transform:uppercase;border-radius:3px;font-family:var(--fm);font-size:12px"></div>';
-  h += '<div><div style="font-size:10px;color:var(--t3);margin-bottom:2px">Name</div><input id="ct-name" placeholder="iShares MSCI Indonesia" style="width:100%;background:var(--bg0);border:1px solid var(--b2);padding:5px 8px;color:var(--t1);border-radius:3px;font-family:var(--f);font-size:12px"></div>';
-  h += '<div><div style="font-size:10px;color:var(--t3);margin-bottom:2px">Category</div><select id="ct-cat" style="width:100%;background:var(--bg0);border:1px solid var(--b2);padding:5px 8px;color:var(--t1);border-radius:3px;font-family:var(--f);font-size:11px">';
-  CT_CATEGORIES.forEach(function(cat) { h += '<option value="' + cat.v + '"' + (cat.v === 'custom' ? ' selected' : '') + '>' + cat.l + '</option>'; });
-  h += '</select></div>';
-  h += '<div><div style="font-size:10px;color:var(--t3);margin-bottom:2px">Linked Sector</div><select id="ct-sector" style="width:100%;background:var(--bg0);border:1px solid var(--b2);padding:5px 8px;color:var(--t1);border-radius:3px;font-family:var(--f);font-size:11px"><option value="">(none)</option></select></div>';
-  h += '</div>';
-
-  // Row 2: CSV file
-  h += '<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">';
-  h += '<div style="font-size:10px;color:var(--t3);min-width:60px">CSV File *</div>';
-  h += '<input type="file" id="ct-file" accept=".csv,.txt,.tsv" style="font-size:12px;color:var(--t2)">';
-  h += '</div>';
-
-  // ── Column Mapper (hidden until file selected) ──
-  h += '<div id="ct-mapper" style="display:none;border:1px solid var(--b2);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg0)">';
-  h += '<div style="font-size:12px;font-weight:700;color:var(--t1);margin-bottom:8px">Define Fields</div>';
-
-  // Settings row: separator + skip lines
-  h += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap">';
-  h += '<label style="font-size:11px;color:var(--t2)">Separator: <select id="ct-sep" onchange="ctReParse()" style="background:var(--bg0);border:1px solid var(--b2);padding:3px 6px;color:var(--t1);border-radius:3px;font-family:var(--fm);font-size:11px"><option value=",">,  (comma)</option><option value=";">; (semicolon)</option><option value="\\t">Tab</option><option value="|">| (pipe)</option></select></label>';
-  h += '<label style="font-size:11px;color:var(--t2)">Skip first <input type="number" id="ct-skip" value="0" min="0" max="20" onchange="ctReParse()" style="width:40px;background:var(--bg0);border:1px solid var(--b2);padding:3px;color:var(--t1);border-radius:3px;font-family:var(--fm);font-size:11px;text-align:center"> lines</label>';
-  h += '<button class="bei-sort-btn" onclick="ctAutoDetect()" style="padding:3px 10px;font-size:10px">🔍 Auto-detect</button>';
-  h += '</div>';
-
-  // Column dropdowns (dynamic)
-  h += '<div id="ct-col-selectors" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px"></div>';
-
-  // Data sample preview
-  h += '<div id="ct-sample" style="max-height:200px;overflow:auto;font-size:11px;font-family:var(--fm)"></div>';
-
-  h += '</div>'; // end mapper
-
-  // Upload button + result
-  h += '<div style="display:flex;gap:8px;align-items:center">';
-  h += '<button id="ct-upload-btn" class="s-upload-btn" style="padding:7px 20px;background:var(--gn);color:#000;border-color:var(--gn);font-weight:700;font-size:12px" onclick="ctUpload()">📤 Import CSV</button>';
-  h += '<span id="ct-result" style="font-size:12px;color:var(--t2)"></span>';
-  h += '</div>';
-  h += '</div>';
-
-  // ── Existing tickers table ──
-  h += '<div style="font-weight:700;margin-bottom:6px;color:var(--t1);font-size:13px">Your Custom Tickers</div>';
+  // ── Tabel ticker aktif ──
+  h += '<div style="font-weight:700;margin-bottom:6px;color:var(--t1);font-size:13px">Ticker aktif</div>';
+  h += '<div style="font-size:11px;color:var(--t3);margin-bottom:6px">Menambah atau mengubah ticker dilakukan lewat agent (Eko) — input CSV manual sudah dihapus.</div>';
   h += '<div id="ct-table" style="font-size:12px"><span style="color:var(--t3)">Loading...</span></div>';
 
   c.innerHTML = h;
@@ -904,153 +859,8 @@ function renderSetCustom(c) {
     if (sel && d.sectors) d.sectors.forEach(function(s) { sel.innerHTML += '<option value="' + esc(s) + '">' + esc(s) + '</option>'; });
   }).catch(function() {});
 
-  // File change → parse & show mapper
-  document.getElementById('ct-file').addEventListener('change', function(e) {
-    var file = e.target.files[0];
-    if (!file) return;
-    // Auto-suggest code
-    var codeInput = document.getElementById('ct-code');
-    if (!codeInput.value) {
-      var suggested = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, ' ').trim().split(/\s+/)[0].toUpperCase();
-      if (suggested && suggested.length <= 15) codeInput.value = suggested;
-    }
-    var reader = new FileReader();
-    reader.onload = function(ev) {
-      _ctFileData = ev.target.result.split(/\r?\n/).filter(function(l) { return l.trim(); });
-      ctAutoDetectSep();
-      ctBuildMapper();
-      document.getElementById('ct-mapper').style.display = '';
-    };
-    reader.readAsText(file);
-  });
-
   ctLoadTable();
   ctLoadStatus();
-}
-
-// Auto-detect separator from first line (count separators OUTSIDE quotes)
-function ctAutoDetectSep() {
-  if (!_ctFileData || !_ctFileData.length) return;
-  var line = _ctFileData[0];
-  // Count separators outside quotes
-  function countOutsideQuotes(line, sep) {
-    var count = 0, inQ = false;
-    for (var i = 0; i < line.length; i++) {
-      if (line[i] === '"') inQ = !inQ;
-      else if (line[i] === sep && !inQ) count++;
-    }
-    return count;
-  }
-  var counts = { ',': countOutsideQuotes(line, ','), ';': countOutsideQuotes(line, ';'), '\t': countOutsideQuotes(line, '\t'), '|': countOutsideQuotes(line, '|') };
-  var best = ',', max = 0;
-  for (var k in counts) { if (counts[k] > max) { max = counts[k]; best = k; } }
-  _ctSep = best;
-  var sel = document.getElementById('ct-sep');
-  if (sel) sel.value = best === '\t' ? '\\t' : best;
-}
-
-// Parse a single CSV line respecting quotes
-function ctParseLine(line, sep) {
-  var result = [], current = '', inQ = false;
-  for (var i = 0; i < line.length; i++) {
-    var c = line[i];
-    if (c === '"') { inQ = !inQ; continue; }
-    if (c === sep && !inQ) { result.push(current.trim()); current = ''; continue; }
-    current += c;
-  }
-  result.push(current.trim());
-  return result;
-}
-
-// Re-parse when separator or skip changes
-function ctReParse() {
-  var sepSel = document.getElementById('ct-sep');
-  _ctSep = sepSel ? (sepSel.value === '\\t' ? '\t' : sepSel.value) : ',';
-  _ctSkip = parseInt((document.getElementById('ct-skip') || {}).value) || 0;
-  ctBuildMapper();
-}
-
-// Build column mapper + sample preview
-function ctBuildMapper() {
-  if (!_ctFileData || !_ctFileData.length) return;
-  var lines = _ctFileData.slice(_ctSkip);
-  if (!lines.length) return;
-  var firstLine = ctParseLine(lines[0], _ctSep);
-  var numCols = firstLine.length;
-
-  // Auto-detect column roles from header
-  _ctColMap = firstLine.map(function(h) {
-    var hl = h.replace(/"/g, '').trim().toLowerCase();
-    if (/^(date|tanggal|datetime|timestamp|time|period|ymd)$/i.test(hl)) return 'Date';
-    if (/^(open|px_open|harga_buka|pembukaan)$/i.test(hl)) return 'Open';
-    if (/^(high|px_high|tertinggi|max)$/i.test(hl)) return 'High';
-    if (/^(low|px_low|terendah|min)$/i.test(hl)) return 'Low';
-    if (/^(close|px_last|price|adj.close|harga|nilai|value|last|terakhir)$/i.test(hl)) return 'Close';
-    if (/^(vol|volume|vol\.|jumlah)$/i.test(hl)) return 'Volume';
-    if (/^(ticker|symbol|code|kode)$/i.test(hl)) return 'Ticker';
-    return 'Skip';
-  });
-
-  // Build selector dropdowns
-  var selHtml = '';
-  for (var i = 0; i < numCols; i++) {
-    var headerLabel = firstLine[i].replace(/"/g, '').trim().substring(0, 15);
-    selHtml += '<div style="display:flex;flex-direction:column;gap:2px;min-width:80px">';
-    selHtml += '<div style="font-size:9px;color:var(--t3);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(headerLabel) + '">Col ' + (i + 1) + '</div>';
-    selHtml += '<select data-colidx="' + i + '" onchange="_ctColMap[' + i + ']=this.value;ctRenderSample()" style="background:var(--bg0);border:1px solid var(--b2);padding:3px 4px;color:' + (_ctColMap[i] !== 'Skip' ? 'var(--am)' : 'var(--t2)') + ';border-radius:3px;font-family:var(--fm);font-size:10px;font-weight:' + (_ctColMap[i] !== 'Skip' ? '700' : '400') + '">';
-    CT_ROLES.forEach(function(role) {
-      selHtml += '<option value="' + role + '"' + (_ctColMap[i] === role ? ' selected' : '') + '>' + role + '</option>';
-    });
-    selHtml += '</select></div>';
-  }
-  document.getElementById('ct-col-selectors').innerHTML = selHtml;
-  ctRenderSample();
-}
-
-// Render data sample table
-function ctRenderSample() {
-  var el = document.getElementById('ct-sample');
-  if (!el || !_ctFileData) return;
-  var lines = _ctFileData.slice(_ctSkip);
-  var maxRows = Math.min(8, lines.length);
-  var h = '<table style="width:100%;border-collapse:collapse">';
-
-  // Header row with role labels
-  var firstCols = ctParseLine(lines[0], _ctSep);
-  h += '<tr>';
-  for (var c = 0; c < firstCols.length; c++) {
-    var role = _ctColMap[c] || 'Skip';
-    var bg = role !== 'Skip' ? 'rgba(255,152,0,0.15)' : 'transparent';
-    var color = role !== 'Skip' ? 'var(--am)' : 'var(--t3)';
-    h += '<th style="padding:3px 6px;text-align:left;border-bottom:2px solid var(--b2);background:' + bg + ';color:' + color + ';font-size:10px;font-weight:700">' + role + '</th>';
-  }
-  h += '</tr>';
-
-  // Data rows
-  for (var i = 0; i < maxRows; i++) {
-    var cols = ctParseLine(lines[i], _ctSep);
-    var isHeader = (i === 0);
-    h += '<tr style="border-bottom:1px solid var(--b1)">';
-    for (var j = 0; j < cols.length; j++) {
-      var val = cols[j].substring(0, 20);
-      var role = _ctColMap[j] || 'Skip';
-      var bg = role !== 'Skip' ? 'rgba(255,152,0,0.05)' : 'transparent';
-      var style = isHeader ? 'color:var(--or);font-weight:600' : 'color:var(--t2)';
-      h += '<td style="padding:3px 6px;' + style + ';background:' + bg + '">' + val + '</td>';
-    }
-    h += '</tr>';
-  }
-  h += '</table>';
-  if (lines.length > 8) h += '<div style="color:var(--t3);margin-top:4px;font-size:10px">... ' + (lines.length - 1) + ' total data rows</div>';
-  el.innerHTML = h;
-}
-
-// Auto-detect button: re-detect separator + columns
-function ctAutoDetect() {
-  ctAutoDetectSep();
-  _ctSkip = 0;
-  document.getElementById('ct-skip').value = '0';
-  ctBuildMapper();
 }
 
 function ctLoadTable() {
@@ -1087,62 +897,6 @@ function ctLoadTable() {
     var el = document.getElementById('ct-table');
     if (el) el.innerHTML = '<span style="color:var(--rd)">Failed to load</span>';
   });
-}
-
-async function ctUpload() {
-  var code = document.getElementById('ct-code').value.toUpperCase().trim();
-  var name = document.getElementById('ct-name').value.trim();
-  var cat = document.getElementById('ct-cat').value;
-  var sector = (document.getElementById('ct-sector') || {}).value || '';
-  var file = document.getElementById('ct-file').files[0];
-  var btn = document.getElementById('ct-upload-btn');
-  var result = document.getElementById('ct-result');
-
-  if (!code) { result.innerHTML = '<span style="color:var(--rd)">Code required</span>'; return; }
-  if (!file) { result.innerHTML = '<span style="color:var(--rd)">CSV file required</span>'; return; }
-
-  // Validate column mapping has at least Date + Close
-  var hasDate = _ctColMap.indexOf('Date') >= 0;
-  var hasClose = _ctColMap.indexOf('Close') >= 0;
-  if (_ctFileData && _ctColMap.length && (!hasDate || !hasClose)) {
-    result.innerHTML = '<span style="color:var(--rd)">Column mapping needs at least Date + Close assigned</span>';
-    return;
-  }
-
-  btn.disabled = true; btn.textContent = '⏳ Uploading...';
-  result.innerHTML = '<span style="color:var(--t3)">Processing...</span>';
-
-  try {
-    var fd = new FormData();
-    fd.append('file', file);
-    fd.append('code', code);
-    fd.append('name', name || code);
-    fd.append('category', cat);
-    fd.append('linked_sector', sector);
-    fd.append('separator', _ctSep);
-    fd.append('skip_lines', _ctSkip);
-    fd.append('col_map', JSON.stringify(_ctColMap));
-
-    var r = await fetch('/api/idx/custom/upload', { method: 'POST', body: fd });
-    var d = await r.json();
-
-    if (d.ok) {
-      result.innerHTML = '<span style="color:var(--gn)">✅ ' + d.inserted + ' new + ' + d.updated + ' updated = ' + d.total_rows + ' total</span>';
-      ctLoadTable();
-      document.getElementById('ct-code').value = '';
-      document.getElementById('ct-name').value = '';
-      document.getElementById('ct-file').value = '';
-      document.getElementById('ct-mapper').style.display = 'none';
-      _ctFileData = null;
-      showT('Custom Ticker', code + ': ' + d.total_rows + ' rows imported');
-    } else {
-      result.innerHTML = '<span style="color:var(--rd)">' + (d.error || 'Upload failed') + '</span>';
-    }
-  } catch (e) {
-    result.innerHTML = '<span style="color:var(--rd)">Error: ' + e.message + '</span>';
-  } finally {
-    btn.disabled = false; btn.textContent = '📤 Import CSV';
-  }
 }
 
 // ── Status & refresh massal (menggantikan update manual per-ticker) ──
