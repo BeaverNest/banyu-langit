@@ -206,7 +206,10 @@ function sdTabFinancials(d) {
   if (last) {
     kpis.push({ l: 'Revenue (Q)', v: num(last.sales), y: yoy(q, li, 'sales'), s: q.slice(-8).map(function (x) { return x.sales; }), c: 'var(--bl)' });
     kpis.push({ l: 'Net Income (Q)', v: num(last.profit), y: yoy(q, li, 'profit'), s: q.slice(-8).map(function (x) { return x.profit; }), c: 'var(--gn)' });
-    if (!fu.npm_note) kpis.push({ l: 'NPM (Q)', v: (last.npm == null ? '—' : last.npm.toFixed(1) + '%'), y: null, s: q.slice(-8).map(function (x) { return x.npm; }), c: 'var(--am)' });
+    // TTM dipisah supaya tidak dibandingkan dengan laba kuartalan (kasus ADRO:
+    // laba Q +100% tapi EPS TTM -16% karena basisnya beda).
+    var tp = d.ttm_profit || null;
+    kpis.push({ l: 'Net Income (TTM)', v: tp ? num(tp.value) : '—', y: tp ? tp.yoy : null, s: [], c: 'var(--gn)' });
   }
   kpis.push({ l: 'EPS (TTM)', v: fu.eps_trailing ? fu.eps_trailing.toFixed(2) : '—', y: d.fund_growth ? d.fund_growth.eps_growth : null, s: q.slice(-8).map(function (x) { return x.eps; }), c: 'var(--t1)' });
   kpis.push({ l: 'ROE (TTM)', v: fu.roe ? fu.roe.toFixed(2) + '%' : '—', y: null, s: q.slice(-8).map(function (x) { return x.roe; }), c: '#a855f7' });
@@ -296,7 +299,8 @@ function sdTabFinancials(d) {
   var pv = d.provenance || {};
   h += '<div style="font-size:9px;color:var(--t3);font-family:var(--fm);padding:2px 0">' +
     'Periode ' + esc(pv.period || '—') + ' · ' + (pv.quarters || 0) + ' kuartal · sumber ' + esc(pv.source || '—') +
-    ' · sales/profit ' + esc(pv.sales_profit_basis || '—') + ' · EPS/ROE ' + esc(pv.eps_roe_basis || '—') + '</div>';
+    ' · sales/profit ' + esc(pv.sales_profit_basis || '—') + ' · EPS/ROE ' + esc(pv.eps_roe_basis || '—') +
+    ' · profit mencakup minority interest; EPS memakai laba atributif</div>';
 
   return h;
 }

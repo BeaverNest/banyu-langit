@@ -83,6 +83,140 @@ module.exports = function(upload) {
     return (sd.getFullYear() - fs.getFullYear()) * 12 + (sd.getMonth() - fs.getMonth());
   }
 
+  // ═══ PIT fundamental source #2 — IDX-API `financial_ratios` (quarterly reports) ═══
+  // Sits NEXT TO getPITFundMap (which reads the monthly screener snapshot
+  // `idx_fundamental`). Neither replaces the other; the caller picks with a parameter.
+  //
+  // Why a second source: `idx_fundamental` carries ratios only — `assets`,
+  // `liabilities`, `equity`, `sales`, `profit`, `ebt` are 0 on every row and `fs_date`
+  // is '' — so no stored ratio can be reproduced or audited from the table itself.
+  // `financial_ratios` carries the absolute fields, so ROE/ROA/NPM can be rebuilt under
+  // a definition we own and can test.
+  //
+  // Rules enforced here — each is a decision with a reason, not an accident:
+  //  • availability: `available_from = quarter_end + lagDays`. The quarter end is NEVER
+  //    itself the availability date; BEI publishes the report after the period closes,
+  //    so treating the quarter end as known is look-ahead. Default 45 days, overridable.
+  //  • `sales`/`profit` are YTD cumulative. They are de-cumulated into single quarters
+  //    (Qn = YTDn − YTDn−1, Q1 = YTD1) and four quarters are summed to build TTM before
+  //    any ratio is derived.
+  //  • the stored `roe`/`roa`/`npm` columns are NOT used for interim periods: they are
+  //    quarter-annualised upstream (BBCA Q1-25 npm = 221.9, i.e. ~4x its H1 value), not
+  //    TTM, and they do not reproduce profit/sales, profit/equity, profit/assets. Our own
+  //    TTM figures are used instead. `der` IS taken as-is (it reproduces
+  //    liabilities/equity on 99.35% of the 18,316 rows that have equity > 0).
+  //  • a code whose 4-quarter window is incomplete is EXCLUDED, never approximated.
+  const RATIO_LAG_DAYS_DEFAULT = 45;
+  const _ratioNum = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+  const RATIO_QUARTER_END_RE = /^\d{4}-(03-31|06-30|09-30|12-31)$/;
+  function isoAddDays(iso, days) {
+    return new Date(Date.parse(iso + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
+  }
+  let _ratioSeries = { fp: null, quarters: [], byCode: {}, periods: new Set(), codes: [] };
+  function loadRatioSeries() {
+    // Rebuild only when the table actually changed — a cheap fingerprint beats a TTL guess.
+    const f = db.prepare("SELECT COUNT(*) c, IFNULL(MAX(period),'') mx FROM financial_ratios").get();
+    const fp = f.c + '|' + f.mx;
+    if (_ratioSeries.fp === fp) return _ratioSeries;
+    const rows = db.prepare('SELECT code, period, name, sector, industry, assets, liabilities, equity, sales, ebt, profit, eps, book_value, per, pbv, der FROM financial_ratios').all();
+    const byCode = {}, periods = new Set();
+    rows.forEach(r => {
+      if (!r.period || !RATIO_QUARTER_END_RE.test(r.period)) return; // non quarter-end rows exist (46 of them) — ignored
+      periods.add(r.period);
+      (byCode[r.code] = byCode[r.code] || {})[r.period] = r;
+    });
+    _ratioSeries = { fp, quarters: [...periods].sort(), byCode, periods, codes: Object.keys(byCode) };
+    return _ratioSeries;
+  }
+  // Single-quarter figures for `code` at `q`. null when the prior quarter needed to
+  // de-cumulate is absent — the caller treats that as "incomplete window".
+  function ratioSingleQuarter(series, code, q, qi) {
+    const row = series.byCode[code][q];
+    if (!row) return null;
+    if (q.substring(5, 7) === '03') return { sales: _ratioNum(row.sales), profit: _ratioNum(row.profit) };
+    const prev = qi > 0 ? series.quarters[qi - 1] : null;
+    const prow = prev ? series.byCode[code][prev] : null;
+    if (!prow) return null;
+    return { sales: _ratioNum(row.sales) - _ratioNum(prow.sales), profit: _ratioNum(row.profit) - _ratioNum(prow.profit) };
+  }
+  // TTM block for `code` ending at quarter `q`. null => incomplete window => excluded.
+  function ratioTTMBlock(series, code, q) {
+    const qi = series.quarters.indexOf(q);
+    if (qi < 3) return null;
+    const win = [series.quarters[qi - 3], series.quarters[qi - 2], series.quarters[qi - 1], q];
+    let ttmSales = 0, ttmProfit = 0;
+    for (let i = 0; i < 4; i++) {
+      const sq = ratioSingleQuarter(series, code, win[i], qi - 3 + i);
+      if (!sq) return null;
+      ttmSales += sq.sales; ttmProfit += sq.profit;
+    }
+    const row = series.byCode[code][q];
+    return {
+      quarter: q, window: win, ttm_sales: ttmSales, ttm_profit: ttmProfit,
+      equity: _ratioNum(row.equity), assets: _ratioNum(row.assets), liabilities: _ratioNum(row.liabilities),
+      book_value: _ratioNum(row.book_value), der: _ratioNum(row.der),
+      per: _ratioNum(row.per), pbv: _ratioNum(row.pbv),
+      name: row.name || '', sector: row.sector || '', industry: row.industry || ''
+    };
+  }
+  // Freshest quarter whose availability date has passed at `scoringDate`.
+  function ratioPITSnapshot(series, scoringDate, lagDays) {
+    const lag = Number.isFinite(lagDays) ? lagDays : RATIO_LAG_DAYS_DEFAULT;
+    const sd = Date.parse(scoringDate + 'T00:00:00Z');
+    if (!isFinite(sd)) return null;
+    let best = null;
+    for (const q of series.quarters) {
+      if (Date.parse(q + 'T00:00:00Z') + lag * 86400000 <= sd) best = q; else break;
+    }
+    return best;
+  }
+  let _ratioMapCache = { fp: null, maps: {} };
+  // code → factor block for one quarter, built from OUR TTM, never from the stored
+  // annualised columns. Codes with an incomplete 4-quarter window are absent from the map
+  // (excluded, not approximated). Single implementation shared by the backfill path
+  // (getPITFundMapFromRatio) and by /ic-fund-source, so the study cannot drift from the
+  // production path it is supposed to be measuring.
+  function ratioFactorMap(quarter) {
+    const series = loadRatioSeries();
+    if (_ratioMapCache.fp !== series.fp) _ratioMapCache = { fp: series.fp, maps: {} };
+    if (_ratioMapCache.maps[quarter]) return _ratioMapCache.maps[quarter];
+    const map = {};
+    series.codes.forEach(code => {
+      const t = ratioTTMBlock(series, code, quarter);
+      if (!t) return;
+      const shares = (t.equity > 0 && t.book_value > 0) ? t.equity / t.book_value : 0;
+      map[code] = {
+        code, name: t.name, sector: t.sector, industry: t.industry,
+        roe: t.equity > 0 ? t.ttm_profit / t.equity * 100 : 0,
+        roa: t.assets > 0 ? t.ttm_profit / t.assets * 100 : 0,
+        npm: t.ttm_sales > 0 ? t.ttm_profit / t.ttm_sales * 100 : 0,
+        der: t.der,
+        per: t.per, pbv: t.pbv,                 // as reported at the quarter end (stale price)
+        book_value: t.book_value, eps_ttm: shares > 0 ? t.ttm_profit / shares : 0,
+        ttm_profit: t.ttm_profit, ttm_sales: t.ttm_sales, equity: t.equity, assets: t.assets,
+        fs_date: quarter,                       // fiscal period end drives data_age_months
+        ttm_window: t.window.join(',')
+      };
+    });
+    _ratioMapCache.maps[quarter] = map;
+    return map;
+  }
+  // PIT map from financial_ratios. Mirrors getPITFundMap's return shape so callers can
+  // swap sources without touching anything else.
+  function getPITFundMapFromRatio(tradeDate, opts) {
+    const o = opts || {};
+    const lag = Number.isFinite(o.lagDays) ? o.lagDays : RATIO_LAG_DAYS_DEFAULT;
+    const series = loadRatioSeries();
+    const snap = ratioPITSnapshot(series, tradeDate, lag);
+    if (!snap) return { map: {}, snapshot: null, available_from: null, lag_days: lag, source: 'financial_ratios', considered: series.codes.length, ttm_complete: 0, excluded: series.codes.length };
+    const map = ratioFactorMap(snap);
+    return {
+      map, snapshot: snap, available_from: isoAddDays(snap, lag), lag_days: lag,
+      source: 'financial_ratios', considered: series.codes.length,
+      ttm_complete: Object.keys(map).length, excluded: series.codes.length - Object.keys(map).length
+    };
+  }
+
   // Top rankings
   router.get('/top', (req, res) => {
     const sort = req.query.sort || 'foreign_net';
@@ -4335,6 +4469,32 @@ module.exports = function(upload) {
       const adChartData = adLine.slice(-500).map(r => ({ date: r.date, ad: r.ad }));
 
       // ── 7h. Financials v2: kuartalan (de-cumulated), band valuasi, peer ──
+      // ── TTM profit (basis sama dengan EPS) ──
+      // Supaya tidak membandingkan laba kuartalan dengan EPS TTM seperti sebelumnya.
+      let ttmProfit = null;
+      try {
+        const ttmAt = (list, i) => {
+          const cur = list[i];
+          if (!cur) return null;
+          const m = String(cur.period).slice(5, 7);
+          if (m === '12') return cur.profit;
+          const prevY = String(parseInt(String(cur.period).slice(0, 4)) - 1);
+          const fy = list.filter(x => x.period === prevY + '-12-31')[0];
+          const prevSame = list.filter(x => x.period === prevY + String(cur.period).slice(4))[0];
+          if (!fy) return null;
+          return fy.profit + cur.profit - (prevSame ? prevSame.profit : 0);
+        };
+        const li2 = fundHistory.length - 1;
+        const now = ttmAt(fundHistory, li2);
+        const prev = li2 >= 4 ? ttmAt(fundHistory, li2 - 4) : null;
+        if (now != null) {
+          ttmProfit = {
+            value: Math.round(now * 100) / 100,
+            yoy: (prev && prev !== 0) ? Math.round((now - prev) / Math.abs(prev) * 10000) / 100 : null
+          };
+        }
+      } catch (e) {}
+
       let quarterlySeries = [];
       let valuationBand = [];
       let peerMedian = null;
@@ -4346,19 +4506,26 @@ module.exports = function(upload) {
         });
         const qname = m => (m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'Q4');
         Object.keys(byYear).sort().forEach(y => {
-          let prevSales = 0, prevProfit = 0, prevEbt = 0;
-          byYear[y].sort((a, b) => a.m - b.m).forEach(r => {
-            const qSales = (r.sales || 0) - prevSales;
-            const qProfit = (r.profit || 0) - prevProfit;
-            const qEbt = (r.ebt || 0) - prevEbt;
+          const yr = byYear[y].sort((a, b) => a.m - b.m);
+          // Basis FY bisa beda PER FIELD: ADRO 2024 punya sales FY standalone
+          // (33.593 < YTD Q3 67.416) tapi profit FY kumulatif (25.148 > 20.076).
+          const fyr = yr.filter(r => r.m === 12)[0];
+          const q3r = yr.filter(r => r.m === 9)[0];
+          const cum = (k) => !(fyr && q3r && fyr[k] < q3r[k] * 0.95);
+          const cumS = cum('sales'), cumP = cum('profit'), cumE = cum('ebt');
+          let prevS = 0, prevP = 0, prevE = 0;
+          yr.forEach(r => {
+            const qS = (!cumS && r.m === 12) ? r.sales : (r.sales || 0) - prevS;
+            const qP = (!cumP && r.m === 12) ? r.profit : (r.profit || 0) - prevP;
+            const qE = (!cumE && r.m === 12) ? r.ebt : (r.ebt || 0) - prevE;
             quarterlySeries.push({
               period: r.period, label: y.slice(2) + ' ' + qname(r.m),
-              sales: qSales, profit: qProfit, ebt: qEbt,
+              sales: qS > 0 ? qS : null, profit: qP, ebt: qE,
               sales_ytd: r.sales, profit_ytd: r.profit,
               eps: r.eps, roe: r.roe, der: r.der,
-              npm: qSales > 0 ? Math.round(qProfit / qSales * 10000) / 100 : null
+              npm: qS > 0 ? Math.round(qP / qS * 10000) / 100 : null
             });
-            prevSales = r.sales || 0; prevProfit = r.profit || 0; prevEbt = r.ebt || 0;
+            prevS = r.sales || 0; prevP = r.profit || 0; prevE = r.ebt || 0;
           });
         });
         quarterlySeries = quarterlySeries.slice(-12);
@@ -4429,6 +4596,7 @@ module.exports = function(upload) {
         fund_growth: fundGrowth,
         fund_history: fundHistory,
         quarterly: quarterlySeries,
+        ttm_profit: ttmProfit,
         valuation_band: valuationBand,
         peers: peerMedian,
         shares_outstanding: last.listed_shares || null,
