@@ -3102,6 +3102,41 @@ module.exports = function(upload) {
         }
       } catch (e) {}
 
+      // ── Tape: likuiditas & ekstremitas (ARA/ARB) — dihitung dari idx_daily ──
+      try {
+        const tDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 21').all().map(r => r.trade_date);
+        if (tDates.length >= 21) {
+          const vals = {};
+          db.prepare(`SELECT trade_date, SUM(value) AS v, COUNT(*) AS n FROM idx_daily
+                      WHERE trade_date >= ? AND close > 0 GROUP BY trade_date`)
+            .all(tDates[tDates.length - 1]).forEach(r => { vals[r.trade_date] = r.v || 0; });
+          const ordered = tDates.filter(d => vals[d] !== undefined);
+          const vToday = vals[ordered[0]] || 0;
+          const prev20 = ordered.slice(1, 21).map(d => vals[d]).filter(v => v > 0);
+          const vMa20 = prev20.length ? prev20.reduce((a, b) => a + b, 0) / prev20.length : 0;
+
+          // ARA/ARB memakai tangga IDX yang sama dengan mesin backtest.
+          const rows = db.prepare(`SELECT close, prev_close FROM idx_daily
+                                   WHERE trade_date=? AND close>0 AND prev_close>0`).all(ordered[0]);
+          let ara = 0, arb = 0, adv = 0, dec = 0;
+          for (const r of rows) {
+            const chg = (r.close - r.prev_close) * 1.0 / r.prev_close;
+            if (chg > 0) adv++; else if (chg < 0) dec++;
+            const araPct = r.prev_close < 500 ? 0.35 : r.prev_close <= 5000 ? 0.25 : 0.20;
+            if (chg >= araPct * 0.995) ara++;
+            if (chg <= -0.15 * 0.995) arb++;
+          }
+          idx.tape = {
+            as_of: ordered[0],
+            value_today: vToday,
+            value_ma20: vMa20,
+            value_ratio: vMa20 > 0 ? Math.round((vToday / vMa20) * 100) / 100 : null,
+            advancers: adv, decliners: dec,
+            ara: ara, arb: arb
+          };
+        }
+      } catch (e) {}
+
       // Market breadth
       try {
         if (today) {
