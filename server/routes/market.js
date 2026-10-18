@@ -219,21 +219,6 @@ router.get('/market/overview', (req, res) => {
       }
     } catch (e) {}
 
-    // ── SEKTOR (equal-weighted, dari harga saham) ──
-    let sectors = [];
-    try {
-      const dts = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 2').all().map(r => r.trade_date);
-      if (dts.length === 2) {
-        db.prepare(`SELECT cp.sector sector,
-                    AVG((d.close-d.prev_close)*1.0/d.prev_close*100) chg, COUNT(*) n
-                    FROM idx_daily d JOIN company_profiles cp ON d.code=cp.code
-                    WHERE d.trade_date=? AND d.close>0 AND d.prev_close>0 AND cp.sector!=''
-                    GROUP BY cp.sector`).all(dts[0])
-          .forEach(r => sectors.push({ sector: r.sector, chg_1d: Math.round(r.chg * 100) / 100, members: r.n }));
-        sectors.sort((a, b) => b.chg_1d - a.chg_1d);
-      }
-    } catch (e) {}
-
     const idxItems = [
       ['COMPOSITE', 'IHSG', 'Composite'],
       ['LQ45', 'LQ45', '45 saham likuid'],
@@ -254,7 +239,6 @@ router.get('/market/overview', (req, res) => {
       tape,
       sections: [
         { id: 'idx', title: 'IDX', icon: '📊', items: idxItems },
-        { id: 'sectors', title: 'SEKTOR (1 hari)', icon: '🧩', sectors },
         { id: 'global', title: 'RISIKO GLOBAL', icon: '🌐', items: globalItems },
         { id: 'commodities', title: 'KOMODITAS → SEKTOR', icon: '🛢', items: commodityItems },
         { id: 'fx', title: 'FX', icon: '💱', items: fxItems },

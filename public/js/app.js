@@ -108,14 +108,6 @@ async function loadMktOverview(){
 
     (d.sections||[]).forEach(function(sec){
       h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
-      if(sec.sectors){
-        h+='<div class="mkt-secs">';
-        sec.sectors.forEach(function(x){
-          h+='<span class="mkt-sec '+cls(x.chg_1d)+'"><b>'+esc(x.sector)+'</b> '+pc(x.chg_1d)+'</span>';
-        });
-        h+='</div>';
-        return;
-      }
       h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span><span class="mkt-pct">1Y</span></div>';
       (sec.items||[]).forEach(function(i){
         h+='<div class="mkt-item">'
