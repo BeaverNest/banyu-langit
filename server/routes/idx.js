@@ -3552,6 +3552,11 @@ module.exports = function(upload) {
       });
     } catch (e) { res.json({ ok: false, error: e.message }); }
   });
+  // financial_ratios mencampur satuan: sebelum 2024 roe/roa disimpan sebagai
+  // pecahan (0.15), sesudahnya persen (21.45). npm juga tidak konsisten
+  // (laba disetahunkan dibagi sales YTD), jadi dihitung ulang dari profit/sales.
+  const sdNormPct = v => (v == null ? null : (Math.abs(v) <= 1 ? Math.round(v * 10000) / 100 : v));
+
   router.get('/stock-detail/:code', (req, res) => {
     try {
       const code = req.params.code.toUpperCase().trim();
@@ -3786,6 +3791,11 @@ module.exports = function(upload) {
           };
           // NPM bank tidak sebanding: `sales` = pendapatan bunga bersih, sementara
           // `profit` termasuk pendapatan non-operasional -> rasio bisa >100%.
+          fundamental.roe = sdNormPct(fr.roe);
+          fundamental.roa = sdNormPct(fr.roa);
+          // npm dihitung ulang: profit/sales (YTD), bukan kolom npm yang
+          // mencampur laba disetahunkan dengan sales YTD.
+          fundamental.npm = fr.sales > 0 ? Math.round(fr.profit / fr.sales * 10000) / 100 : null;
           if (/financial/i.test(fr.sector || '')) {
             fundamental.npm = null;
             fundamental.npm_note = 'Bank: NPM tidak sebanding (sales = pendapatan bunga bersih)';
@@ -3928,7 +3938,11 @@ module.exports = function(upload) {
             fs_date: r.period,
             _norm_fs_date: r.period,
             quarter_label: ql,
-            period_label: String(r.period).slice(2, 4) + ' ' + ql
+            period_label: String(r.period).slice(2, 4) + ' ' + ql,
+            roe: sdNormPct(r.roe),
+            roa: sdNormPct(r.roa),
+            npm: (/financial/i.test(r.sector || '') || !(r.sales > 0))
+              ? null : Math.round(r.profit / r.sales * 10000) / 100
           };
         });
       } catch (e) {}
@@ -4320,6 +4334,72 @@ module.exports = function(upload) {
 
       const adChartData = adLine.slice(-500).map(r => ({ date: r.date, ad: r.ad }));
 
+      // ── 7h. Financials v2: kuartalan (de-cumulated), band valuasi, peer ──
+      let quarterlySeries = [];
+      let valuationBand = [];
+      let peerMedian = null;
+      try {
+        const byYear = {};
+        fundHistory.forEach(r => {
+          const y = String(r.period).slice(0, 4), m = parseInt(String(r.period).slice(5, 7));
+          (byYear[y] = byYear[y] || []).push({ ...r, m });
+        });
+        const qname = m => (m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'Q4');
+        Object.keys(byYear).sort().forEach(y => {
+          let prevSales = 0, prevProfit = 0, prevEbt = 0;
+          byYear[y].sort((a, b) => a.m - b.m).forEach(r => {
+            const qSales = (r.sales || 0) - prevSales;
+            const qProfit = (r.profit || 0) - prevProfit;
+            const qEbt = (r.ebt || 0) - prevEbt;
+            quarterlySeries.push({
+              period: r.period, label: y.slice(2) + ' ' + qname(r.m),
+              sales: qSales, profit: qProfit, ebt: qEbt,
+              sales_ytd: r.sales, profit_ytd: r.profit,
+              eps: r.eps, roe: r.roe, der: r.der,
+              npm: qSales > 0 ? Math.round(qProfit / qSales * 10000) / 100 : null
+            });
+            prevSales = r.sales || 0; prevProfit = r.profit || 0; prevEbt = r.ebt || 0;
+          });
+        });
+        quarterlySeries = quarterlySeries.slice(-12);
+      } catch (e) {}
+
+      try {
+        valuationBand = fundHistory.map(r => {
+          const px = db.prepare('SELECT close FROM idx_daily WHERE code=? AND trade_date<=? AND close>0 ORDER BY trade_date DESC LIMIT 1').get(code, r.period);
+          const close = px ? px.close : null;
+          return {
+            period: r.period,
+            label: r.period_label,
+            close,
+            eps: r.eps,
+            book_value: r.book_value,
+            per: close && r.eps > 0 ? Math.round(close / r.eps * 100) / 100 : null,
+            pbv: close && r.book_value > 0 ? Math.round(close / r.book_value * 100) / 100 : null
+          };
+        }).filter(x => x.per != null || x.pbv != null);
+      } catch (e) {}
+
+      try {
+        if (fundamental && fundamental.sector) {
+          const rows = db.prepare(`SELECT per, pbv, roe,
+                 (CASE WHEN sales > 0 THEN profit * 100.0 / sales END) AS npm
+                 FROM financial_ratios WHERE sector=? AND period=?`).all(fundamental.sector, fundamental.period);
+          rows.forEach(r => { r.roe = sdNormPct(r.roe); });
+          const med = (arr) => {
+            const v = arr.filter(x => x != null && x !== 0).sort((a, b) => a - b);
+            if (!v.length) return null;
+            const m = Math.floor(v.length / 2);
+            return Math.round((v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2) * 100) / 100;
+          };
+          peerMedian = {
+            sector: fundamental.sector, period: fundamental.period, n: rows.length,
+            per: med(rows.map(r => r.per)), pbv: med(rows.map(r => r.pbv)),
+            roe: med(rows.map(r => r.roe)), npm: med(rows.map(r => r.npm))
+          };
+        }
+      } catch (e) {}
+
       res.json({
         code, name: last.name || '',
         current: { close: last.ac, prev_close: last.prev_close, change: last.ac - (data[n - 2]?.ac || last.ac), trade_date: last.trade_date, volume: last.volume, value: last.value, market_cap: last.ac * (last.listed_shares || 0) },
@@ -4345,8 +4425,20 @@ module.exports = function(upload) {
         ownership,
         dividend_history: dividendHistory,
         ca_timeline: caTimeline,
+
         fund_growth: fundGrowth,
         fund_history: fundHistory,
+        quarterly: quarterlySeries,
+        valuation_band: valuationBand,
+        peers: peerMedian,
+        shares_outstanding: last.listed_shares || null,
+        provenance: {
+          period: fundamental ? fundamental.period : null,
+          quarters: fundHistory.length,
+          source: 'financial_ratios',
+          sales_profit_basis: 'YTD kumulatif',
+          eps_roe_basis: 'TTM / annualized'
+        },
         daily_valuation: dailyValuation,
         chart: chartData,
         ad_line: adChartData

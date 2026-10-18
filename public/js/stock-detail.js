@@ -144,6 +144,7 @@ function sdRenderTab(tabId) {
 
   // Deferred chart rendering per tab
   setTimeout(function() {
+    if (tabId === 'financials') sdDrawFinCharts(d);
     if (tabId === 'fundachart') sdDrawFundaCharts(d);
     if (tabId === 'analysis') {
       if (d.scoring) sdDrawRadar(d.scoring);
@@ -169,254 +170,191 @@ function sdRenderTab(tabId) {
 // TAB: FINANCIALS
 // ═══════════════════════════════════════════════════════════════
 function sdTabFinancials(d) {
-  var h = '';
-  if (!d.fundamental) return '<div style="padding:20px;color:var(--t3)">No fundamental data available</div>';
   var fu = d.fundamental;
+  if (!fu) return '<div style="padding:20px;color:var(--t3)">No fundamental data available</div>';
+  var q = d.quarterly || [];
+  var hist = d.fund_history || [];
+  var band = d.valuation_band || [];
+  var peers = d.peers || null;
   var cur = d.current || {};
-  var close = cur.close || 0;
+  var h = '';
 
-  // Helper: render a section card
-  function secH(title) { return '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px">' + title + '</div>'; }
-  // Helper: render a row
-  function row(label, val, opts) {
-    opts = opts || {};
-    var c = opts.color || 'var(--t1)';
-    var fw = opts.bold ? '700' : '600';
-    var suffix = opts.suffix || '';
-    var icon = opts.icon || '';
-    return '<tr><td class="al" style="color:var(--t3);font-size:12px;padding:3px 0">' + label + icon + '</td><td class="ar" style="font-weight:' + fw + ';font-family:var(--fm);color:' + c + ';font-size:12px;padding:3px 0">' + val + suffix + '</td></tr>';
+  function pc(v) { return v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%'; }
+  function cl(v) { return v == null ? 'var(--t3)' : (v > 0 ? 'var(--gn)' : v < 0 ? 'var(--rd)' : 'var(--t2)'); }
+  function num(v, dg) { return v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: dg == null ? 0 : dg }); }
+  function spark(vals, color) {
+    var v = vals.filter(function (x) { return x != null && isFinite(x); });
+    if (v.length < 2) return '';
+    var mn = Math.min.apply(null, v), mx = Math.max.apply(null, v), rg = (mx - mn) || 1;
+    var pts = v.map(function (y, i) {
+      return (i / (v.length - 1) * 100).toFixed(1) + ',' + (26 - ((y - mn) / rg) * 22).toFixed(1);
+    }).join(' ');
+    return '<svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%;height:24px;display:block;margin-top:3px">' +
+      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.8" vector-effect="non-scaling-stroke"/></svg>';
   }
-  function tblS() { return '<table class="bei-tbl" style="font-size:12px;width:100%"><tbody>'; }
-  function tblE() { return '</tbody></table>'; }
-  function cardS() { return '<div style="padding:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">'; }
-  function cardE() { return '</div>'; }
-
-  // Color helpers
-  function valC(v, low, high) { return v > 0 ? (v < low ? '#22c55e' : v < high ? 'var(--t1)' : '#ef4444') : 'var(--rd)'; }
-  function pctC(v) { return v > 0 ? 'var(--gn)' : v < 0 ? 'var(--rd)' : 'var(--t2)'; }
-  function pctFmt(v) { if (v == null) return '—'; return (v > 0 ? '+' : '') + v.toFixed(2) + '%'; }
-
-  // ═══ 3-COLUMN GRID ═══
-  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
-
-  // ════════════════════════════════════════
-  // COL 1: CURRENT VALUATION
-  // ════════════════════════════════════════
-  h += cardS();
-  h += secH('Current Valuation');
-  h += tblS();
-
-  // PER
-  var perVal = fu.live_per || fu.per || 0;
-  var perColor = valC(perVal, 10, 20);
-  h += row('PER (TTM)', perVal ? perVal.toFixed(2) + 'x' : '—', { color: perColor, icon: fu.live_per ? ' <span style="color:var(--am);font-size:9px">⚡</span>' : '' });
-
-  // PBV
-  var pbvVal = fu.live_pbv || fu.pbv || 0;
-  var pbvColor = pbvVal > 0 ? (pbvVal < 1 ? '#22c55e' : pbvVal < 2 ? 'var(--t1)' : '#ef4444') : 'var(--t2)';
-  h += row('PBV', pbvVal ? pbvVal.toFixed(2) + 'x' : '—', { color: pbvColor, icon: fu.live_pbv ? ' <span style="color:var(--am);font-size:9px">⚡</span>' : '' });
-
-  // Earnings Yield
-  if (fu.earnings_yield != null) {
-    var eyC = fu.earnings_yield > 10 ? '#22c55e' : fu.earnings_yield > 5 ? 'var(--t1)' : fu.earnings_yield > 0 ? 'var(--am)' : 'var(--rd)';
-    h += row('Earnings Yield', fu.earnings_yield.toFixed(2) + '%', { color: eyC });
+  function yoy(arr, i, key) {
+    if (i < 4 || !arr[i] || !arr[i - 4]) return null;
+    var a = arr[i][key], b = arr[i - 4][key];
+    if (a == null || b == null || b === 0) return null;
+    return Math.round((a - b) / Math.abs(b) * 10000) / 100;
   }
 
-  // P/S
-  if (fu.price_to_sales) {
-    var psC = fu.price_to_sales < 1 ? '#22c55e' : fu.price_to_sales < 3 ? 'var(--t1)' : '#ef4444';
-    h += row('P/S', fu.price_to_sales.toFixed(2) + 'x', { color: psC });
+  // ═══ 1. KPI STRIP — 6 kotak, nilai + YoY + sparkline 8 kuartal ═══
+  var last = q.length ? q[q.length - 1] : null;
+  var li = q.length - 1;
+  var kpis = [];
+  if (last) {
+    kpis.push({ l: 'Revenue (Q)', v: num(last.sales), y: yoy(q, li, 'sales'), s: q.slice(-8).map(function (x) { return x.sales; }), c: 'var(--bl)' });
+    kpis.push({ l: 'Net Income (Q)', v: num(last.profit), y: yoy(q, li, 'profit'), s: q.slice(-8).map(function (x) { return x.profit; }), c: 'var(--gn)' });
+    if (!fu.npm_note) kpis.push({ l: 'NPM (Q)', v: (last.npm == null ? '—' : last.npm.toFixed(1) + '%'), y: null, s: q.slice(-8).map(function (x) { return x.npm; }), c: 'var(--am)' });
   }
+  kpis.push({ l: 'EPS (TTM)', v: fu.eps_trailing ? fu.eps_trailing.toFixed(2) : '—', y: d.fund_growth ? d.fund_growth.eps_growth : null, s: q.slice(-8).map(function (x) { return x.eps; }), c: 'var(--t1)' });
+  kpis.push({ l: 'ROE (TTM)', v: fu.roe ? fu.roe.toFixed(2) + '%' : '—', y: null, s: q.slice(-8).map(function (x) { return x.roe; }), c: '#a855f7' });
+  kpis.push({ l: 'DER', v: fu.der ? fu.der.toFixed(2) + 'x' : '—', y: null, s: q.slice(-8).map(function (x) { return x.der; }), c: 'var(--rd)' });
 
-  // Market Cap (computed: close × shares_outstanding if available, or from fu.market_cap)
-  var mktCap = fu.market_cap || (fu.shares_outstanding && close ? close * fu.shares_outstanding : 0);
-  if (mktCap) {
-    h += row('Market Cap', fmtRp(mktCap), {});
-  }
-
-  // Shares Outstanding
-  if (fu.shares_outstanding) {
-    h += row('Shares Outstanding', (fu.shares_outstanding / 1e9).toFixed(2) + ' B', {});
-  }
-
-  // Free Float (if available from ownership)
-  if (d.ownership && d.ownership.free_float_pct != null) {
-    h += row('Free Float', d.ownership.free_float_pct.toFixed(2) + '%', {});
-  }
-
-  h += tblE();
-  h += cardE();
-
-  // ════════════════════════════════════════
-  // COL 2: PROFITABILITY & SOLVENCY
-  // ════════════════════════════════════════
-  h += cardS();
-  h += secH('Profitability');
-  h += tblS();
-
-  // ROE
-  var roeC = fu.roe > 15 ? '#22c55e' : fu.roe > 0 ? 'var(--t1)' : 'var(--rd)';
-  h += row('ROE (TTM)', fu.roe ? fu.roe.toFixed(2) + '%' : '—', { color: roeC, bold: true });
-
-  // ROA
-  h += row('ROA (TTM)', fu.roa ? fu.roa.toFixed(2) + '%' : '—', {});
-
-  // NPM
-  h += row('Net Profit Margin', fu.npm ? fu.npm.toFixed(2) + '%' : '—', { color: (fu.npm||0) < 0 ? 'var(--rd)' : 'var(--t1)' });
-  if (fu.npm_note) h += '<tr><td colspan="2" style="font-size:9px;color:var(--t3);padding:0 0 4px 0">' + esc(fu.npm_note) + '</td></tr>';
-
-  // Gross Profit Margin (if available from backend)
-  if (fu.gpm != null) {
-    h += row('Gross Profit Margin', fu.gpm.toFixed(2) + '%', {});
-  }
-
-  // Operating Profit Margin (if available)
-  if (fu.opm != null) {
-    h += row('Operating Profit Margin', fu.opm.toFixed(2) + '%', {});
-  }
-
-  h += tblE();
-
-  // Solvency sub-section
-  h += '<div style="margin-top:8px">';
-  h += '<div style="font-size:10px;font-weight:600;color:var(--t3);margin-bottom:4px">Solvency</div>';
-  h += tblS();
-
-  // DER
-  var derC = fu.der > 2 ? 'var(--rd)' : fu.der > 1 ? 'var(--am)' : 'var(--t1)';
-  h += row('DER', fu.der ? fu.der.toFixed(2) : '—', { color: derC });
-
-  // DAR
-  if (fu.dar != null) h += row('DAR', fu.dar.toFixed(1) + '%', {});
-
-  // Equity Ratio
-  if (fu.equity_ratio != null) h += row('Equity Ratio', fu.equity_ratio.toFixed(1) + '%', {});
-
-  // Financial Leverage (Assets / Equity)
-  if (fu.assets && fu.equity && fu.equity > 0) {
-    var finLev = fu.assets / fu.equity;
-    h += row('Financial Leverage', finLev.toFixed(2) + 'x', { color: finLev > 3 ? 'var(--rd)' : finLev > 2 ? 'var(--am)' : 'var(--t1)' });
-  }
-
-  h += tblE();
+  h += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:10px">';
+  kpis.forEach(function (k) {
+    h += '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:5px">' +
+      '<div style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.4px">' + k.l + '</div>' +
+      '<div style="font-family:var(--fm);font-size:15px;font-weight:700;color:var(--t1);margin:1px 0">' + k.v + '</div>' +
+      (k.y != null ? '<div style="font-size:9px;font-weight:700;color:' + cl(k.y) + '">' + pc(k.y) + ' YoY</div>' : '<div style="font-size:9px;color:var(--t3)">&nbsp;</div>') +
+      spark(k.s, k.c) + '</div>';
+  });
   h += '</div>';
 
-  // DuPont
-  if (fu.dupont) {
-    var dp = fu.dupont;
-    h += '<div style="margin-top:8px;padding:8px;background:var(--bgH);border-radius:4px">';
-    h += '<div style="font-size:10px;font-weight:700;color:var(--t3);margin-bottom:4px">DUPONT DECOMPOSITION</div>';
-    h += '<div style="font-size:11px;font-family:var(--fm);color:var(--t2);line-height:1.7">';
-    h += 'ROE = <span style="color:var(--bl)">' + dp.npm.toFixed(1) + '%</span> × <span style="color:var(--am)">' + dp.asset_turnover.toFixed(1) + '%</span> × <span style="color:#a855f7">' + dp.equity_multiplier.toFixed(2) + 'x</span>';
-    h += '<br><span style="font-size:9px;color:var(--t3)">NPM × Asset Turnover × Eq Multiplier = ' + dp.roe_check.toFixed(1) + '%</span>';
-    h += '</div></div>';
+  // ═══ 2. CHART Revenue & Profit per kuartal ═══
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">REVENUE &amp; PROFIT PER KUARTAL <span style="font-weight:400;color:var(--t3);font-size:9px">(de-cumulated dari YTD)</span></div>';
+  h += '<div id="sd-fin-rev" style="height:200px"></div></div>';
+
+  // ═══ 3. GROWTH TABLE 8Q ═══
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">PERTUMBUHAN — YoY PER KUARTAL</div>';
+  h += '<table class="bei-tbl" style="width:100%;font-size:11px"><thead><tr><th class="al">Kuartal</th><th class="ar">Revenue</th><th class="ar">Profit</th><th class="ar">EPS</th><th class="ar">ROE</th><th class="ar">DER</th></tr></thead><tbody>';
+  var startIdx = Math.max(4, q.length - 8);
+  for (var gi = startIdx; gi < q.length; gi++) {
+    var rv = yoy(q, gi, 'sales'), pf = yoy(q, gi, 'profit');
+    // roe 0 di periode lama = data tidak tersedia, bukan "naik 20 pp"
+    var dRoe = (q[gi].roe > 0 && q[gi - 4].roe > 0) ? q[gi].roe - q[gi - 4].roe : null;
+    var dDer = (q[gi].der > 0 && q[gi - 4].der > 0) ? q[gi].der - q[gi - 4].der : null;
+    h += '<tr><td class="al" style="color:var(--t2)">' + q[gi].label + '</td>' +
+      '<td class="ar" style="color:' + cl(rv) + ';font-family:var(--fm)">' + pc(rv) + '</td>' +
+      '<td class="ar" style="color:' + cl(pf) + ';font-family:var(--fm)">' + pc(pf) + '</td>' +
+      '<td class="ar" style="color:var(--t2);font-family:var(--fm)">' + (q[gi].eps ? q[gi].eps.toFixed(0) : '—') + '</td>' +
+      '<td class="ar" style="color:' + cl(dRoe) + ';font-family:var(--fm)">' + (dRoe == null ? '—' : (dRoe > 0 ? '+' : '') + dRoe.toFixed(2) + ' pp') + '</td>' +
+      '<td class="ar" style="color:' + cl(-dDer) + ';font-family:var(--fm)">' + (dDer == null ? '—' : (dDer > 0 ? '+' : '') + dDer.toFixed(2)) + '</td></tr>';
   }
-  h += cardE();
+  h += '</tbody></table></div>';
 
-  // ════════════════════════════════════════
-  // COL 3: FINANCIAL STATEMENTS
-  // ════════════════════════════════════════
-  h += cardS();
-  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);text-transform:uppercase;letter-spacing:.3px">Financial Statements</div>';
-  h += '<div style="font-size:10px;color:var(--t3)">' + esc(fu.snapshot_month || '') + '</div>';
-  h += '</div>';
-
-  // Income Statement
-  h += '<div style="font-size:10px;font-weight:600;color:var(--t3);margin-bottom:3px">Income Statement</div>';
-  h += tblS();
-  h += row('Revenue (TTM)', fu.sales ? fmtBM(fu.sales) : '—', {});
-  if (fu.gross_profit != null) {
-    h += row('Gross Profit', fmtBM(fu.gross_profit), { color: (fu.gross_profit||0) < 0 ? 'var(--rd)' : 'var(--t1)' });
+  // ═══ 4. VALUATION BAND ═══
+  var curPer = fu.live_per || fu.per;
+  var perList = band.map(function (x) { return x.per; }).filter(function (x) { return x != null; });
+  var pctl = null;
+  if (curPer && perList.length > 4) {
+    pctl = Math.round(perList.filter(function (v) { return v < curPer; }).length / perList.length * 100);
   }
-  h += row('EBT', fu.ebt ? fmtBM(fu.ebt) : '—', { color: (fu.ebt||0) < 0 ? 'var(--rd)' : 'var(--t1)' });
-  h += row('Net Income', fu.profit ? fmtBM(fu.profit) : '—', { color: (fu.profit||0) < 0 ? 'var(--rd)' : 'var(--gn)', bold: true });
-  h += tblE();
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+  h += '<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1)">BAND VALUASI (PER)</div>';
+  h += '<div style="font-size:10px;color:var(--t3)">' + band.length + ' kuartal' + (pctl != null ? ' · persentil <b style="color:var(--am)">' + pctl + '</b>' : '') + '</div>';
+  h += '<div style="margin-left:auto;font-family:var(--fm);font-size:13px;font-weight:700">' + (curPer ? curPer.toFixed(2) + 'x' : '—') + '</div></div>';
+  h += '<div id="sd-fin-band" style="height:170px"></div></div>';
 
-  // Balance Sheet
-  h += '<div style="font-size:10px;font-weight:600;color:var(--t3);margin:6px 0 3px">Balance Sheet</div>';
-  h += tblS();
-  h += row('Total Assets', fu.assets ? fmtBM(fu.assets) : '—', {});
-  h += row('Total Liabilities', fu.liabilities ? fmtBM(fu.liabilities) : '—', { color: 'var(--rd)' });
-  h += row('Total Equity', fu.equity ? fmtBM(fu.equity) : '—', { color: 'var(--gn)', bold: true });
-  h += tblE();
-
-  // Per Share
-  h += '<div style="font-size:10px;font-weight:600;color:var(--t3);margin:6px 0 3px">Per Share</div>';
-  h += tblS();
-  h += row('EPS (TTM)', fu.eps_trailing ? fu.eps_trailing.toFixed(2) : '—', { color: (fu.eps_trailing||0) < 0 ? 'var(--rd)' : 'var(--t1)' });
-  h += row('Book Value/Share', fu.book_value ? fu.book_value.toFixed(2) : '—', {});
-  // Revenue Per Share (if shares available)
-  if (fu.shares_outstanding && fu.sales) {
-    var rps = (fu.sales * 1e6) / fu.shares_outstanding; // sales in Miliar×1e6 to get per-share
-    h += row('Revenue/Share', rps.toFixed(2), {});
-  }
-  h += tblE();
-
-  // YoY Growth
-  if (d.fund_growth) {
-    var fg = d.fund_growth;
-    h += '<div style="font-size:10px;font-weight:600;color:var(--t3);margin:6px 0 3px">Growth YoY <span style="font-weight:400">(' + esc(fg.period) + ')</span></div>';
-    h += tblS();
-    if (fg.revenue_growth != null) h += row('Revenue', pctFmt(fg.revenue_growth), { color: pctC(fg.revenue_growth), bold: true });
-    if (fg.profit_growth != null) h += row('Net Income', pctFmt(fg.profit_growth), { color: pctC(fg.profit_growth), bold: true });
-    if (fg.eps_growth != null) h += row('EPS', pctFmt(fg.eps_growth), { color: pctC(fg.eps_growth) });
-    if (fg.equity_growth != null) h += row('Equity', pctFmt(fg.equity_growth), { color: pctC(fg.equity_growth) });
-    h += tblE();
-  }
-
-  // Sector & Classification
-  h += '<div style="margin-top:6px;font-size:10px;color:var(--t3)">' + (fu.sector || '') + (fu.industry ? ' · ' + fu.industry : '') + (fu.sharia ? ' · <span style="color:var(--gn)">☪ Syariah</span>' : '') + '</div>';
-  h += cardE();
-
-  h += '</div>'; // end 3-col
-
-  // ═══ SECOND ROW: Dividend Summary ═══
-  var divH = d.dividend_history;
-  if (divH && divH.length) {
-    var latDps = divH[0].dps || 0;
-    var latYield = close > 0 ? Math.round(latDps / close * 10000) / 100 : 0;
-    // TTM dividend (sum of last 4 quarters / recent dividends within 365 days)
-    var ttmDps = 0;
-    var oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    var oneYearStr = oneYearAgo.toISOString().split('T')[0];
-    divH.forEach(function(dv) { if (dv.cum_date >= oneYearStr) ttmDps += (dv.dps || 0); });
-    var ttmYield = close > 0 ? Math.round(ttmDps / close * 10000) / 100 : 0;
-    var payoutRatio = fu.eps_trailing > 0 ? Math.round(ttmDps / fu.eps_trailing * 10000) / 100 : 0;
-
-    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-
-    // Dividend Card
-    h += cardS();
-    h += secH('Dividend');
-    h += '<div style="display:flex;gap:8px;margin-bottom:8px">';
-    h += '<div style="flex:1;text-align:center;padding:8px;background:var(--bgH);border-radius:4px"><div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + (ttmYield >= 5 ? 'var(--gn)' : 'var(--am)') + '">' + ttmYield.toFixed(2) + '%</div><div style="font-size:9px;color:var(--t3)">Div Yield (TTM)</div></div>';
-    h += '<div style="flex:1;text-align:center;padding:8px;background:var(--bgH);border-radius:4px"><div style="font-size:16px;font-weight:800;font-family:var(--fm)">' + ttmDps.toLocaleString() + '</div><div style="font-size:9px;color:var(--t3)">Dividend (TTM)</div></div>';
-    if (payoutRatio > 0) {
-      h += '<div style="flex:1;text-align:center;padding:8px;background:var(--bgH);border-radius:4px"><div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + (payoutRatio > 100 ? 'var(--rd)' : 'var(--t1)') + '">' + payoutRatio.toFixed(1) + '%</div><div style="font-size:9px;color:var(--t3)">Payout Ratio</div></div>';
+  // ═══ 5. PEER ═══
+  if (peers && peers.n) {
+    function cmp(mine, med, lowBetter) {
+      if (mine == null || med == null) return '<td class="ar" style="font-family:var(--fm);color:var(--t3)">—</td>';
+      var better = lowBetter ? mine < med : mine > med;
+      return '<td class="ar" style="font-family:var(--fm);color:' + (better ? 'var(--gn)' : 'var(--rd)') + '">' + Number(mine).toFixed(2) + '</td>';
     }
-    h += '</div>';
-    // Latest Ex-Date
-    if (divH[0].cum_date) {
-      h += '<div style="font-size:10px;color:var(--t3)">Latest Ex-Date: <span style="color:var(--t1);font-weight:600">' + esc(divH[0].cum_date) + '</span></div>';
-    }
-    h += cardE();
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">VS SEKTOR ' + esc(peers.sector) + ' <span style="font-weight:400;color:var(--t3);font-size:9px">(' + peers.n + ' emiten, periode sama)</span></div>';
+    h += '<table class="bei-tbl" style="width:100%;font-size:11px"><thead><tr><th class="al"></th><th class="ar">PER</th><th class="ar">PBV</th><th class="ar">ROE</th><th class="ar">NPM</th></tr></thead><tbody>';
+    h += '<tr><td class="al" style="color:var(--t1);font-weight:700">' + d.code + '</td>' + cmp(fu.live_per || fu.per, peers.per, true) + cmp(fu.live_pbv || fu.pbv, peers.pbv, true) + cmp(fu.roe, peers.roe, false) + cmp(fu.npm, peers.npm, false) + '</tr>';
+    h += '<tr><td class="al" style="color:var(--t3)">Median sektor</td><td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (peers.per == null ? '—' : peers.per.toFixed(2)) + '</td><td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (peers.pbv == null ? '—' : peers.pbv.toFixed(2)) + '</td><td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (peers.roe == null ? '—' : peers.roe.toFixed(2) + '%') + '</td><td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (peers.npm == null ? '—' : peers.npm.toFixed(2) + '%') + '</td></tr>';
+    h += '</tbody></table></div>';
+  }
 
-    // Dividend History mini table
-    h += cardS();
-    h += secH('Dividend History');
-    h += '<table class="bei-tbl" style="font-size:11px"><thead style="font-size:10px"><tr><th class="al">Period</th><th class="ar">DPS</th><th class="al">Ex-Date</th><th class="ar">Yield</th></tr></thead><tbody>';
-    divH.slice(0, 6).forEach(function(dv) {
-      var dy = close > 0 && dv.dps > 0 ? (dv.dps / close * 100).toFixed(2) + '%' : '—';
-      h += '<tr><td class="al" style="font-family:var(--fm)">' + esc(dv.div_type || 'final') + '</td><td class="ar" style="font-family:var(--fm);font-weight:600;color:var(--gn)">' + (dv.dps || 0).toLocaleString() + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(dv.cum_date || '') + '</td><td class="ar" style="font-family:var(--fm);color:var(--t3)">' + dy + '</td></tr>';
+  // ═══ 6. BALANCE SHEET TREND ═══
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">NERACA — 8 KUARTAL</div>';
+  h += '<div id="sd-fin-bs" style="height:180px"></div></div>';
+
+  // ═══ 7. DIVIDEND TIMELINE ═══
+  var dv = (d.dividend_history || []).slice(0, 10);
+  if (dv.length) {
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:10px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">RIWAYAT DIVIDEN <span style="font-weight:400;color:var(--t3);font-size:9px">tanggal saja — sumber KSEI tidak memuat nominal</span></div>';
+    h += '<table class="bei-tbl" style="width:100%;font-size:11px"><thead><tr><th class="al">Cum</th><th class="al">Recording</th><th class="al">Payment</th></tr></thead><tbody>';
+    dv.forEach(function (x) {
+      h += '<tr><td class="al" style="font-family:var(--fm);color:var(--t2)">' + esc(x.cum_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.recording_date || '—') + '</td><td class="al" style="font-family:var(--fm);color:var(--t3)">' + esc(x.payment_date || '—') + '</td></tr>';
     });
-    h += '</tbody></table>';
-    h += cardE();
-
-    h += '</div>'; // end div-row
+    h += '</tbody></table></div>';
   }
+
+  // ═══ 8. PROVENANCE ═══
+  var pv = d.provenance || {};
+  h += '<div style="font-size:9px;color:var(--t3);font-family:var(--fm);padding:2px 0">' +
+    'Periode ' + esc(pv.period || '—') + ' · ' + (pv.quarters || 0) + ' kuartal · sumber ' + esc(pv.source || '—') +
+    ' · sales/profit ' + esc(pv.sales_profit_basis || '—') + ' · EPS/ROE ' + esc(pv.eps_roe_basis || '—') + '</div>';
 
   return h;
+}
+
+// Chart Financials (dipanggil deferred dari sdRenderTab)
+function sdDrawFinCharts(d) {
+  var q = d.quarterly || [], hist = d.fund_history || [], band = d.valuation_band || [];
+  var axis = { axisLabel: { fontSize: 8, color: '#7d8fa8' }, axisLine: { lineStyle: { color: '#1e2836' } } };
+
+  var e1 = document.getElementById('sd-fin-rev');
+  if (e1 && q.length) {
+    var c1 = BL.init(e1, 'sd-fin-rev'); if (c1) c1.setOption({
+      grid: { left: 46, right: 34, top: 14, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      xAxis: Object.assign({ type: 'category', data: q.map(function (x) { return x.label; }) }, axis),
+      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: function (v) { return BL.fmtRp(v * 1e6); } }, splitLine: { lineStyle: { color: '#141c27' } } },
+              { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
+      series: [
+        { name: 'Revenue', type: 'bar', data: q.map(function (x) { return x.sales; }), itemStyle: { color: '#3b82f6' } },
+        { name: 'Profit', type: 'bar', data: q.map(function (x) { return x.profit; }), itemStyle: { color: '#22c55e' } },
+        { name: 'NPM', type: 'line', yAxisIndex: 1, data: q.map(function (x) { return x.npm; }), symbolSize: 3, lineStyle: { width: 1 }, itemStyle: { color: '#f59e0b' } }
+      ]
+    });
+  }
+
+  var e2 = document.getElementById('sd-fin-band');
+  if (e2 && band.length) {
+    var per = band.map(function (x) { return x.per; });
+    var vals = per.filter(function (v) { return v != null; }).sort(function (a, b) { return a - b; });
+    var med = vals.length ? vals[Math.floor(vals.length / 2)] : null;
+    var c2 = BL.init(e2, 'sd-fin-band'); if (c2) c2.setOption({
+      grid: { left: 40, right: 14, top: 12, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      xAxis: Object.assign({ type: 'category', data: band.map(function (x) { return x.label; }) }, axis),
+      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}x' }, splitLine: { lineStyle: { color: '#141c27' } } },
+      series: [{
+        type: 'line', data: per, symbolSize: 3, lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' },
+        markLine: med ? { silent: true, symbol: 'none', data: [{ yAxis: med, label: { formatter: 'median {c}x', fontSize: 8 }, lineStyle: { color: '#7d8fa8', type: 'dashed' } }] } : undefined
+      }]
+    });
+  }
+
+  var e3 = document.getElementById('sd-fin-bs');
+  if (e3 && hist.length) {
+    var hh = hist.slice(-8);
+    var c3 = BL.init(e3, 'sd-fin-bs'); if (c3) c3.setOption({
+      grid: { left: 48, right: 14, top: 14, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: Object.assign({ type: 'category', data: hh.map(function (x) { return x.period_label; }) }, axis),
+      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: function (v) { return BL.fmtRp(v * 1e6); } }, splitLine: { lineStyle: { color: '#141c27' } } },
+      series: [
+        { name: 'Assets', type: 'line', data: hh.map(function (x) { return x.assets; }), symbolSize: 2, itemStyle: { color: '#3b82f6' } },
+        { name: 'Equity', type: 'line', data: hh.map(function (x) { return x.equity; }), symbolSize: 2, itemStyle: { color: '#22c55e' } },
+        { name: 'Liabilities', type: 'line', data: hh.map(function (x) { return x.liabilities; }), symbolSize: 2, itemStyle: { color: '#ef4444' } }
+      ]
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
