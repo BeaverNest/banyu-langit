@@ -158,6 +158,20 @@ function mrRenderCurve(box, d) {
     h += '<span id="mr-curve-delayed" data-state="by_source" data-lag="' + fr.lag_sessions + '"'
       + ' style="color:var(--am)">sumber terlambat ' + fr.lag_sessions + ' sesi (wajar ≤ '
       + fr.expected_lag_sessions + ')</span>';
+  } else if (!fr || fr.state === 'na') {
+    // Keadaan 'na' = TIDAK DIUKUR: tidak ada tenor yang mendeklarasikan expected_lag_sessions
+    // (`fr.state==='na'`), atau konteks sesi tidak tersedia sama sekali (`fr===null`). Panel dulu
+    // DIAM di keadaan ini, sehingga "tidak diukur" tak bisa dibedakan dari "segar": kalau baris
+    // custom_tickers.expected_lag_sessions untuk ID10Y di-NULL-kan (sengaja / re-seed), proteksi
+    // hilang tanpa satu pun sinyal dan `is_latest=true` kembali jadi satu-satunya penanda (cacat
+    // lama). Karena itu ditulis eksplisit — netral (var(--t3)), BUKAN badge merah: 'na' bukan
+    // tuduhan basi, hanya keterangan bahwa umurnya tidak diukur. Kurva tetap ditampilkan.
+    var naCause = fr ? 'undeclared' : 'no_context';
+    var naTxt = fr
+      ? 'kesegaran kurva tidak diukur (tenor belum dideklarasikan)'
+      : 'kesegaran kurva tidak diukur (konteks sesi tidak tersedia)';
+    h += '<span id="mr-curve-untracked" data-state="na" data-cause="' + naCause + '"'
+      + ' style="color:var(--t3)">' + naTxt + '</span>';
   }
   if (d.anchor_fallback) h += '<span style="color:var(--am)">cakupan tanggal terbaik &lt; ' + (d.min_coverage || 0) + ' tenor</span>';
   h += '</div>';

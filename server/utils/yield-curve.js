@@ -123,6 +123,19 @@ function chooseAnchor(seriesByCode, codes, allowMissing) {
  *
  * Fungsi ini murni: `ctx` = keluaran buildContext (atau tiruannya di harness), tidak menyentuh DB.
  *
+ * KEADAAN YANG SENGAJA TIDAK DITANGANI DI SINI (kartu t_063a1800): kalau SEMUA frontier beku
+ * bersamaan — pipeline data mati total, bukan hanya rail investing — `ref_date` ikut beku, karena
+ * ia DITURUNKAN dari frontier yang sama (`max(custom_ohlc, idx_daily)`). Akibatnya `lag_sesi = 0`
+ * dan state terbaca 'fresh' untuk kurva yang bisa berhenti berhari-hari. Ini BUKAN bisa ditutup
+ * dengan ambang lokal di panel kurva: satu-satunya pembanding lag adalah frontier itu sendiri, jadi
+ * tidak ada angka di DB yang bisa membedakan "sesi hari ini sudah ditarik" dari "tidak ada sesi baru
+ * yang masuk". Menambah pembanding jam-dinding di sini = ambang baru, dan akan memberi positif palsu
+ * pada hari libur bursa / weekend panjang (data sehat, tarikan terakhir memang tua). Kelas sinyal ini
+ * milik tingkat sistem — umur tarikan terakhir + frontier dari `custom_pull_log` (kartu t_57252454),
+ * bukan per panel — dan keputusan produknya diangkat ke Toku di kartu t_243d21ae. Sifat ini juga
+ * BERLAKU untuk semua panel kesegaran lain (aturan bersama series-freshness.js), bukan khusus kurva;
+ * jangan ditambal hanya di sini.
+ *
  * @param {object|null} ctx   konteks kesegaran {ref_date, ref_source, sessions, expected_lag, ...}
  * @param {string|null} asOf  tanggal kurva (YYYY-MM-DD)
  * @param {string[]} codes    kode tenor yang membentuk kurva

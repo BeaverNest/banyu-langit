@@ -309,8 +309,22 @@ function mkSeries(overrides) {
     }) });
     check('na: tanpa expected_lag_sessions -> state na, lag null',
       undecl.freshness.state === 'na' && undecl.freshness.lag_sessions === null, JSON.stringify(undecl.freshness));
+    // 'na' harus BISA DIBEDAKAN dari 'fresh' oleh pembaca panel (kanban t_063a1800): angka lag
+    // tetap null (tidak ada dasar mengukur), tapi sebab dan sesi rujukannya harus terbaca.
+    check('na: declared_codes kosong + threshold_code null (tidak ada dasar ambang)',
+      undecl.freshness.declared_codes.length === 0 && undecl.freshness.threshold_code === null,
+      JSON.stringify(undecl.freshness));
+    check('na: ref_date tetap dilaporkan walau lag tidak diukur',
+      undecl.freshness.ref_date === '2026-10-19', String(undecl.freshness.ref_date));
     check('na: idem bila ctx tidak dikirim (freshness null, bukan "segar")',
       yc.assembleCurve(slowSeries).freshness === null);
+    // (d2) Konteks ada tapi ref_date hilang (kalender gagal dibangun): juga 'na', BUKAN 'fresh'.
+    const noRef = yc.assembleCurve(slowSeries, { freshnessCtx: {
+      ref_date: null, ref_source: null, sessions: [],
+      expected_lag: { ID10Y: { expected_lag_sessions: 0, lag_basis: 'declared' } },
+    } });
+    check("na: ctx tanpa ref_date -> 'na' (jangan terbaca segar karena lag 0)",
+      noRef.freshness.state === 'na' && noRef.freshness.lag_sessions === null, JSON.stringify(noRef.freshness));
 
     // (e) Ambang PALING KETAT yang menang di antara tenor yang dideklarasikan.
     const two = yc.assembleCurve(slowSeries, { freshnessCtx: mkFresh({
@@ -354,6 +368,21 @@ function mkSeries(overrides) {
         mrSrc.indexOf('id="mr-curve-stale"') >= 0 || mrSrc.indexOf("id=\\'mr-curve-stale\\'") >= 0);
       check('panel menyebut ambang expected_lag_sessions', mrSrc.indexOf('expected_lag_sessions') >= 0);
       check('panel membedakan by_source dari excess', mrSrc.indexOf("state === 'by_source'") >= 0);
+      // Keadaan 'na' (kanban t_063a1800): dulu panel DIAM, sehingga "tidak diukur" tak bisa
+      // dibedakan dari "segar". Sekarang harus ada catatan netralnya sendiri.
+      const naAt = mrSrc.indexOf('mr-curve-untracked');
+      const naSpan = naAt < 0 ? '' : mrSrc.slice(naAt, mrSrc.indexOf('</span>', naAt) + 7);
+      check("panel punya catatan sendiri untuk state 'na' (#mr-curve-untracked)", naAt >= 0, String(naAt));
+      check("catatan 'na': data-state=na + teks 'tidak diukur' (panel tidak diam lagi)",
+        /data-state="na"/.test(naSpan) && /naTxt/.test(naSpan) && mrSrc.indexOf('tidak diukur') >= 0, naSpan);
+      check("catatan 'na' netral var(--t3), BUKAN merah/amber",
+        /var\(--t3\)/.test(naSpan) && !/var\(--rd\)/.test(naSpan) && !/var\(--am\)/.test(naSpan), naSpan);
+      check("catatan 'na' juga muncul bila freshness tidak terkirim (!fr)",
+        /!\s*fr\s*\|\|\s*fr\.state === 'na'/.test(mrSrc));
+      // Keadaan 2 (semua frontier beku -> lag 0 -> 'fresh'): sengaja TIDAK ditutup di util kurva.
+      // Kuncinya komentar alasannya, supaya tidak "hilang" tanpa jejak di ronde berikutnya.
+      check('keadaan 2 (semua frontier beku) didokumentasikan di curveFreshness, bukan didiamkan',
+        /SEMUA frontier beku/.test(ycSrc) && ycSrc.indexOf('t_063a1800') >= 0);
     }
   }
 
