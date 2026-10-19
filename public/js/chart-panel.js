@@ -19,6 +19,11 @@
   var _drawStart = null;
   var _chartStyle = localStorage.getItem('chartStyle') || 'candle'; // 'candle' or 'area'
 
+  // Metadata seri custom (name/source/category) — di-cache 5 menit, satu fetch.
+  // /api/idx/adjusted/<code> TIDAK membawa name, padahal catatan rollover (HRCc1) hidup di
+  // kolom `name` custom_tickers; jadi label & catatan diambil dari /api/idx/custom/tickers.
+  var _tickerMeta = null, _tickerMetaAt = 0;
+
   // Colors — TradingView style
   var C = {
     bull: '#26A69A', bear: '#EF5350',
@@ -316,6 +321,106 @@
     });
   }
 
+  // ═══ ATURAN RENDER: GARIS vs CANDLE (bukan hardcode per kode) ═══
+  // Gerbang server (server/routes/idx.js, t_565e76fd): seri yang >=50% barnya beku (o=h=l=c)
+  // atau memuat candle mustahil ditandai ohlc_mode='price_only' dan SELURUH open/high/low
+  // dinull-kan; `close` tetap asli. Diukur 19 Okt 2026 dari GET /api/idx/custom/ohlc/<code>:
+  //   TIN       493 baris, open NULL 493/493 (100,0%)  -> garis
+  //   COAL      776 baris, open NULL 776/776 (100,0%)  -> garis
+  //   NICKEL    759 baris, open NULL   0/759 (  0,0%)  -> candle
+  //   STEEL_HRC 505 baris, open NULL  42/505 (  8,3%)  -> candle (31,3% bar datar < ambang 50%)
+  //   SOYMEAL   511 baris, open NULL   0/511 (  0,0%)  -> candle
+  // Jadi browser TIDAK menghitung flat% sendiri (mahal + bisa beda dengan gerbang server);
+  // aturannya: ohlc_mode==='price_only' ATAU bar ber-OHLC < 50% baris -> garis dari `close`.
+  // ohlc_mode bisa null untuk seri lama yang belum dinilai (NICKEL/CORN/SOYMEAL) -> jatuh ke
+  // hitungan bar ber-OHLC, yang untuk seri itu 100% terisi sehingga tetap candle.
+  function _rowOpen(r){
+    var o=(r.adj_open!==undefined&&r.adj_open!==null)?r.adj_open:r.open_price;
+    return (o===undefined||o===null||o===0)?null:o;
+  }
+  function _seriesMode(rows,ohlcMode){
+    if(ohlcMode==='price_only')return 'line';
+    if(!rows||!rows.length)return 'candle';
+    var withOHLC=0;
+    for(var i=0;i<rows.length;i++){if(_rowOpen(rows[i])!==null)withOHLC++;}
+    return (withOHLC*2<rows.length)?'line':'candle';
+  }
+  // Volume: sumber tanpa volume mengirim NULL (TIN 285/493, COAL 378/776, NICKEL 756/759).
+  // Ambang 50% dipakai supaya sub-chart volume tidak menggambar deret nol palsu; bar NULL
+  // dikirim sebagai null (ECharts tidak menggambar batang), bukan 0.
+  function _seriesHasVolume(rows){
+    if(!rows||!rows.length)return false;
+    var n=0;
+    for(var i=0;i<rows.length;i++){
+      var v=(rows[i].adj_volume!==undefined&&rows[i].adj_volume!==null)?rows[i].adj_volume:rows[i].volume;
+      if(v!==null&&v!==undefined&&v!==0)n++;
+    }
+    return n*2>=rows.length;
+  }
+  // Catatan rollover tidak di-hardcode per kode: dipakai kalau name seri (diisi server) memuat
+  // 'rollover' — saat ini STEEL_HRC ("... kontrak depan berkelanjutan HRCc1 (rollover bulanan)")
+  // dan WTI ("... rollover bulanan").
+  function _rolloverNote(meta){
+    if(!meta||!/rollover/i.test(String(meta.name||'')))return '';
+    return 'seri kontinu (rollover): gap antar-kontrak itu normal, bukan data hilang';
+  }
+
+  // ═══ METADATA SERI & SUMBER ALTERNATIF ═══
+  function _loadTickerMeta(cb){
+    var now=Date.now();
+    if(_tickerMeta&&(now-_tickerMetaAt)<300000)return cb(_tickerMeta);
+    fetch('/api/idx/custom/tickers').then(function(r){return r.json();}).then(function(rows){
+      var m={};(Array.isArray(rows)?rows:[]).forEach(function(t){m[t.code]=t;});
+      _tickerMeta=m;_tickerMetaAt=Date.now();cb(m);
+    }).catch(function(){_tickerMeta={};_tickerMetaAt=Date.now();cb(_tickerMeta);});
+  }
+
+  // Menempelkan mode/volume/meta ke _data sebelum render.
+  function _applySeriesMeta(cb){
+    _loadTickerMeta(function(m){
+      var meta=m[_code]||null;
+      _data.meta=meta||null;
+      _data.mode=_seriesMode(_data.data,_data.ohlcMode);
+      _data.hasVolume=_seriesHasVolume(_data.data);
+      // Bentrok kode: ada saham IDX dan seri custom dengan kode sama (COAL = PT Black Diamond
+      // Resources di idx_daily, 983 baris; seri Newcastle coal ada di custom_ohlc, 776 baris).
+      // /api/idx/adjusted/COAL mengembalikan SAHAM (custom:null), jadi seri komoditasnya
+      // ditawarkan sebagai pilihan eksplisit di price bar — identitas kode tidak ditimpa diam-diam.
+      _data.altCustom=(!_data.custom&&meta&&meta.category==='commodity')?meta:null;
+      cb();
+    });
+  }
+
+  // Baris /api/idx/custom/ohlc/<code> ({trade_date,open,high,low,close,volume,source,ohlc_state})
+  // dipetakan ke bentuk baris yang dipakai _render/_updatePrice. prev_close dipakai tooltip.
+  function _customToRows(arr){
+    var out=[],prev=null;
+    (Array.isArray(arr)?arr:[]).forEach(function(r){
+      var c=(r.close===null||r.close===undefined)?null:r.close;
+      out.push({trade_date:r.trade_date,custom_source:r.source||'',ohlc_state:r.ohlc_state||null,
+        adj_open:r.open,adj_high:r.high,adj_low:r.low,adj_close:c,
+        open_price:r.open,high:r.high,low:r.low,close:c,
+        adj_volume:r.volume,volume:r.volume,prev_close:prev===null?c:prev});
+      if(c!==null)prev=c;
+    });
+    return out;
+  }
+
+  // Muat seri custom_ohlc langsung (dipakai tombol "komoditas" saat kode bentrok dengan saham).
+  function _loadCustomSeries(code){
+    var body=$i('chart-body');
+    if(!_inst)_inst=echarts.init(body,null,{renderer:'canvas'});
+    _inst.showLoading({text:code+' (custom)...',color:'#2196F3',textColor:'#aaa',maskColor:'rgba(0,0,0,0.3)'});
+    fetch('/api/idx/custom/ohlc/'+encodeURIComponent(code)).then(function(r){return r.json();}).then(function(arr){
+      _inst.hideLoading();
+      var rows=_customToRows(arr);
+      if(!rows.length){_inst.clear();_inst.setOption({title:{text:code+': tanpa seri harga',left:'center',top:'center',textStyle:{color:'#666',fontSize:14}}});return;}
+      _code=code;_type='stock';_drawings=[];_drawStart=null;
+      _data={code:code,data:rows,type:'stock',custom:true,ohlcMode:null,altStock:true};
+      _applySeriesMeta(function(){_updatePrice(rows[rows.length-1]);_render();_bindChartClick();});
+    }).catch(function(e){_inst.hideLoading();});
+  }
+
   // ═══ LOAD DATA ═══
   function _loadChart(code,type){
     code=(code||'').toUpperCase().replace('.JK','').trim();if(!code)return;
@@ -340,7 +445,22 @@
         };});
       }
       _data={code:code,data:rows,type:_type};
-      _updatePrice(rows[rows.length-1]); _render(); _bindChartClick();
+      _data.custom=!!d.custom;
+      _data.ohlcMode=d.ohlc_mode||null;
+      // Seri custom dengan <2 observasi (mis. TIN/RUBBER dari snapshot TradingEconomics) tidak
+      // digambar sebagai candle tunggal — labelnya sama dengan market-regime (no_series=true).
+      if(!isIndex&&d.custom===true&&rows.length<2){
+        _inst.clear();
+        _inst.setOption({title:{text:code+': tanpa seri harga ('+rows.length+' observasi)',left:'center',top:'center',textStyle:{color:'#666',fontSize:14}}});
+        var pel=$i('chart-price-info');
+        if(pel)pel.innerHTML='<span class="cp-badge" title="observasi <=1 — sama dengan market-regime no_series=true">TANPA SERI</span>'+
+          '<span style="color:var(--t3);font-size:var(--font-xs)">'+_e((rows[0]&&rows[0].trade_date)||'')+
+          ((rows[0]&&rows[0].close!=null)?' · '+_fmtPrice(rows[0].close):'')+'</span>';
+        _data=null;   // jangan sisakan seri lama: tombol D/W/M tidak boleh me-render data lama
+        return;
+      }
+      _applySeriesMeta(function(){_updatePrice(rows[rows.length-1]);_render();_bindChartClick();});
+
     }).catch(function(e){_inst.hideLoading();_inst.clear();
       _inst.setOption({title:{text:'Error: '+e.message,left:'center',top:'center',textStyle:{color:'#f44',fontSize:12}}});
     });
@@ -352,9 +472,19 @@
     var c=last.adj_close||last.close,p=last.prev_close||0;
     var chg=p?((c-p)/p*100):0,cls=chg>0?'up':chg<0?'dn':'',ar=chg>0?'▲':chg<0?'▼':'';
     var badge=_type==='index'?'<span class="cp-badge">INDEX</span>':'';
+    // GARIS: penanda bahwa seri ini price_only (O/H/L tidak ada di sumber), bukan candle rusak.
+    if(_data&&_data.mode==='line')badge+='<span class="cp-badge" title="OHLC tidak tersedia di sumber (server: ohlc_mode=price_only) — digambar sebagai garis dari close">GARIS</span>';
+    if(_data&&_data.custom)badge+='<span class="cp-badge" title="'+_e((_data.meta&&_data.meta.source)||'custom_ohlc')+'">CUSTOM</span>';
+    // Kode bentrok saham vs komoditas (COAL): pilihan sumber eksplisit, bukan override diam-diam.
+    if(_data&&_data.altCustom)badge+='<button class="cp-badge" id="cp-alt-series" style="cursor:pointer;border:1px solid #2196F3;background:transparent;color:#2196F3" title="'+_e(_data.altCustom.name||'')+'">komoditas ▸</button>';
+    if(_data&&_data.custom&&_data.altStock)badge+='<button class="cp-badge" id="cp-alt-stock" style="cursor:pointer;border:1px solid #888;background:transparent;color:#aaa" title="kembali ke seri saham IDX">◂ saham</button>';
+    var roll=_data?_rolloverNote(_data.meta):'';
     el.innerHTML=badge+'<span class="cp-price">'+c.toLocaleString(undefined,{maximumFractionDigits:0})+'</span>'+
       '<span class="cp-change '+cls+'">'+ar+(chg>0?'+':'')+chg.toFixed(2)+'%</span>'+
-      '<span style="color:var(--t3);font-size:var(--font-xs)">'+(last.trade_date||'')+'</span>';
+      '<span style="color:var(--t3);font-size:var(--font-xs)">'+(last.trade_date||'')+'</span>'+
+      (roll?'<span title="'+_e(roll)+'" style="color:#FFAB00;font-size:var(--font-xs);cursor:help">ⓘ rollover</span>':'');
+    var alt=$i('cp-alt-series');if(alt)alt.addEventListener('click',function(){_loadCustomSeries(_code);});
+    var stk=$i('cp-alt-stock');if(stk)stk.addEventListener('click',function(){_loadChart(_code);});
   }
 
   // ═══ RENDER CHART — TradingView Style ═══
@@ -363,17 +493,33 @@
     var raw=_data.data;
     var data=_tf==='1W'?_resample(raw,'W'):_tf==='1M'?_resample(raw,'M'):raw;
     var isIdx=_data.type==='index';
+    var mode=_data.mode||'candle';              // 'line' | 'candle' (lihat _seriesMode)
+    var hasVol=(_data.hasVolume!==false);       // false = sumber tanpa volume (jangan gambar nol)
     var dates=data.map(function(r){return r.trade_date;});
-    var ohlc=data.map(function(r){return[r.adj_open||r.open_price,r.adj_close||r.close,r.adj_low||r.low,r.adj_high||r.high];});
-    var volumes=data.map(function(r){return r.adj_volume||r.volume||0;});
+    // OHLC boleh null per bar (seri price_only: seluruhnya; STEEL_HRC: 42 bar mustahil).
+    var ohlc=data.map(function(r){
+      var o=(r.adj_open!==undefined&&r.adj_open!==null)?r.adj_open:r.open_price;
+      var hi=(r.adj_high!==undefined&&r.adj_high!==null)?r.adj_high:r.high;
+      var lo=(r.adj_low!==undefined&&r.adj_low!==null)?r.adj_low:r.low;
+      return[o===undefined?null:o,(r.adj_close||r.close),lo===undefined?null:lo,hi===undefined?null:hi];
+    });
+    // volume null dibiarkan null (ECharts tidak menggambar batang) — bukan 0 palsu.
+    var volumes=data.map(function(r){
+      var v=(r.adj_volume!==undefined&&r.adj_volume!==null)?r.adj_volume:r.volume;
+      return(v===undefined||v===null)?null:v;
+    });
     var closes=data.map(function(r){return r.adj_close||r.close;});
     var lastClose=closes.length?closes[closes.length-1]:0;
     var lastOhlc=ohlc.length?ohlc[ohlc.length-1]:null;
-    var lastBull=lastOhlc?(lastOhlc[1]>=lastOhlc[0]):true;
+    // Arah harga: candle pakai close vs open; garis pakai close vs close sebelumnya (O/H/L tidak ada).
+    var lastBull=mode==='line'
+      ?(closes.length>1?closes[closes.length-1]>=closes[closes.length-2]:true)
+      :(lastOhlc&&lastOhlc[0]!==null&&lastOhlc[1]!==null?(lastOhlc[1]>=lastOhlc[0]):true);
+
 
     // Count active sub-charts
     var subs=[];
-    if(_ind.vol.on)subs.push('vol');
+    if(_ind.vol.on&&hasVol)subs.push('vol');
     if(_ind.fflow.on&&!isIdx)subs.push('fflow');
     if(_ind.bidoff.on&&!isIdx)subs.push('bidoff');
     if(_ind.freq.on&&!isIdx)subs.push('freq');
@@ -426,6 +572,24 @@
       statsHtml+=' <span style="color:#888;font-size:10px">Low</span> <span style="color:#EF5350;font-size:11px">'+allL.toLocaleString()+'</span>';
       statsHtml+=' <span style="color:#888;font-size:10px">Avg</span> <span style="color:#FFAB00;font-size:11px">'+allAvg.toLocaleString()+'</span>';
       statsHtml+=' <span style="color:#888;font-size:10px">DD</span> <span style="color:#EF5350;font-size:11px">'+maxDD.toFixed(1)+'%</span>';
+    } else if(mode==='line'){
+      // ── Seri price_only: GARIS dari `close` ──
+      // Candle tidak mungkin digambar: server men-null-kan seluruh open/high/low (TIN 493/493,
+      // COAL 776/776). Garis hanya pilihan render dari close yang sama — data tidak diubah.
+      var markLinesL=[{
+        yAxis:lastClose,
+        lineStyle:{color:lastBull?C.bull:C.bear,width:1,type:'dashed'},
+        label:{formatter:lastClose.toLocaleString(),position:'end',
+          backgroundColor:lastBull?C.bull:C.bear,color:'#fff',fontSize:10,
+          padding:[2,6],borderRadius:2}
+      }];
+      _drawings.forEach(function(d){if(d.type==='hline')markLinesL.push({yAxis:d.value,lineStyle:{color:'#FF9800',width:1,type:'dashed'},label:{formatter:Math.round(d.value).toLocaleString(),position:'end',color:'#FF9800',fontSize:10}});});
+      series.push({type:'line',data:closes,xAxisIndex:0,yAxisIndex:0,name:'Close',z:2,
+        smooth:false,symbol:'none',lineStyle:{width:1.6,color:'#DCE3EA'},
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,
+          colorStops:[{offset:0,color:'rgba(41,98,255,0.28)'},{offset:1,color:'rgba(41,98,255,0.02)'}]}},
+        markLine:{symbol:'none',data:markLinesL,silent:true,animation:false}
+      });
     } else {
       // Candlestick mode (default TradingView style)
       var markLines=[];
@@ -488,7 +652,10 @@
           splitLine:{lineStyle:{color:C.gridSub}},
           axisLabel:{color:C.textDim,fontSize:9,formatter:_fmtAxisVal},axisLine:{show:false}});
         series.push({type:'bar',data:volumes.map(function(v,i){
-          var bull=ohlc[i]?ohlc[i][1]>=ohlc[i][0]:true;
+          // Garis: pembanding arah = close vs close sebelumnya (O/H/L null). Volume null -> null.
+          var bull=mode==='line'
+            ?(i>0?closes[i]>=closes[i-1]:true)
+            :(ohlc[i]&&ohlc[i][0]!==null&&ohlc[i][1]!==null?ohlc[i][1]>=ohlc[i][0]:true);
           return{value:v,itemStyle:{color:bull?C.bullA:C.bearA}};
         }),xAxisIndex:gIdx,yAxisIndex:gIdx,barMaxWidth:8,name:'Vol'});
       }
@@ -602,6 +769,24 @@
         formatter:function(params){
           if(!params||!params.length)return'';
           var d=params[0].axisValue;
+          if(mode==='line'){
+            // Tooltip seri price_only: hanya yang benar-benar ada — close, perubahan vs sesi
+            // sebelumnya, volume (kalau ada). O/H/L tidak ditampilkan karena memang null.
+            var li=params[0].dataIndex;
+            var lcv=closes[li],lpv=li>0?closes[li-1]:lcv;
+            var lchg=lpv?((lcv-lpv)/lpv*100):0;
+            var lcc=lchg>=0?C.bull:C.bear;
+            var lh='<div style="margin-bottom:3px"><b style="font-size:12px">'+_code+'</b> <span style="color:#888;font-size:10px">'+d+'</span></div>';
+            lh+='<div style="font-size:12px;font-weight:700;color:#fff">'+Number(lcv).toLocaleString()+'</div>';
+            lh+='<div style="font-size:10px;color:'+lcc+'">'+(lchg>=0?'+':'')+lchg.toFixed(2)+'% vs sesi sebelumnya</div>';
+            params.forEach(function(p){
+              if(p.seriesName==='Vol'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)lh+='<div style="font-size:10px;color:#888;margin-top:2px">Vol '+_fN(vv)+'</div>';}
+            });
+            lh+='<div style="font-size:10px;color:#666;margin-top:2px">garis: OHLC tidak tersedia di sumber</div>';
+            var lrn=_rolloverNote(_data.meta);
+            if(lrn)lh+='<div style="font-size:10px;color:#FFAB00;margin-top:1px">'+_e(lrn)+'</div>';
+            return lh;
+          }
           if(_chartStyle==='area'){
             // Area mode — show close + drawdown + sub values
             var cp=params.find(function(p){return p.seriesName==='Close';});
@@ -641,6 +826,9 @@
             if(p.seriesName==='Freq'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)h+='<div style="font-size:10px;color:#FF9800;margin-top:2px">Freq '+_fN(vv)+'</div>';}
             if(p.seriesName==='RSI'&&p.data!==null){var rv=typeof p.data==='number'?p.data:0;var rc=rv>=70?C.bear:rv<=30?C.bull:'#AB47BC';h+='<div style="font-size:10px;color:'+rc+';margin-top:2px">'+_e(_ind.rsi.label)+' '+rv.toFixed(1)+'</div>';}
           });
+          // Catatan rollover juga di mode candle (STEEL_HRC tetap candle: 31,3% bar datar).
+          var crn=_rolloverNote(_data.meta);
+          if(crn)h+='<div style="font-size:10px;color:#FFAB00;margin-top:2px">'+_e(crn)+'</div>';
           return h;
         }
       },
@@ -669,7 +857,7 @@
     });
     return Object.keys(g).sort().map(function(k){
       var a=g[k],f=a[0],l=a[a.length-1];
-      return{
+      var o={
         trade_date:l.trade_date,
         adj_open:f.adj_open||f.open_price,adj_close:l.adj_close||l.close,
         adj_high:Math.max.apply(null,a.map(function(r){return r.adj_high||r.high;})),
@@ -685,6 +873,10 @@
         offer_vol:a.reduce(function(s,r){return s+(r.offer_vol||0);},0),
         frequency:a.reduce(function(s,r){return s+(r.frequency||0);},0)
       };
+      // Seri price_only: agregasi OHLC tidak punya bahan (semua null, Math.max(null)=0) ->
+      // jangan bikin high/low palsu 0; cukup close agregat.
+      if(_data&&_data.mode==='line'){o.adj_open=null;o.adj_high=null;o.adj_low=null;o.open_price=null;o.high=null;o.low=null;}
+      return o;
     });
   }
 
