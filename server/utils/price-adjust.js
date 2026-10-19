@@ -36,6 +36,16 @@ function cumulativeFactors(rows, factors, dateKey) {
   return out;
 }
 
+// Faktor untuk SATU bar bertanggal `date` (produk semua event dengan ex_date > date).
+// Identik dengan elemen cumulativeFactors(rows)[i] untuk baris bertanggal `date`,
+// jadi pemakaian di jalur SQL/JS memberi angka yang sama dengan adjustRows().
+function factorAt(factors, date) {
+  let f = 1;
+  if (!factors || !factors.length || !date) return f;
+  for (const e of factors) if (e.ex_date > date) f *= e.factor;
+  return f;
+}
+
 // Terapkan ke field harga (ac/ao/ah/al) dan volume (disesuaikan ke basis terbaru).
 // Volume lama dikali 1/faktor agar setara lembar hari ini (split menambah lembar).
 function adjustRows(rows, factors, opts) {
@@ -60,4 +70,26 @@ function adjustRows(rows, factors, opts) {
   return rows;
 }
 
-module.exports = { loadFactors, cumulativeFactors, adjustRows };
+// Daftarkan `ca_adj(close, code, trade_date)` sebagai fungsi SQL. Satu-satunya
+// cara jalur SQL (AVG/GROUP BY) memakai basis harga yang sama dengan chart,
+// backtest, dan skoring — jangan duplikasi rumus faktor di query lain.
+// Faktor di-cache ttlMs (default 60s) karena ca_factors dibangun ulang oleh
+// scripts/build-ca-factors.js, bukan per-request; panggil nilai balik untuk refresh manual.
+function registerSqlAdjust(db, opts) {
+  const o = opts || {};
+  const ttlMs = Number.isFinite(o.ttlMs) ? o.ttlMs : 60000;
+  let cache = { at: 0, map: null };
+  const fresh = () => {
+    const now = Date.now();
+    if (!cache.map || now - cache.at > ttlMs) cache = { at: now, map: loadFactors(db) };
+    return cache.map;
+  };
+  db.function('ca_adj', function (close, code, date) {
+    if (close == null || !code || !date) return close;
+    const f = factorAt(fresh()[code], date);
+    return f === 1 ? close : close * f;
+  });
+  return fresh;
+}
+
+module.exports = { loadFactors, cumulativeFactors, adjustRows, factorAt, registerSqlAdjust };
