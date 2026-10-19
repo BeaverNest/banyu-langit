@@ -32,6 +32,24 @@
 // Hanya baris 'ok' yang dihitung sebagai tarikan sukses: error/no_data TIDAK memajukan
 // frontier dan TIDAK dihitung dalam deret N — jadi jalur tarik yang rusak tidak pernah
 // menyamar sebagai "sumber berhenti" (dan sebaliknya tidak mematahkan deteksi).
+//
+// BATAS RIWAYAT — jangan dikarang (kanban t_ff3ca45f)
+// Tabel ini baru terisi sejak 2026-10-19T14:23Z (baris pertamanya; kodenya sendiri masuk
+// commit 3d45efe pada 21:31 WIB hari yang sama). Tarikan SEBELUM itu tidak bisa
+// direkonstruksi, dan alasannya bukan "belum sempat":
+//   1. `source_frontier_date` hanya terbaca dari payload PADA SAAT tarikan; payload historis
+//      tidak diarsipkan di mana pun (rail menarik jendela lebar lalu membuang payload-nya).
+//   2. `custom_ohlc` menyimpan HASIL tulisan, bukan apa yang sumber terbitkan pada tanggal X.
+//      Vendor juga menulis ulang bar lama saat roll (WTI 2026-10-15 97,97 -> 96,50), jadi bar
+//      yang hari ini terlihat "terbit 15 Okt" tidak membuktikan frontier tarikan 15 Okt.
+//   3. `custom_ohlc_archive` (penggantian sumber) dan `custom_ohlc_rewrites` (t_7be29126)
+//      mencatat PENULISAN, bukan TARIKAN — tidak ada tanggal tarik di dalamnya.
+// Konsekuensi yang harus ikut dibaca siapa pun memakai angka di bawah: `frontier_lag_*`,
+// `frontier_frozen_pulls`, dan `source_stalled` TIDAK punya riwayat sebelum 2026-10-19; sampel
+// `n` kecil artinya sampel kecil, bukan distribusi. Backfill sintetis DILARANG: angka karangan
+// pada tabel bukti lebih mahal daripada tidak punya angka sama sekali (kontrak t_b234606a).
+// Riwayat tumbuh +16..40 baris per HARI BURSA sejak penjadwal rail dipasang
+// (market-rails/scripts/daily-rails.sh, t_ff3ca45f; hari non-bursa sengaja tidak menulis baris).
 // ═══════════════════════════════════════════════════════════════════════════
 
 const STATUSES = ['ok', 'no_data', 'error'];
