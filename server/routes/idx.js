@@ -4895,8 +4895,18 @@ module.exports = function(upload) {
             const now = cmdRows[0].close;
             const d5 = cmdRows[4] ? cmdRows[4].close : now;
             const d20 = cmdRows[Math.min(19, cmdRows.length - 1)] ? cmdRows[Math.min(19, cmdRows.length - 1)].close : now;
+            // Kesegaran seri di tab Analysis (kanban t_61ccbdbe, rework ronde 3): TIN beku di
+            // 15 Okt sementara sesi sudah jalan. Tanpa field ini, `price` di bawah terbaca
+            // sebagai harga hari ini. Level + persen TETAP dikirim (dipakai hitungan lain),
+            // tapi `stale=true` mewajibkan UI menulis "—" + tanggal — satu aturan dengan
+            // /api/commodities, /api/idx/market-regime, /api/market/overview.
+            const fresh = freshnessUtil.seriesFreshness(freshnessUtil.buildContext(db), freshnessUtil.lastRegularBarDate(cmdRows));
             commodityContext = {
               code: commodityCode, label: commodityLabel, price: now,
+              date: cmdRows[0].trade_date,
+              stale: fresh.stale, stale_date: fresh.last_date,
+              lag_sessions: fresh.lag_sessions, lag_capped: fresh.lag_capped,
+              ref_date: fresh.ref_date,
               chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
               chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0
             };

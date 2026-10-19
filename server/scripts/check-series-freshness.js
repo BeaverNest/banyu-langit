@@ -28,6 +28,10 @@
 //      kalender sesi di sini = sesi IDX dan seri pasar luar memang tertinggal satu sesi
 //      pada Senin (penutupan Jumat) — menandainya basi = positif palsu.
 //      Asersi di sini sengaja TIDAK mengunci tanggal: begitu TIN terbit lagi, hijau.
+//  [6] surface KEEMPAT: /api/idx/stock-detail/<code>.commodity_context (rework ronde 3,
+//      review sena t_b36a83b4). Tab Analysis menampilkan level komoditas emiten tanpa
+//      tanggal; field kesegaran + tanggal wajib ikut, dan untuk seri basi levelnya tetap
+//      dikirim (hitungan lain memakainya) sementara UI menulis "—" + tanggal.
 //
 // Jalankan di dalam container (DB tidak ada di host):
 //   docker exec -w /app banyu-langit node server/scripts/check-series-freshness.js
@@ -123,7 +127,13 @@ function main() {
   const lagSql = db.prepare('SELECT COUNT(DISTINCT trade_date) c FROM idx_daily WHERE trade_date > ? AND trade_date <= ?');
   const lastSql = db.prepare(`SELECT MAX(trade_date) d FROM custom_ohlc WHERE code=? AND ${fresh.REGULAR_SESSION}`);
 
-  return Promise.all([getJson('/api/commodities'), getJson('/api/idx/market-regime'), getJson('/api/market/overview')]).then(([cmd, mr, ov]) => {
+  return Promise.all([
+    getJson('/api/commodities'),
+    getJson('/api/idx/market-regime'),
+    getJson('/api/market/overview'),
+    getJson('/api/idx/stock-detail/TINS'),
+    getJson('/api/idx/stock-detail/ANTM'),
+  ]).then(([cmd, mr, ov, sdTins, sdAntm]) => {
     check('ref_date endpoint = max(frontier rail, idx_daily)', cmd.freshness && cmd.freshness.ref_date === ref,
       `endpoint=${cmd.freshness && cmd.freshness.ref_date} sql=${ref} rail=${railMax} idx=${idxMax}`);
 
@@ -229,7 +239,44 @@ function main() {
       ovCmpSet.size > 0 && disagree.length === 0,
       `irisan=${ovCmpSet.size} beda=${disagree.join(', ') || '-'}`);
 
-    // ── ringkasan ─────────────────────────────────────────────────────────
+    // ── [6] Stock detail → Analysis: commodity_context ikut bertanda ──────
+    // Rekor ronde 3 (review sena t_b36a83b4): `commodity_context` dulu mengirim
+    // {price, chg_5d, chg_20d} tanpa `date`/`stale` untuk TINS → level bar 15 Okt
+    // terbaca sebagai harga hari ini di tab Analysis. Asersi di sini TIDAK mengunci
+    // tanggal: yang diuji hubungan stale == (lag DB >= ambang) terhadap SQL independen.
+    console.log('\n[6] /api/idx/stock-detail — commodity_context bertanda basi per seri');
+    const sdOf = d => (d && d.commodity_context) || null;
+    const tins = sdOf(sdTins), antm = sdOf(sdAntm);
+    check('TINS: commodity_context ada (emiten ber-komoditas)', !!tins, JSON.stringify(Object.keys(sdTins || {}).slice(0, 6)));
+    check('TINS: commodity_context membawa date + field kesegaran lengkap',
+      !!tins && 'date' in tins && 'stale' in tins && 'stale_date' in tins && 'lag_sessions' in tins && 'ref_date' in tins,
+      JSON.stringify(tins || null));
+    if (tins) {
+      const expectLast = (lastSql.get(tins.code) || {}).d || '';
+      const expectLag = Number((lagSql.get(expectLast, ref) || {}).c);
+      check('TINS: date & stale_date = MAX(custom_ohlc sesi reguler) dari DB, bukan tanggal karangan',
+        String(tins.date) === String(expectLast) && String(tins.stale_date) === String(expectLast),
+        `endpoint date=${tins.date} stale_date=${tins.stale_date} sql=${expectLast}`);
+      check('TINS: lag_sessions = COUNT(DISTINCT sesi) SQL independen', Number(tins.lag_sessions) === expectLag,
+        `endpoint=${tins.lag_sessions} sql=${expectLag}`);
+      check('TINS: stale == (lag DB >= ambang)', Boolean(tins.stale) === (expectLag >= fresh.STALE_LAG_SESSIONS),
+        `stale=${tins.stale} lag=${expectLag}`);
+      check('TINS: level bar lama tetap dikirim (chart/hitungan lain memakainya)',
+        typeof tins.price === 'number' && tins.price > 0, JSON.stringify(tins && tins.price));
+      check('TINS: ref_date sama dengan panel lain (satu aturan)',
+        tins.ref_date === ref && tins.ref_date === (cmd.freshness && cmd.freshness.ref_date),
+        `sd=${tins.ref_date} cmd=${cmd.freshness && cmd.freshness.ref_date} sql=${ref}`);
+      // Dua surface tidak boleh berbeda pendapat untuk seri yang sama.
+      const cmdSame = cmdSeries.find(s => s.code === tins.code);
+      check('TINS: stock-detail & /api/commodities sepakat soal status basi seri yang sama',
+        !cmdSame || Boolean(cmdSame.stale) === Boolean(tins.stale),
+        `sd stale=${tins.stale} cmd stale=${cmdSame && cmdSame.stale}`);
+    }
+    check('ANTM (seri nikel yang jalan): stale false, lag 0 — penanda tidak menular ke seri segar',
+      !!antm && antm.stale === false && Number(antm.lag_sessions) === 0,
+      JSON.stringify(antm || null));
+
+
     console.log(`\n${pass} lulus, ${failures.length} gagal`);
     if (failures.length) { failures.forEach(f => console.log(' - ' + f)); process.exitCode = 1; }
     db.close();

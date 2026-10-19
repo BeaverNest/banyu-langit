@@ -1272,10 +1272,19 @@ function sdCommentary(d) {
     h += '<p style="margin:0 0 8px"><b>Market:</b> IHSG ' + (mr.level||0).toLocaleString() + ' — ' + regL + ' (20D: ' + (mr.chg_20d > 0 ? '+' : '') + mr.chg_20d + '%).</p>';
   }
 
-  // Commodity
+  // Commodity — seri basi tidak boleh terbaca sebagai harga hari ini (t_61ccbdbe).
   var cmd = d.commodity_context;
   if (cmd) {
-    h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' ' + (cmd.price||0).toLocaleString() + ', 5D: ' + (cmd.chg_5d > 0 ? '+' : '') + cmd.chg_5d + '%, 20D: ' + (cmd.chg_20d > 0 ? '+' : '') + cmd.chg_20d + '%.</p>';
+    var pctS = function(v){ v = v || 0; return (v > 0 ? '+' : '') + v + '%'; };
+    if (cmd.stale === true) {
+      var cmdAsOf = shortDay(cmd.stale_date);
+      h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' <b style="color:var(--t3)">—</b>'
+        + ' <span style="color:var(--t3)" title="level bar ' + esc(cmdAsOf) + ': ' + (cmd.price||0).toLocaleString() + ' — tidak dipakai sebagai harga terkini">'
+        + '⏸ basi · terakhir ' + cmdAsOf + ' · ' + (cmd.lag_sessions == null ? '?' : cmd.lag_sessions) + ' sesi</span>'
+        + ' (5D: ' + pctS(cmd.chg_5d) + ', 20D: ' + pctS(cmd.chg_20d) + ' s/d ' + cmdAsOf + ').</p>';
+    } else {
+      h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' ' + (cmd.price||0).toLocaleString() + ', 5D: ' + (cmd.chg_5d > 0 ? '+' : '') + cmd.chg_5d + '%, 20D: ' + (cmd.chg_20d > 0 ? '+' : '') + cmd.chg_20d + '%.</p>';
+    }
   }
 
   h += '</div></div>';
