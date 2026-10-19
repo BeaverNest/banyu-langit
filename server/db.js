@@ -226,6 +226,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cohlc_code ON custom_ohlc(code);
   CREATE INDEX IF NOT EXISTS idx_cohlc_date ON custom_ohlc(trade_date);
 
+  -- Arsip baris custom_ohlc yang sumbernya DIGANTI — disalin, bukan dihapus.
+  -- Alasan: baris Yahoo/TE tetap berguna sebagai pembanding setelah seri pindah agregator,
+  -- dan "jangan hapus seri lama" hanya bisa dijanjikan kalau barisnya benar-benar ada.
+  CREATE TABLE IF NOT EXISTS custom_ohlc_archive (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    open REAL, high REAL, low REAL, close REAL, volume REAL,
+    source TEXT,
+    archived_at TEXT DEFAULT (datetime('now')),
+    reason TEXT DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_cohlc_arc_code ON custom_ohlc_archive(code);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_cohlc_arc_row ON custom_ohlc_archive(code, trade_date, source);
+
   -- Jejak PENULISAN ULANG bar yang SUDAH tersimpan (kanban t_7be29126).
   -- Sebelum tabel ini, re-pull seri pin berkelanjutan (investing 8849 / 961730 / 992745) menimpa
   -- bar lama di custom_ohlc tanpa bekas sama sekali: UNIQUE(trade_date, code) + ON CONFLICT DO
@@ -800,6 +815,25 @@ try {
   if (!ctCols.includes('role')) db.exec("ALTER TABLE custom_tickers ADD COLUMN role TEXT DEFAULT ''");
   if (!ctCols.includes('linked_sector')) db.exec("ALTER TABLE custom_tickers ADD COLUMN linked_sector TEXT DEFAULT ''");
 } catch (e) { console.error('Migration custom_tickers:', e.message); }
+
+// Auto-migrate custom_ohlc: label sumber per baris.
+// Tanpa DEFAULT: baris lama sengaja tetap NULL supaya "belum berlabel" bisa dibedakan
+// dari "berlabel yahoo" (backfill-nya dari custom_tickers.source, sekali, terukur).
+try {
+  const coCols = db.prepare("PRAGMA table_info(custom_ohlc)").all().map(c => c.name);
+  if (!coCols.includes('source')) db.exec("ALTER TABLE custom_ohlc ADD COLUMN source TEXT");
+  // ohlc_state = ALASAN per bar (kanban t_565e76fd). Tanpa DEFAULT: baris lama tetap NULL
+  // ("belum dinilai"), supaya baris yang sengaja tidak dinilai bisa dibedakan dari 'ok'.
+  // Nilai: ok | source_flat | invariant_fail | missing_source | dropped_price_only.
+  if (!coCols.includes('ohlc_state')) db.exec("ALTER TABLE custom_ohlc ADD COLUMN ohlc_state TEXT");
+} catch (e) { console.error('Migration:', e.message); }
+
+// ohlc_mode = mode render seri (candle | price_only) — hasil gerbang per-seri,
+// dibaca UI supaya garis/candle tidak ditebak per halaman. NULL = belum dinilai.
+try {
+  const ctCols2 = db.prepare("PRAGMA table_info(custom_tickers)").all().map(c => c.name);
+  if (!ctCols2.includes('ohlc_mode')) db.exec("ALTER TABLE custom_tickers ADD COLUMN ohlc_mode TEXT");
+} catch (e) { console.error('Migration custom_tickers.ohlc_mode:', e.message); }
 
 // ═══ Helper functions ═══
 function latestSnap() {

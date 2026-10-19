@@ -691,6 +691,10 @@ module.exports = function(upload) {
              FROM custom_ohlc WHERE code=? ORDER BY trade_date`
           ).all(code);
           if (custom.length) {
+            // ohlc_mode seri (t_565e76fd) ikut dikirim: 'price_only' = O/H/L NULL memang
+            // disengaja (seri beku/mustahil di sumber) -> gambar garis, jangan candle kosong.
+            let mode = null;
+            try { mode = (db.prepare('SELECT ohlc_mode FROM custom_tickers WHERE code=?').get(code) || {}).ohlc_mode || null; } catch (e3) {}
             // Add prev_close
             const data = custom.map((r, i) => {
               const pc = i > 0 ? custom[i-1].close : r.open_price || r.close;
@@ -698,7 +702,7 @@ module.exports = function(upload) {
                 adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
                 adj_volume: r.volume, cum_factor: 1, _custom: true };
             });
-            return res.json({ code, data, actions: [], custom: true });
+            return res.json({ code, data, actions: [], custom: true, ohlc_mode: mode });
           }
         } catch(e2) { /* custom table might not exist yet */ }
         return res.json({ code, data: [], actions: [] });
@@ -2867,6 +2871,142 @@ module.exports = function(upload) {
     ).run(code, name, category, source, cnt, dr.f, dr.l);
     return { total_rows: cnt, date_range: { first: dr.f, last: dr.l } };
   }
+
+  // ─── Gerbang integritas OHLC (kanban t_565e76fd; keputusan gerbang = t_6348afbd §3) ───
+  // PER-BAR (semua seri): bar yang MUSTAHIL — invarian low <= min(o,c) <= max(o,c) <= high
+  // dilanggar — tidak bisa digambar sebagai candle. Yang disimpan cuma `close`; O/H/L jadi NULL.
+  // `high = max(o,c)` TIDAK diisi: itu mengarang angka yang tidak pernah dikutip sumber
+  // (aturan t_2bda3126 R1). Ditaruh di jalur tulis, bukan di satu rail, supaya berlaku juga
+  // untuk penulis lain (yahoo/`fetch-all`, TE, CSV) — bukan hanya investing_push_bl.py.
+  // PER-SERI: >=50% bar beku (o=h=l=c) ATAU mustahil -> price_only: SELURUH O/H/L seri NULL,
+  // chart = garis. Ambang 50% diputuskan t_6348afbd §3; di angka nyata HRC 39,6% tetap candle.
+  //
+  // ohlc_state menyimpan ALASAN per bar supaya NULL tidak menghapus perbedaan
+  // "sumber sendiri bilang beku" vs "kita yang buang":
+  //   ok                 sumber beri O/H/L yang lolos invarian
+  //   source_flat        sumber sendiri kirim o=h=l=c (bukan buatan kita)
+  //   invariant_fail     O/H/L ada tapi mustahil -> dibuang
+  //   missing_source     sumber tidak beri O/H/L (nilai terisi legacy fill_missing=true)
+  //   dropped_price_only bar sah, tapi serinya price_only -> dibuang demi konsistensi seri
+  const OHLC_PRICE_ONLY_PCT = 50;
+  const OHLC_MODES = ['candle', 'price_only'];
+  const OHLC_STATES = ['ok', 'source_flat', 'invariant_fail', 'missing_source', 'dropped_price_only'];
+
+  const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+
+  /** Gerbang per-bar: nilai yang boleh disimpan + alasannya. */
+  function gateBar(r, fillMissing) {
+    const c = numOrNull(r.close);
+    const o = numOrNull(r.open), h = numOrNull(r.high), l = numOrNull(r.low);
+    const vol = numOrNull(r.volume);
+    const volOut = vol !== null ? vol : (fillMissing ? 0 : null);
+    if (o === null || h === null || l === null) {
+      // Sumber tidak menawarkan candle tiga kaki. Perilaku lama (fill_missing) DIPERTAHANKAN
+      // apa adanya untuk pemanggil legacy (fred_push_bl.py kirim date+close saja), tapi
+      // sekarang ada jejaknya: ohlc_state='missing_source'.
+      return { open: o !== null ? o : (fillMissing ? c : null),
+               high: h !== null ? h : (fillMissing ? c : null),
+               low: l !== null ? l : (fillMissing ? c : null),
+               close: c, volume: volOut, ohlc_state: 'missing_source' };
+    }
+    if (h < l || h < Math.max(o, c) || l > Math.min(o, c)) {
+      return { open: null, high: null, low: null, close: c, volume: volOut,
+               ohlc_state: 'invariant_fail' };
+    }
+    const flat = (o === h && h === l && l === c);
+    return { open: o, high: h, low: l, close: c, volume: volOut,
+             ohlc_state: flat ? 'source_flat' : 'ok' };
+  }
+
+  /** Gerbang per-seri dari payload. null = payload tidak menilai (tanpa O/H/L sama sekali). */
+  function seriesVerdict(gated) {
+    const seen = gated.filter(g => g.ohlc_state !== 'missing_source');
+    if (!seen.length) return null;
+    const flatOrFail = seen.filter(g => g.ohlc_state !== 'ok').length;
+    return (flatOrFail * 100 / seen.length) >= OHLC_PRICE_ONLY_PCT ? 'price_only' : 'candle';
+  }
+
+  function getTickerMode(code) {
+    try {
+      const r = db.prepare('SELECT ohlc_mode FROM custom_tickers WHERE code=?').get(code);
+      return r ? (r.ohlc_mode || null) : null;
+    } catch (e) { return null; }
+  }
+
+  /** price_only adalah pernyataan TENTANG SERI, bukan tentang satu potongan jendela:
+   *  bar lama di luar jendela payload ikut dinull-kan, kalau tidak chart masih bercampur
+   *  candle (bar lama) + garis (bar baru). Idempotent: jalan kedua = 0 baris berubah. */
+  function normalizePriceOnly(code) {
+    // Turun ke price_only itu DESTRUKTIF: O/H/L seri dibuang. Baris yang masih punya O/H/L
+    // disalin dulu ke custom_ohlc_archive (reason 'price_only downgrade') — konvensi yang sama
+    // dengan /custom/replace ("arsip dulu, baru timpa"), supaya pembuangan punya jejak dan
+    // NULL tidak berarti "hilang tanpa bukti". Idempotent: jalan kedua = 0 baris tersalin.
+    const doomed = db.prepare(
+      `SELECT trade_date, open, high, low, close, volume, COALESCE(source,'') AS source
+       FROM custom_ohlc WHERE code=? AND (open IS NOT NULL OR high IS NOT NULL OR low IS NOT NULL)`).all(code);
+    if (doomed.length) {
+      const ins = db.prepare(
+        `INSERT OR REPLACE INTO custom_ohlc_archive
+         (code, trade_date, open, high, low, close, volume, source, archived_at, reason)
+         VALUES (?,?,?,?,?,?,?,?, datetime('now'), ?)`);
+      for (const r of doomed) {
+        ins.run(code, r.trade_date, r.open, r.high, r.low, r.close, r.volume,
+                r.source || 'unlabeled', 'price_only downgrade (t_565e76fd)');
+      }
+    }
+    const r = db.prepare(
+      `UPDATE custom_ohlc SET open=NULL, high=NULL, low=NULL,
+         ohlc_state=CASE WHEN ohlc_state='ok' THEN 'dropped_price_only' ELSE ohlc_state END
+       WHERE code=? AND (open IS NOT NULL OR high IS NOT NULL OR low IS NOT NULL)`).run(code);
+    return r.changes;
+  }
+
+  /** Label state yang DISIMPAN untuk satu bar di jalur tulis.
+   *  Kenapa bukan langsung `g.ohlc_state`: untuk seri price_only, rail BERHENTI mengirim O/H/L
+   *  (keputusan t_6348afbd §3), jadi gateBar cuma bisa bilang "tidak ada O/H/L" = missing_source —
+   *  padahal sumbernya PUNYA O/H/L dan kita yang membuangnya. Kalau labelnya dibiarkan
+   *  missing_source, kolom penanda malah menghapus perbedaan yang mau dijaga
+   *  (DoD t_565e76fd no.3: "sumber bilang beku" vs "kita buang").
+   *  Bukti "kita yang buang" = pemanggil MENYATAKAN ohlc_mode=price_only di payload. Kalau
+   *  price_only cuma hasil hitungan server, payload memang tak pernah punya O/H/L sejak awal
+   *  (mis. fred_push_bl.py kirim date+close saja) -> missing_source tetap benar. */
+  function writeState(g, priceOnly, declaredPriceOnly) {
+    if (!priceOnly) return g.ohlc_state;
+    if (g.ohlc_state === 'ok') return 'dropped_price_only';
+    if (g.ohlc_state === 'missing_source' && declaredPriceOnly) return 'dropped_price_only';
+    return g.ohlc_state;
+  }
+
+  /** Statement upsert yang MEMAKAI gerbang per-bar, plus penulisan satu bar lewat gerbang itu.
+   *  Dipakai penulis NON-rail (fetch-all / fetch-eod / sync-stale / unggah CSV). Aturan
+   *  "bar mustahil tidak pernah disimpan sebagai candle" harus berlaku untuk SEMUA seri
+   *  (keputusan t_6348afbd §3) — kalau hanya /custom/upsert & /custom/replace yang memakainya,
+   *  seri Yahoo/CSV tetap menyajikan candle mustahil karena ditulis jalur lain.
+   *  fill_missing=false: O/H/L yang tidak dikirim sumber disimpan NULL, bukan diisi close. */
+  function gatedUpsertStmt() {
+    return db.prepare(
+      `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume, source, ohlc_state)
+       VALUES(?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(trade_date, code) DO UPDATE SET
+       open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+       volume=excluded.volume, source=excluded.source, ohlc_state=excluded.ohlc_state`);
+  }
+
+  /** Tulis satu bar dari penulis non-rail lewat gerbang per-bar yang sama. Mengembalikan ohlc_state. */
+  function writeBarGated(up, code, row, source) {
+    const g = gateBar(row, false);
+    up.run(row.date, code, g.open, g.high, g.low, g.close, g.volume, source, g.ohlc_state);
+    return g.ohlc_state;
+  }
+
+  function stateCounts(code) {
+    try {
+      return db.prepare(
+        `SELECT COALESCE(ohlc_state,'<null>') AS state, COUNT(*) AS n
+         FROM custom_ohlc WHERE code=? GROUP BY COALESCE(ohlc_state,'<null>')`).all(code);
+    } catch (e) { return []; }
+  }
+
   // ─── Jejak PENULISAN ULANG bar yang sudah tersimpan (kanban t_7be29126) ───
   // Seri pin berkelanjutan (investing 8849 CL · 961730 HRCc1 · 992745 FCPOc1) BUKAN harga satu
   // kontrak sepanjang sejarah: ketika pin pindah bulan, vendor menulis ULANG bar yang sudah terbit.
@@ -2992,29 +3132,47 @@ module.exports = function(upload) {
       // dulu nilai kosong diisi `close` sehingga volume tersimpan = harga (285/493 baris di TIN_LME)
       // dan tidak bisa dibedakan dari volume asli. Lihat t_2bda3126 (review sena) R1/R2.
       const fillMissing = req.body.fill_missing !== false;
+      // Pemanggil boleh MENYATAKAN mode seri (rail sudah tahu serinya price_only dan berhenti
+      // mengirim O/H/L). Kalau tidak dikirim, gerbang per-seri menghitungnya dari payload ini.
+      const explicitMode = OHLC_MODES.includes(String(req.body.ohlc_mode || '')) ? String(req.body.ohlc_mode) : null;
       if (!code) return res.status(400).json({ error: 'code required' });
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
+      const gated = rows.filter(r => r && r.date && r.close > 0).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const verdict = explicitMode || seriesVerdict(gated);
+      const priceOnly = verdict === 'price_only';
+      // Pemanggil menyatakan sendiri serinya price_only -> ketiadaan O/H/L di payload berarti
+      // "kita yang buang", bukan "sumber tidak punya" (lihat writeState).
+      const declaredPriceOnly = explicitMode === 'price_only';
+
 
       let written = 0;
+      let normalized = 0;
       let rewrites = { count: 0, max_age_days: null };
+      const droppedByState = {};
       db.transaction(() => {
+        // Seri price_only: arsipkan + null-kan O/H/L LAMA lebih dulu, SEBELUM payload menimpa
+        // baris yang sama (payload price_only menulis NULL) — kalau urutannya dibalik, nilai
+        // yang dibuang hilang tanpa jejak (lihat normalizePriceOnly).
+        if (priceOnly) normalized = normalizePriceOnly(code);
         // HARUS sebelum loop upsert: pembandingnya adalah nilai yang SEKARANG tersimpan. Kalau
         // dipanggil sesudahnya, yang dibandingkan adalah nilai baru dengan nilai baru (= tidak
         // pernah ada penulisan ulang yang tercatat). Satu transaksi dengan penulisannya, jadi
         // catatan dan perubahan baris batal bersama kalau ada error.
         rewrites = logRewrites(code, gated, source, priceOnly, 'POST /custom/upsert');
         const up = db.prepare(
-          `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume) VALUES(?,?,?,?,?,?,?)
+          `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume, source, ohlc_state)
+           VALUES(?,?,?,?,?,?,?,?,?)
            ON CONFLICT(trade_date, code) DO UPDATE SET
-           open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`);
-        for (const r of rows) {
-          if (!r || !r.date || !(r.close > 0)) continue;
-          up.run(r.date, code,
-            r.open ?? (fillMissing ? r.close : null),
-            r.high ?? (fillMissing ? r.close : null),
-            r.low ?? (fillMissing ? r.close : null),
-            r.close,
-            r.volume ?? (fillMissing ? 0 : null));
+           open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+           volume=excluded.volume, source=excluded.source, ohlc_state=excluded.ohlc_state`);
+        for (const g of gated) {
+          const st = writeState(g, priceOnly, declaredPriceOnly);
+          droppedByState[st] = (droppedByState[st] || 0) + 1;
+          up.run(g.date, code,
+            priceOnly ? null : g.open,
+            priceOnly ? null : g.high,
+            priceOnly ? null : g.low,
+            g.close, g.volume, source, st);
           written++;
         }
       })();
@@ -3035,9 +3193,13 @@ module.exports = function(upload) {
                       AND excluded.name<>excluded.code THEN excluded.name ELSE name END,
            updated_at=datetime('now')`
         ).run(code, name, category, source, cnt, dr.f, dr.l);
+        if (verdict) db.prepare('UPDATE custom_tickers SET ohlc_mode=? WHERE code=?').run(verdict, code);
       }
-      res.json({ ok: true, code, written, total_rows: cnt, fill_missing: fillMissing,
+      res.json({ ok: true, code, source, written,
                  rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
+                 total_rows: cnt, fill_missing: fillMissing,
+                 ohlc_mode: verdict || getTickerMode(code), price_only: priceOnly,
+                 nulled_ohlc_rows: normalized, bar_states: droppedByState, states_in_table: stateCounts(code),
                  date_range: { first: dr.f, last: dr.l } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -3058,14 +3220,13 @@ module.exports = function(upload) {
         try {
           const r = await eodFetcher.fetchEOD(t.code, t.category, process.env.ALPHA_VANTAGE_KEY || '', false);
           let written = 0;
+          const barStates = {};
           db.transaction(() => {
-            const up = db.prepare(
-              `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume) VALUES(?,?,?,?,?,?,?)
-               ON CONFLICT(trade_date, code) DO UPDATE SET
-               open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`);
+            const up = gatedUpsertStmt();
             for (const row of (r.rows || [])) {
               if (!row.date || !row.close) continue;
-              up.run(row.date, t.code, row.open, row.high, row.low, row.close, row.volume);
+              const st = writeBarGated(up, t.code, row, r.source || 'yahoo');
+              barStates[st] = (barStates[st] || 0) + 1;
               written++;
             }
           })();
@@ -3073,7 +3234,7 @@ module.exports = function(upload) {
           const cnt = db.prepare('SELECT COUNT(*) c FROM custom_ohlc WHERE code=?').get(t.code).c;
           db.prepare(`UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime('now') WHERE code=?`)
             .run(cnt, dr.f, dr.l, t.code);
-          detail.push({ code: t.code, ok: true, written, last: dr.l });
+          detail.push({ code: t.code, ok: true, written, last: dr.l, bar_states: barStates });
         } catch (e) {
           detail.push({ code: t.code, ok: false, error: e.message });
         }
@@ -3103,18 +3264,15 @@ module.exports = function(upload) {
       const rows = result.rows;
       if (!rows.length) return res.json({ ok: true, code, inserted: 0, updated: 0, message: 'No data returned' });
 
-      const upsert = db.prepare(
-        `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
-         VALUES(?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(trade_date, code) DO UPDATE SET
-         open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
-      );
+      const upsert = gatedUpsertStmt();
+      const barStates = {};
       let inserted = 0, updated = 0;
       db.transaction(() => {
         for (const r of rows) {
           if (!r.date || !r.close) continue;
           const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, code);
-          upsert.run(r.date, code, r.open, r.high, r.low, r.close, r.volume);
+          const st = writeBarGated(upsert, code, r, result.source || 'external');
+          barStates[st] = (barStates[st] || 0) + 1;
           if (existing) updated++; else inserted++;
         }
       })();
@@ -3131,6 +3289,7 @@ module.exports = function(upload) {
       ).run(code, name, category || 'custom', result.source, totalRows, dateRange?.first || '', dateRange?.last || '');
 
       res.json({ ok: true, code, source: result.source, inserted, updated, total_rows: totalRows,
+        bar_states: barStates,
         date_range: { first: dateRange?.first, last: dateRange?.last } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -3157,17 +3316,14 @@ module.exports = function(upload) {
 
           const data = await eodFetcher.fetchEOD(ticker.code, ticker.category, apiKey, false);
           let inserted = 0, updated = 0;
-          const upsert = db.prepare(
-            `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
-             VALUES(?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(trade_date, code) DO UPDATE SET
-             open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
-          );
+          const upsert = gatedUpsertStmt();
+          const barStates = {};
           db.transaction(() => {
             for (const r of data.rows) {
               if (!r.date || !r.close) continue;
               const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, ticker.code);
-              upsert.run(r.date, ticker.code, r.open, r.high, r.low, r.close, r.volume);
+              const st = writeBarGated(upsert, ticker.code, r, data.source || 'external');
+              barStates[st] = (barStates[st] || 0) + 1;
               if (existing) updated++; else inserted++;
             }
           })();
@@ -3176,7 +3332,7 @@ module.exports = function(upload) {
           const dateRange = db.prepare('SELECT MIN(trade_date) as first, MAX(trade_date) as last FROM custom_ohlc WHERE code=?').get(ticker.code);
           db.prepare('UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime(\'now\') WHERE code=?')
             .run(totalRows, dateRange?.first || '', dateRange?.last || '', ticker.code);
-          results.push({ code: ticker.code, inserted, updated, source: data.source });
+          results.push({ code: ticker.code, inserted, updated, source: data.source, bar_states: barStates });
 
           // Rate limit: 2s between requests
           await new Promise(r => setTimeout(r, 2000));
@@ -3336,19 +3492,17 @@ module.exports = function(upload) {
       // Sort by date ascending
       rows.sort((a, b) => a.date.localeCompare(b.date));
 
-      // Upsert into custom_ohlc
-      const upsert = db.prepare(
-        `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume)
-         VALUES(?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(trade_date, code) DO UPDATE SET
-         open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`
-      );
+      // Upsert into custom_ohlc — baris CSV berlabel 'csv' (satu seri satu sumber: kalau seri ini
+      // nanti diisi rail lain, /custom/upsert menolak tanpa arsip, bukan mencampur diam-diam).
+      const upsert = gatedUpsertStmt();
+      const barStates = {};
 
       let inserted = 0, updated = 0;
       db.transaction(() => {
         for (const r of rows) {
           const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, code);
-          upsert.run(r.date, code, r.open, r.high, r.low, r.close, r.volume);
+          const st = writeBarGated(upsert, code, r, 'csv');
+          barStates[st] = (barStates[st] || 0) + 1;
           if (existing) updated++; else inserted++;
         }
       })();
@@ -3372,6 +3526,7 @@ module.exports = function(upload) {
         ok: true, code, name, category,
         format: colMap ? 'custom_mapped' : 'auto_detect',
         inserted, updated,
+        bar_states: barStates,
         total_rows: totalRows,
         date_range: { first: dateRange?.first, last: dateRange?.last }
       });
@@ -3539,7 +3694,7 @@ module.exports = function(upload) {
       // ── Level 2: Commodity Cycle (custom_tickers with category=commodity) ──
       let commodities = [];
       try {
-        const cmdTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
+        const cmdTickers = db.prepare("SELECT code, name, category, linked_sector, ohlc_mode FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
         commodities = cmdTickers.map(t => {
           const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
           // no_series: tidak ada seri harga (≤1 observasi). Dipakai UI untuk menulis
@@ -3552,6 +3707,10 @@ module.exports = function(upload) {
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
             no_series: rows.length < 2,
+            // ohlc_mode: hasil gerbang per-seri (t_565e76fd). 'price_only' = O/H/L seri
+            // sengaja NULL (>=50% bar beku/mustahil di sumber) -> UI gambar GARIS, bukan candle.
+            // null = belum dinilai (baris lama) -> UI boleh jatuh ke aturan lamanya.
+            ohlc_mode: t.ohlc_mode || null,
             date: rows[0].trade_date,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
