@@ -801,7 +801,20 @@ function sdTabFlow(d) {
   var n20 = netN(20), v20 = valN(20);
   var intens = v20 > 0 ? n20 / v20 * 100 : null;
 
-  h += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px">';
+  function avgN(n, fn) {
+    var rows = ch.slice(-n), s = 0, c = 0;
+    rows.forEach(function (r) { var v = fn(r); if (v != null && isFinite(v)) { s += v; c++; } });
+    return c ? s / c : null;
+  }
+  var avgTrade = avgN(20, function (r) { return (r.value && r.frequency) ? r.value / r.frequency : null; });
+  var turnover = avgN(20, function (r) { return (r.tradeable > 0) ? (r.volume || 0) / r.tradeable * 100 : null; });
+  var forPart = avgN(20, function (r) {
+    if (!r.value) return null;
+    var fv = ((r.fbuy || 0) + (r.fsell || 0)) * (r.close || 0);
+    return fv / (2 * r.value) * 100;
+  });
+
+  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">';
   [['5D', netN(5)], ['10D', netN(10)], ['20D', netN(20)], ['60D', netN(60)]].forEach(function (x) {
     var c = x[1] >= 0 ? 'var(--gn)' : 'var(--rd)';
     h += '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
@@ -809,10 +822,17 @@ function sdTabFlow(d) {
     h += '<div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + c + '">' + fmtRp(x[1]) + '</div></div>';
   });
   var ic = intens == null ? 'var(--t3)' : intens >= 0 ? 'var(--gn)' : 'var(--rd)';
-  h += '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
-  h += '<div style="font-size:9px;color:var(--t3)">INTENSITAS 20D</div>';
-  h += '<div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + ic + '">' + (intens == null ? '—' : (intens >= 0 ? '+' : '') + intens.toFixed(2) + '%') + '</div>';
-  h += '<div style="font-size:8px;color:var(--t3)">net asing ÷ nilai transaksi</div></div>';
+  function kpi(lbl, val, sub, col) {
+    var o = '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
+    o += '<div style="font-size:9px;color:var(--t3)">' + lbl + '</div>';
+    o += '<div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + (col || 'var(--t1)') + '">' + val + '</div>';
+    if (sub) o += '<div style="font-size:8px;color:var(--t3)">' + sub + '</div>';
+    return o + '</div>';
+  }
+  h += kpi('INTENSITAS 20D', intens == null ? '—' : (intens >= 0 ? '+' : '') + intens.toFixed(2) + '%', 'net asing ÷ nilai', ic);
+  h += kpi('AVG TRADE 20D', avgTrade == null ? '—' : fmtRp(avgTrade), 'nilai ÷ frekuensi');
+  h += kpi('TURNOVER 20D', turnover == null ? '—' : turnover.toFixed(2) + '%', 'volume ÷ saham tradeable');
+  h += kpi('PARTISIPASI ASING', forPart == null ? '—' : forPart.toFixed(1) + '%', 'estimasi, 2 sisi transaksi');
   h += '</div>';
 
   if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">Accumulating ' + ff.accum_streak + ' hari berturut-turut</div>';
@@ -827,6 +847,11 @@ function sdTabFlow(d) {
   h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BID RATIO <span style="font-weight:400;color:var(--t3)">(sesi tersedia)</span></div>';
   h += '<div id="sd-bo-chart" style="width:100%;height:250px"></div></div>';
   h += '</div>';
+
+  h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">GROSS ASING: BELI vs JUAL <span style="font-weight:400;color:var(--t3)">(60 sesi, miliar Rp)</span></div>';
+  h += '<div id="sd-gross-chart" style="width:100%;height:220px"></div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Net negatif bisa berarti asing menjual, atau sekadar tidak membeli — dua hal yang berbeda.</div></div>';
 
   // ── Tabel 20 sesi ──
   var last20 = ch.slice(-20);
@@ -843,7 +868,7 @@ function sdTabFlow(d) {
     var fv = (r.fnet || 0);
     var bv = r.bid_vol || 0, ov = r.offer_vol || 0, tot = bv + ov;
     var br = (bv > 0 && ov > 0) ? bv / tot * 100 : null;
-    var val = (r.close || 0) * (r.volume || 0);
+    var val = r.value || (r.close || 0) * (r.volume || 0);
     h += '<tr><td class="al" style="font-family:var(--fm);color:var(--t2)">' + esc(r.date) + '</td>';
     h += '<td class="ar" style="font-family:var(--fm)">' + (r.close || 0).toLocaleString() + '</td>';
     h += '<td class="ar ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
@@ -990,6 +1015,22 @@ function sdDrawFlowCharts(d) {
         { name: 'Kumulatif asing', type: 'line', data: cum, symbol: 'none', lineStyle: { width: 1.8, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' }, areaStyle: { opacity: 0.1 },
           markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 0 }] } },
         { name: 'Harga', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.close; }), symbol: 'none', lineStyle: { width: 1.2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } }
+      ]
+    });
+  }
+
+  var g60 = ch.slice(-60);
+  var el3 = document.getElementById('sd-gross-chart');
+  if (el3 && g60.length) {
+    var c3 = BL.init(el3, 'sd-gross-chart'); if (c3) c3.setOption({
+      grid: { left: 48, right: 14, top: 24, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: { type: 'category', data: g60.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(g60.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
+      series: [
+        { name: 'Beli', type: 'bar', stack: 'g', data: g60.map(function (r) { return Math.round((r.fbuy || 0) * (r.close || 0) / 1e9 * 10) / 10; }), itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 12 },
+        { name: 'Jual', type: 'bar', stack: 'g', data: g60.map(function (r) { return -Math.round((r.fsell || 0) * (r.close || 0) / 1e9 * 10) / 10; }), itemStyle: { color: 'rgba(239,68,68,0.75)' }, barMaxWidth: 12 }
       ]
     });
   }

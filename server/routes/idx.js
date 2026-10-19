@@ -3701,7 +3701,7 @@ module.exports = function(upload) {
 
       // Get full price history (adjusted)
       const cas = db.prepare(`SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`).all(code);
-      const raw = db.prepare('SELECT trade_date,code,name,open_price,high,low,close,prev_close,volume,value,frequency,foreign_buy,foreign_sell,bid_vol,offer_vol,listed_shares FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date').all(code);
+      const raw = db.prepare('SELECT trade_date,code,name,open_price,high,low,close,prev_close,volume,value,frequency,foreign_buy,foreign_sell,bid,bid_vol,offer,offer_vol,listed_shares,tradeable_shares FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date').all(code);
       if (!raw.length) return res.json({ error: 'No data for ' + code, code });
 
       // Adjust for corporate actions
@@ -4501,7 +4501,9 @@ module.exports = function(upload) {
       // ── Build chart data (last 500 for performance) ──
       const chartData = data.slice(-500).map((r, i, arr) => ({
         date: r.trade_date, open: r.ao, high: r.ah, low: r.al, close: r.ac,
-        volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0
+        volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0,
+        value: r.value || null, fbuy: r.foreign_buy || 0, fsell: r.foreign_sell || 0,
+        tradeable: r.tradeable_shares || 0, bid_price: r.bid || 0, offer_price: r.offer || 0
       }));
 
       const adChartData = adLine.slice(-500).map(r => ({ date: r.date, ad: r.ad }));
