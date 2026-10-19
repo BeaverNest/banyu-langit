@@ -268,8 +268,17 @@ function pullReport(db, opts) {
 
   let rows = [];
   try {
+    // `id` WAJIB ikut di SELECT ini. classifyCode() menerima daftar "TERBARU DULU" dan
+    // mengurutkannya lewat `b.id - a.id`; tanpa kolom ini comparator bernilai NaN, sort tidak
+    // berbuat apa-apa, dan yang masuk adalah urutan ASC (`pulled_at, id`). Akibatnya TERTUKAR:
+    // last_status/last_ref_date/last_frontier_date dibaca dari tarikan TERTUA, pull_behind
+    // dibandingkan dengan frontier tertua, dan deret beku dihitung dari ujung yang salah.
+    // Bug ini tidak terlihat selama tabel hanya punya satu hari riwayat; ia muncul begitu ada
+    // >=2 hari dengan frontier berbeda (terukur 20 Okt 2026 setelah penjadwal rail hidup:
+    // STEEL_HRC 2026-10-16 vs 2026-10-19 -> asersi harness check-series-freshness [9e] merah).
+    // Baris request (pullContext) sudah benar karena ia memang memilih `id`.
     rows = db.prepare(
-      `SELECT code, source, pulled_at, ref_date, source_frontier_date, status
+      `SELECT code, source, pulled_at, ref_date, source_frontier_date, status, id
          FROM custom_pull_log ${code ? 'WHERE code=?' : ''}
         ORDER BY code, pulled_at, id`).all(...(code ? [code] : []));
   } catch (e) { return report; }
