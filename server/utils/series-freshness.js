@@ -141,6 +141,7 @@ function buildContext(db) {
     idx_frontier: idx,
     sessions,
     expected_lag,
+    pull,
     // true bila last_date seri lebih tua dari jendela kalender -> lag hanya batas bawah
     window_from: sessions.length ? sessions[0] : '',
   };
