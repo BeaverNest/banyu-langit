@@ -110,13 +110,23 @@ async function loadMktOverview(){
       h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
       h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span></div>';
       (sec.items||[]).forEach(function(i){
+        // Seri basi (t_61ccbdbe): bar terakhir tertinggal dari sesi rujukan (TIN 15 Okt
+        // vs sesi 19 Okt). Level bar lama TIDAK ditulis sebagai harga terkini — kalau
+        // ditulis, pembaca menyimpulkan instrumennya datar dua hari padahal kita tidak
+        // punya datanya. chg 1D/5D/20D tetap ditampilkan (itu gerakan bar terakhir seri
+        // itu) tapi warnanya dinetralkan, sama seperti tabel Market Regime.
+        var stale=i.stale===true;
+        var dim=stale?' style="color:var(--t3)"':'';
+        var priceCell=stale
+          ?'<span class="mkt-price" style="white-space:nowrap" title="level bar '+esc(shortDay(i.stale_date||i.date))+' = '+num(i.price,i.price>=1000?0:2)+'; sumber belum menerbitkan bar untuk '+(i.lag_sessions||0)+' sesi — retry tidak menolong, yang berhenti di hulu"><b style="font-family:var(--fm);color:var(--t2)">—</b> <span style="font-size:9px;color:var(--am)">⏸ basi '+esc(shortDay(i.stale_date||i.date))+'</span></span>'
+          :'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>';
         h+='<div class="mkt-item">'
           +'<span class="mkt-label">'+esc(i.label)+'</span>'
           +'<span class="mkt-desc">'+esc(i.desc||'')+(i.linked_sector?' <span class="mkt-link">→ '+esc(i.linked_sector)+'</span>':'')+'</span>'
-          +'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>'
-          +'<span class="mkt-chg '+cls(i.chg_1d)+'">'+pc(i.chg_1d)+'</span>'
-          +'<span class="mkt-sm '+cls(i.chg_5d)+'">'+pc(i.chg_5d)+'</span>'
-          +'<span class="mkt-sm '+cls(i.chg_20d)+'">'+pc(i.chg_20d)+'</span>'
+          +priceCell
+          +'<span class="mkt-chg '+(stale?'':cls(i.chg_1d))+'"'+dim+'>'+pc(i.chg_1d)+'</span>'
+          +'<span class="mkt-sm '+(stale?'':cls(i.chg_5d))+'"'+dim+'>'+pc(i.chg_5d)+'</span>'
+          +'<span class="mkt-sm '+(stale?'':cls(i.chg_20d))+'"'+dim+'>'+pc(i.chg_20d)+'</span>'
           +'</div>';
       });
     });

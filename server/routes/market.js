@@ -183,12 +183,38 @@ router.get('/market/overview', (req, res) => {
       };
     }
 
-    function fromOhlc(code) {
+    // Kesegaran (t_61ccbdbe rework): dihitung SEKALI per request. Cakupannya sengaja
+    // hanya baris komoditas, dan alasannya terukur: kalender sesi yang dipakai util ini
+    // = sesi IDX, jadi seri pasar luar selalu tampak "1 sesi tertinggal" pada Senin
+    // (SPX/US10Y 19 Okt: bar terakhir 16 Okt = penutupan Jumat, memang begitu seharusnya).
+    // Menandainya basi = positif palsu. Lag yang diharapkan PER SERI belum ada
+    // (kartu eko t_b234606a); sampai itu ada, penanda hanya dipasang di seri yang
+    // kartu ini keluhkan (komoditas), sama seperti panel komoditas & Market Regime.
+    const freshCtx = freshnessUtil.buildContext(db);
+
+    // opts.freshness HARUS true secara eksplisit: sebagian pemanggil memakai
+    // `.map(fromOhlc)`, yang mengirim indeks array sebagai argumen kedua — dengan
+    // signature (code, withFreshness) boolean, elemen kedua dan seterusnya akan
+    // ikut tertandai tanpa niat.
+    function fromOhlc(code, opts) {
       const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 260').all(code);
       const st = stats(rows);
       if (!st) return null;
       const [label, desc] = OV_LABEL[code] || [code, code];
-      return Object.assign({ code, label, desc, linked_sector: OV_LINK[code] || '' }, st);
+      const item = Object.assign({ code, label, desc, linked_sector: OV_LINK[code] || '' }, st);
+      if (opts && opts.freshness === true) {
+        // Tanggal bar dari helper (bar SESI terakhir): bar Sabtu/Minggu bukan sesi bursa
+        // dan tidak boleh dipakai mengukur lag.
+        const f = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
+        // stale=true -> price/chg_1d/chg_5d/chg_20d di atas milik bar LAMA. Level tetap
+        // dikirim (chart/rail memakainya) tapi UI wajib menulis "—" + tanggal.
+        item.stale = f.stale;
+        item.stale_date = f.last_date;
+        item.lag_sessions = f.lag_sessions;
+        item.lag_capped = f.lag_capped;
+        item.ref_date = f.ref_date;
+      }
+      return item;
     }
 
     function fromIndex(code, label, desc) {
@@ -209,7 +235,8 @@ router.get('/market/overview', (req, res) => {
     ].map(([c, l, d]) => fromIndex(c, l, d)).filter(Boolean);
 
     const globalItems = ['SPX', 'VIX', 'DXY', 'US10Y'].map(fromOhlc).filter(Boolean);
-    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS', 'GOLD'].map(fromOhlc).filter(Boolean);
+    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS', 'GOLD']
+      .map(c => fromOhlc(c, { freshness: true })).filter(Boolean);
     const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
     // RATES: kurva belum tersedia dari rail gratis (TE hanya 10Y + level kebijakan),
     // jadi yang ditampilkan level + spread, bukan kurva penuh.
@@ -242,7 +269,12 @@ router.get('/market/overview', (req, res) => {
         { id: 'commodities', title: 'KOMODITAS → SEKTOR', icon: '🛢', items: commodityItems },
         { id: 'rates', title: 'SUKU BUNGA & SPREAD', icon: '📉', items: rateItems },
         { id: 'fx', title: 'FX', icon: '💱', items: fxItems },
-      ]
+      ],
+      // Ringkasan kesegaran — cakupannya komoditas, satu-satunya bagian panel ini yang
+      // ditandai (lihat catatan di fromOhlc). Kode yang hilang dari stale_codes = seri
+      // itu sudah menyusul: tidak ada flag tersimpan yang perlu dibersihkan (DoD-3).
+      freshness: Object.assign({ scope: 'commodities' },
+        freshnessUtil.summarize(freshCtx, commodityItems.map(i => ({ code: i.code, freshness: i })))),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

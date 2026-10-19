@@ -20,6 +20,14 @@
 //      (COUNT(DISTINCT trade_date) idx_daily dalam (last_date, ref_date]).
 //  [4] harga seri basi TIDAK dihapus dari JSON (chart/rail masih butuh), tapi
 //      divergence yang membandingkannya dengan sesi saham hari ini harus null.
+//  [5] surface KETIGA: /api/market/overview (rework pasca-review t_b36a83b4). Baris
+//      komoditas di Market Overview harus membawa stale/stale_date/lag_sessions/ref_date
+//      yang sama dengan hitungan SQL independen — pembaca tab default tidak boleh melihat
+//      level TIN 15 Okt sebagai harga terkini. Sekaligus mengunci CAKUPAN yang disengaja:
+//      baris non-komoditas (SPX/US10Y/BI_RATE…) TIDAK membawa field kesegaran, karena
+//      kalender sesi di sini = sesi IDX dan seri pasar luar memang tertinggal satu sesi
+//      pada Senin (penutupan Jumat) — menandainya basi = positif palsu.
+//      Asersi di sini sengaja TIDAK mengunci tanggal: begitu TIN terbit lagi, hijau.
 //
 // Jalankan di dalam container (DB tidak ada di host):
 //   docker exec -w /app banyu-langit node server/scripts/check-series-freshness.js
@@ -115,7 +123,7 @@ function main() {
   const lagSql = db.prepare('SELECT COUNT(DISTINCT trade_date) c FROM idx_daily WHERE trade_date > ? AND trade_date <= ?');
   const lastSql = db.prepare(`SELECT MAX(trade_date) d FROM custom_ohlc WHERE code=? AND ${fresh.REGULAR_SESSION}`);
 
-  return Promise.all([getJson('/api/commodities'), getJson('/api/idx/market-regime')]).then(([cmd, mr]) => {
+  return Promise.all([getJson('/api/commodities'), getJson('/api/idx/market-regime'), getJson('/api/market/overview')]).then(([cmd, mr, ov]) => {
     check('ref_date endpoint = max(frontier rail, idx_daily)', cmd.freshness && cmd.freshness.ref_date === ref,
       `endpoint=${cmd.freshness && cmd.freshness.ref_date} sql=${ref} rail=${railMax} idx=${idxMax}`);
 
@@ -138,13 +146,23 @@ function main() {
     }
     check('setiap seri: date + lag_sessions + stale konsisten dengan DB', mismatched.length === 0, mismatched.join(' | '));
 
-    // Bukti per-seri (bukan ambang global): dua seri di rail yang sama, hasil berbeda.
+    // Bukti per-seri (bukan ambang global): dua seri di rail yang sama bisa berbeda hasil.
+    // Asersinya TIDAK mengunci tanggal pengamatan — kalau TIN akhirnya terbit (DoD-3),
+    // test ini tetap hijau karena yang diuji hubungan stale==(lag>=ambang), bukan "TIN basi selamanya".
     const byCode = {};
     for (const s of cmdSeries.concat(mrSeries)) byCode[s.code] = s;
-    const tin = byCode['TIN'], nickel = byCode['NICKEL'];
-    check('TIN (bar 15 Okt) tertandai basi', !!tin && tin.stale === true && tin.lag_sessions >= 2, JSON.stringify(tin || null));
-    check('NICKEL (bar 19 Okt, rail sama) TIDAK tertandai', !!nickel && nickel.stale === false, JSON.stringify(nickel || null));
-    check('COAL (bar 16 Okt) ikut tertandai', !!byCode['COAL'] && byCode['COAL'].stale === true, JSON.stringify(byCode['COAL'] || null));
+    const tin = byCode['TIN'], nickel = byCode['NICKEL'], coal = byCode['COAL'];
+    const lagOf = s => Number((lagSql.get(s.date, ref) || {}).c);
+    check('TIN: stale == (lag DB >= ambang), tanpa tanggal yang di-hardcode',
+      !!tin && Boolean(tin.stale) === (lagOf(tin) >= fresh.STALE_LAG_SESSIONS), JSON.stringify(tin || null));
+    check('NICKEL (rail & jam tarik sama) segar: lag 0, stale false',
+      !!nickel && nickel.stale === false && lagOf(nickel) === 0, JSON.stringify(nickel || null));
+    check('COAL: stale == (lag DB >= ambang)',
+      !!coal && Boolean(coal.stale) === (lagOf(coal) >= fresh.STALE_LAG_SESSIONS), JSON.stringify(coal || null));
+    check('per seri, bukan ambang global: TIN dan NICKEL bisa berbeda hasil pada satu tarikan',
+      !!tin && !!nickel && (Number(tin.lag_sessions) !== Number(nickel.lag_sessions)
+        || (tin.stale === false && nickel.stale === false)),
+      `TIN lag=${tin && tin.lag_sessions} NICKEL lag=${nickel && nickel.lag_sessions}`);
     check('seri basi tetap mengirim level (chart/rail masih memakainya)',
       !!tin && typeof tin.close === 'number' && tin.close > 0 || !!tin && typeof tin.price === 'number' && tin.price > 0,
       JSON.stringify(tin || null));
@@ -160,6 +178,56 @@ function main() {
     check('grup dengan komoditas segar tetap punya divergence',
       freshGroups.length > 0 && freshGroups.some(g => g.divergence != null),
       freshGroups.map(g => g.id + '=' + g.divergence).join(','));
+
+    // ── [5] Market Overview: surface ketiga ──────────────────────────────
+    console.log('\n[5] /api/market/overview — baris komoditas bertanda, sisanya tidak');
+    const ovSections = ov.sections || [];
+    const ovComm = (ovSections.find(s => s.id === 'commodities') || {}).items || [];
+    const ovOther = ovSections.filter(s => s.id !== 'commodities')
+      .reduce((acc, s) => acc.concat(s.items || []), []);
+    check('overview: bagian komoditas mengirim item', ovComm.length > 0, String(ovComm.length));
+    check('overview: setiap item komoditas membawa field kesegaran lengkap',
+      ovComm.length > 0 && ovComm.every(i => 'stale' in i && 'stale_date' in i && 'lag_sessions' in i && 'ref_date' in i),
+      JSON.stringify(ovComm.filter(i => !('stale' in i)).map(i => i.code)));
+
+    const ovMismatch = [];
+    for (const i of ovComm) {
+      const expectLast = (lastSql.get(i.code) || {}).d || '';
+      const expectLag = Number((lagSql.get(expectLast, ref) || {}).c);
+      if (String(i.stale_date) !== String(expectLast)) ovMismatch.push(`${i.code}: stale_date ${i.stale_date} != DB ${expectLast}`);
+      if (Number(i.lag_sessions) !== expectLag) ovMismatch.push(`${i.code}: lag ${i.lag_sessions} != SQL ${expectLag}`);
+      if (Boolean(i.stale) !== (expectLag >= fresh.STALE_LAG_SESSIONS)) ovMismatch.push(`${i.code}: stale ${i.stale} vs lag ${expectLag}`);
+    }
+    check('overview: stale/stale_date/lag tiap item = hitungan SQL independen', ovMismatch.length === 0, ovMismatch.join(' | '));
+
+    check('overview: baris NON-komoditas tidak membawa field kesegaran (cakupan disengaja)',
+      ovOther.length > 0 && ovOther.every(i => !('stale' in i)),
+      ovOther.filter(i => 'stale' in i).map(i => i.code).join(','));
+
+    const ovStale = ov.freshness && ov.freshness.stale_codes;
+    check('overview: ringkasan freshness menyebut cakupannya', ov.freshness && ov.freshness.scope === 'commodities',
+      JSON.stringify(ov.freshness || null));
+    check('overview: stale_codes == daftar item komoditas yang stale',
+      Array.isArray(ovStale) && ovStale.join(',') === ovComm.filter(i => i.stale).map(i => i.code).sort().join(','),
+      `endpoint=${JSON.stringify(ovStale)} items=${JSON.stringify(ovComm.filter(i => i.stale).map(i => i.code))}`);
+    check('overview: ref_date sama dengan dua panel lain (satu aturan, bukan disalin)',
+      !!ov.freshness && ov.freshness.ref_date === ref && ov.freshness.ref_date === (cmd.freshness && cmd.freshness.ref_date),
+      `overview=${ov.freshness && ov.freshness.ref_date} cmd=${cmd.freshness && cmd.freshness.ref_date} sql=${ref}`);
+
+    // Dua surface harus sepakat untuk seri yang sama: overview tidak boleh lebih longgar
+    // maupun lebih ketat. Yang dibandingkan hanya kode yang ADA di kedua surface —
+    // WTI/ALUMINIUM hanya tampil di overview (tidak punya kartu grup), jadi tidak
+    // bisa "berbeda pendapat" dengan panel komoditas.
+    const cmdStaleSet = new Set((cmd.freshness && cmd.freshness.stale_codes) || []);
+    const ovStaleSet = new Set(ovStale || []);
+    const cmdCodes = new Set(cmdSeries.map(s => s.code));
+    const ovCmpSet = new Set(ovComm.filter(i => cmdCodes.has(i.code)).map(i => i.code));
+    const disagree = [];
+    for (const code of ovStaleSet) if (ovCmpSet.has(code) && !cmdStaleSet.has(code)) disagree.push(code + ' basi di overview tapi tidak di /api/commodities');
+    for (const code of cmdStaleSet) if (ovCmpSet.has(code) && !ovStaleSet.has(code)) disagree.push(code + ' basi di /api/commodities tapi tidak di overview');
+    check('overview & panel komoditas tidak berbeda pendapat soal seri yang sama',
+      ovCmpSet.size > 0 && disagree.length === 0,
+      `irisan=${ovCmpSet.size} beda=${disagree.join(', ') || '-'}`);
 
     // ── ringkasan ─────────────────────────────────────────────────────────
     console.log(`\n${pass} lulus, ${failures.length} gagal`);
