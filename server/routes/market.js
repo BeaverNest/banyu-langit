@@ -145,7 +145,7 @@ router.get('/idx-indices', (req, res) => {
 const OV_LABEL = {
   SPX: ['S&P 500', 'Wall Street'], VIX: ['VIX', 'Volatilitas'],
   DXY: ['DXY', 'Dolar index'], US10Y: ['US 10Y', 'Yield 10 tahun'],
-  ID10Y: ['SUN 10Y', 'Yield SBN 10 tahun (%)'],
+  ID10Y: ['SUN 10Y', 'Yield SBN 10Y (%) · tanggal = hari pengambilan, sumber dapat tertunda'],
   BI_RATE: ['BI RATE', '7-day reverse repo (%)'],
   COAL: ['Coal', 'Newcastle, USD/t'], CPO: ['CPO', 'Malaysia, MYR/t'],
   NICKEL: ['Nikel', 'USD/t'], TIN: ['Timah', 'USD/t'],
