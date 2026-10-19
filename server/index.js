@@ -313,6 +313,9 @@ v1.get('/insider/stock', (req, res) => {
   res.json({ success: true, data: { results: rows, total: rows.length } });
 });
 v1.get('/quote', async (req, res) => { const q = await yq(req.query.symbol || ''); res.json({ success: true, data: q || { price: 0, change: 0 } }); });
+// Agent rail (read-only, envelope-first): /api/v1/idx/{freshness,series,indicator,scores}
+// Mounted before the v1 router so agent reads never depend on the UI auth middleware.
+app.use('/api/v1/idx', require('./routes/rail'));
 app.use('/api/v1', v1);
 
 // Health
