@@ -4308,6 +4308,17 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ═══ YIELD CURVE — kurva imbal hasil SUN, 11 tenor (kanban t_b042b106) ═══
+  // Sebelum ini hanya ID10Y yang pernah dibaca dari custom_ohlc; 10 tenor lain tersimpan
+  // tanpa route. Modulnya murni baca (tidak menulis baris, tidak menyimpan slope) dan
+  // menegakkan "satu tanggal untuk satu kurva" — lihat server/utils/yield-curve.js.
+  router.get('/yield-curve', (req, res) => {
+    try {
+      const yieldCurve = require('../utils/yield-curve');
+      res.json(yieldCurve.buildYieldCurve(db));
+    } catch (e) { res.json({ error: e.message }); }
+  });
+
   // ═══ REGIME-WEIGHTS — return weight profile based on current market regime ═══
   router.get('/regime-weights', (req, res) => {
     try {

@@ -29,6 +29,7 @@ async function mrFetch(el) {
 
 function mrRefresh() {
   mrData = null;
+  mrCurve = null;   // kurva ikut disegarkan, bukan HTML 60 detik yang lama
   var el = $('mr-content'); if (!el) return;
   el.innerHTML = '<div class="ne" style="padding:40px">Refreshing...</div>';
   mrFetch(el);
@@ -55,6 +56,11 @@ function renderMR(el) {
   // ═══ Level 2: Commodity Cycle ═══
   h += mrSection('2', '📦 Commodity Cycle', mrRenderCommodity(d.commodities));
 
+  // ═══ Level 2.5: Kurva Imbal Hasil SUN — 11 tenor (kanban t_b042b106) ═══
+  // Endpoint terpisah (/api/idx/yield-curve) supaya kurva punya satu kontrak sendiri dan
+  // payload market-regime tidak makin berat; panel mengisinya setelah render.
+  h += mrSection('2.5', '📐 Kurva Imbal Hasil SUN', '<div id="mr-curve-box"><div style="color:var(--t3);font-size:11px">Memuat kurva...</div></div>');
+
   // ═══ Level 3: IDX Market Regime ═══
   h += mrSection('3', '🇮🇩 IDX Market', mrRenderIDX(d.idx));
 
@@ -72,6 +78,8 @@ function renderMR(el) {
 
   // Render charts after DOM is ready
   setTimeout(function() { mrDrawCharts(d); }, 100);
+  // Kurva imbal hasil: fetch sendiri (endpoint terpisah)
+  setTimeout(function() { mrLoadCurve(); }, 0);
   // Fetch news
   setTimeout(function() { mrRenderNews('mr-news'); }, 200);
 }
@@ -81,6 +89,150 @@ function mrSection(num, title, content) {
     '<div style="padding:8px 12px;background:var(--bg1);border-bottom:1px solid var(--b1);font-size:12px;font-weight:700;color:var(--t1)">' +
     '<span style="color:var(--am);margin-right:6px">L' + num + '</span>' + title + '</div>' +
     '<div style="padding:10px 12px">' + content + '</div></div>';
+}
+
+// ═══ Kurva Imbal Hasil SUN (11 tenor) — kanban t_b042b106 ═══
+// Data diambil dari /api/idx/yield-curve (server yang memilih SATU tanggal untuk seluruh
+// kurva + menghitung slope). Panel TIDAK menghitung slope sendiri dan tidak pernah mengambil
+// bar terdekat untuk tenor yang tertinggal: yang tidak punya bar di tanggal kurva ditulis "—"
+// beserta tanggal bar terakhirnya.
+var mrCurve = null;
+var mrCurveLoading = false;
+
+function mrLoadCurve(force) {
+  var box = $('mr-curve-box'); if (!box) return;
+  if (mrCurve && !force) { mrRenderCurve(box, mrCurve); return; }
+  if (mrCurveLoading) return;
+  mrCurveLoading = true;
+  box.innerHTML = '<div style="color:var(--t3);font-size:11px">Memuat kurva...</div>';
+  fetch('/api/idx/yield-curve').then(function(r) { return r.json(); }).then(function(d) {
+    mrCurveLoading = false;
+    if (d && d.error) { box.innerHTML = '<div style="color:var(--rd);font-size:11px">Kurva: ' + esc(d.error) + '</div>'; return; }
+    mrCurve = d;
+    mrRenderCurve(box, d);
+  }).catch(function(e) {
+    mrCurveLoading = false;
+    box.innerHTML = '<div style="color:var(--rd);font-size:11px">Kurva: ' + esc(e.message) + '</div>';
+  });
+}
+
+function mrFmtBp(v) {
+  if (v === null || v === undefined) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(1);
+}
+
+function mrRenderCurve(box, d) {
+  if (!d || !d.tenors || !d.tenors.length) {
+    box.innerHTML = '<div style="color:var(--t3);font-size:11px">Tidak ada seri tenor SUN.</div>';
+    return;
+  }
+  var cov = d.coverage || { present: 0, total: 0 };
+  var h = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-bottom:6px;font-size:10px;color:var(--t3)">';
+  h += '<span>Sumber: <b style="color:var(--t2)">' + esc(d.source || 'investing') + '</b></span>';
+  h += '<span>tanggal kurva: <b style="color:var(--t1)" id="mr-curve-date">' + esc(d.as_of || '—') + '</b></span>';
+  h += '<span>' + cov.present + '/' + cov.total + ' tenor pada tanggal ini</span>';
+  if (d.is_latest === false && d.latest_date) {
+    // Kurva sengaja lebih tua dari bar terbaru supaya tidak mencampur sesi — katakan, jangan diam.
+    h += '<span style="color:var(--am)">bar terbaru ' + esc(d.latest_date) + ' — kurva diambil dari sesi sebelumnya agar satu tanggal</span>';
+  }
+  if (d.anchor_fallback) h += '<span style="color:var(--am)">cakupan tanggal terbaik &lt; ' + (d.min_coverage || 0) + ' tenor</span>';
+  h += '</div>';
+
+  // Slope (dihitung server, tanda wajib tampil: negatif = inversi)
+  h += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
+  (d.slopes || []).forEach(function(s) {
+    if (s.bp === null || s.bp === undefined) {
+      h += '<span style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:3px 8px;font-size:10px;color:var(--t3)" title="salah satu tenor tidak punya bar di tanggal kurva">' + esc(s.id) + ' —</span>';
+      return;
+    }
+    var col = s.bp > 0 ? 'var(--gn)' : s.bp < 0 ? 'var(--rd)' : 'var(--t2)';
+    var note = s.inverted ? ' · INVERSI' : '';
+    h += '<span style="background:var(--bg1);border:1px solid ' + (s.inverted ? 'var(--rd)' : 'var(--b1)') + ';border-radius:4px;padding:3px 8px;font-size:10px;color:var(--t2)"'
+      + ' title="' + esc(s.long_tenor + ' (' + s.long + ') − ' + s.short_tenor + ' (' + s.short + ') = ' + s.pp + ' pp pada ' + d.as_of) + '">'
+      + esc(s.id) + ' <b style="font-family:var(--fm);color:' + col + '">' + mrFmtBp(s.bp) + ' bp' + note + '</b></span>';
+  });
+  h += '</div>';
+
+  h += '<div id="mr-curve-chart" style="height:200px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+
+  // Tabel tenor / yield / Δ1d / Δ20d
+  h += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">';
+  h += '<tr style="border-bottom:1px solid var(--b2)">';
+  ['Tenor', 'Yield (%)', 'Δ1d (bp)', 'Δ20d (bp)', 'Bar'].forEach(function(t, i) {
+    h += '<th style="text-align:' + (i === 0 || i === 4 ? 'left' : 'right') + ';padding:4px 8px;color:var(--t3);font-size:9px">' + t + '</th>';
+  });
+  h += '</tr>';
+  d.tenors.forEach(function(t) {
+    var on = t.on_curve !== false && t.close !== null && t.close !== undefined;
+    var cellYield = on
+      ? '<b style="font-family:var(--fm)">' + t.close.toFixed(3) + '</b>'
+      : '<span style="color:var(--am)" title="tidak ada bar pada ' + esc(d.as_of || '') + '">— <span style="font-size:9px">' + esc(t.date || 'tanpa bar') + '</span></span>';
+    var c1 = on && t.chg_1d_bp !== null ? (t.chg_1d_bp > 0 ? 'color:var(--rd)' : t.chg_1d_bp < 0 ? 'color:var(--gn)' : '') : '';
+    var c20 = on && t.chg_20d_bp !== null ? (t.chg_20d_bp > 0 ? 'color:var(--rd)' : t.chg_20d_bp < 0 ? 'color:var(--gn)' : '') : '';
+    h += '<tr style="border-bottom:1px solid var(--b1)">';
+    h += '<td style="padding:4px 8px;font-weight:600">' + esc(t.tenor) + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right">' + cellYield + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c1 + '">' + (on ? mrFmtBp(t.chg_1d_bp) : '—') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20 + '">' + (on ? mrFmtBp(t.chg_20d_bp) : '—') + '</td>';
+    h += '<td style="padding:4px 8px;font-size:9px;color:' + (on ? 'var(--t3)' : 'var(--am)') + '">' + esc(on ? t.date : (t.date || '—')) + '</td>';
+    h += '</tr>';
+  });
+  h += '</table>';
+  if (d.behind && d.behind.length) {
+    h += '<div style="font-size:9px;color:var(--am);margin-top:4px">Tidak ikut tergambar (bar lebih baru dari tanggal kurva): '
+      + d.behind.map(function(b) { return esc(b.tenor) + ' ' + esc(b.date); }).join(', ') + '</div>';
+  }
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). Δ1d/Δ20d dihitung dari bar seri tenor itu sendiri. '
+    + 'Slope negatif = inversi. Tidak ada slope yang disimpan sebagai seri baru.</div>';
+  box.innerHTML = h;
+
+  mrDrawCurve(d);
+}
+
+function mrDrawCurve(d) {
+  var el = $('mr-curve-chart'); if (!el) return;
+  var c = BL.init(el, 'mr-curve');
+  if (!c) return;
+  var labels = (d.tenors || []).map(function(t) { return t.tenor; });
+  var vals = (d.tenors || []).map(function(t) { return (t.on_curve !== false && t.close !== null) ? t.close : null; });
+  var known = vals.filter(function(v) { return v !== null; });
+  var pad = known.length ? Math.max(0.05, (Math.max.apply(null, known) - Math.min.apply(null, known)) * 0.25) : 0.5;
+  c.setOption({
+    tooltip: {
+      trigger: 'axis', textStyle: { fontSize: 9 },
+      formatter: function(ps) {
+        var p = ps[0];
+        var t = (d.tenors || [])[p.dataIndex] || {};
+        var s = '<b>' + esc(t.tenor || '') + '</b> · ' + esc(d.as_of || '') + '<br/>';
+        if (p.value === null || p.value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
+        return s + p.value.toFixed(3) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20d ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+      }
+    },
+    grid: BL.grid({ top: 14, bottom: 22, left: 42, right: 12 }),
+    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 8 } },
+    yAxis: {
+      type: 'value', scale: true,
+      min: known.length ? Math.min.apply(null, known) - pad : null,
+      max: known.length ? Math.max.apply(null, known) + pad : null,
+      axisLabel: { fontSize: 8, formatter: function(v) { return v.toFixed(2) + '%'; } },
+      splitLine: { lineStyle: { color: '#1e2836', type: 'dashed' } }
+    },
+    series: [{
+      name: 'Yield', type: 'line', data: vals, connectNulls: false,
+      symbol: 'circle', symbolSize: 5,
+      lineStyle: { width: 2, color: '#5470c6' }, itemStyle: { color: '#5470c6' },
+      areaStyle: { color: 'rgba(84,112,198,0.10)' },
+      markPoint: {
+        symbolSize: 34,
+        label: { fontSize: 8, color: '#e0e6ed' },
+        data: [10, 3].map(function(tenorMonths) {
+          var t = (d.tenors || []).filter(function(x) { return x.months === tenorMonths && x.close !== null && x.on_curve !== false; })[0];
+          if (!t) return null;
+          return { name: t.tenor, coord: [labels.indexOf(t.tenor), t.close], value: t.tenor };
+        }).filter(Boolean)
+      }
+    }]
+  }, true);
 }
 
 // ═══ Level 1: Global ═══
