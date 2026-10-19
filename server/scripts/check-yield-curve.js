@@ -22,6 +22,8 @@
 //  [7] endpoint hidup vs SQL INDEPENDEN: tanggal kurva = tanggal bar terbaru yang dipakai,
 //      dan nilai tiap tenor di tanggal itu harus sama dengan query langsung ke custom_ohlc
 //      (DoD-3: satu tenor diuji manual — ID10Y + ID3Y, pembentuk slope utama).
+//  [8] penjaga sumber panel: anotasi chart 10Y/3Y lewat LABEL tenor (bukan `months`, yang
+//      satuannya bulan) + kolom Δ20 disebut "sesi". Cacat review r1 yang dulu lolos. 
 //
 // Jalankan di dalam container (DB tidak ada di host):
 //   docker exec -w /app banyu-langit node server/scripts/check-yield-curve.js
@@ -30,6 +32,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Database = require('/app/node_modules/better-sqlite3');
+const fs = require('fs');
 const yc = require('/app/server/utils/yield-curve');
 
 const BL = process.env.BL_URL || 'http://127.0.0.1:3000';
@@ -185,6 +188,32 @@ function mkSeries(overrides) {
       check('slope 10Y-3Y di endpoint = hitungan dari dua titik itu', s && s.bp === expect, JSON.stringify(s) + ' vs ' + expect);
       check('slope tidak disimpan sebagai seri baru (tidak ada kode 10Y-3Y/10Y-1Y/30Y-10Y di custom_tickers)',
         db.prepare("SELECT COUNT(*) c FROM custom_tickers WHERE code IN ('10Y-3Y','10Y-1Y','30Y-10Y')").get().c === 0);
+    }
+  }
+
+  // ── [8] penjaga sumber UI: anotasi chart + label Δ20 ─────────────────────
+  // Dua cacat UI dari review r1 tidak tertangkap harness karena tidak ada asersi UI.
+  // Yang dijaga: (a) markPoint memilih tenor lewat LABEL, bukan `months` (10Y=120 bulan,
+  // 3Y=36 — kode lama `[10, 3]` menempel di 3M dan 10Y tak pernah dapat anotasi);
+  // (b) kolom Δ20 disebut "sesi", bukan "d".
+  console.log('[8] sumber panel market-regime.js: anotasi 10Y/3Y + label Δ20 sesi');
+  {
+    let src = '';
+    try { src = fs.readFileSync('/app/public/js/market-regime.js', 'utf8'); }
+    catch (e) { check('market-regime.js terbaca', false, e.message); }
+    if (src) {
+      check('markPoint memilih tenor lewat label [10Y, 3Y]', src.indexOf("data: ['10Y', '3Y'].map") >= 0);
+      check('tidak ada lagi seleksi anotasi lewat months', !/months === tenorMonths/.test(src));
+      check('tidak ada lagi angka tahun sihir [10, 3]', !/\[10,\s*3\]/.test(src));
+      // Buktikan kenapa kode lama salah: tidak ada tenor ber-months 10 di daftar resmi,
+      // dan months 3 milik 3M (bukan 3Y).
+      check('months 10 tidak ada di TENORS (kode lama tak mungkin cocok 10Y)', !yc.TENORS.some(t => t.months === 10));
+      check('months 3 = 3M, bukan 3Y', (yc.TENORS.find(t => t.months === 3) || {}).tenor === '3M');
+      check('10Y ber-months 120 dan 3Y ber-months 36', (yc.TENORS.find(t => t.tenor === '10Y') || {}).months === 120
+        && (yc.TENORS.find(t => t.tenor === '3Y') || {}).months === 36);
+      check('header kolom memakai "Δ20 sesi (bp)"', src.indexOf("'Δ20 sesi (bp)'") >= 0);
+      check('label lama "Δ20d (bp)" hilang', src.indexOf("'Δ20d (bp)'") < 0);
+      check('tidak ada sisa "Δ20d" di panel', src.indexOf('Δ20d') < 0);
     }
   }
 

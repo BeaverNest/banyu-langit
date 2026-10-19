@@ -155,10 +155,12 @@ function mrRenderCurve(box, d) {
 
   h += '<div id="mr-curve-chart" style="height:200px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
 
-  // Tabel tenor / yield / Δ1d / Δ20d
+  // Tabel tenor / yield / Δ1d / Δ20 sesi
+  // "sesi" bukan "hari": Δ20 = selisih terhadap bar ke-20 seri tenor itu sendiri (≈4 minggu
+  // bursa, bisa ~28 hari kalender). Label lama tanpa satuan ("20d") bisa dibaca 20 hari kalender.
   h += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">';
   h += '<tr style="border-bottom:1px solid var(--b2)">';
-  ['Tenor', 'Yield (%)', 'Δ1d (bp)', 'Δ20d (bp)', 'Bar'].forEach(function(t, i) {
+  ['Tenor', 'Yield (%)', 'Δ1d (bp)', 'Δ20 sesi (bp)', 'Bar'].forEach(function(t, i) {
     h += '<th style="text-align:' + (i === 0 || i === 4 ? 'left' : 'right') + ';padding:4px 8px;color:var(--t3);font-size:9px">' + t + '</th>';
   });
   h += '</tr>';
@@ -182,7 +184,7 @@ function mrRenderCurve(box, d) {
     h += '<div style="font-size:9px;color:var(--am);margin-top:4px">Tidak ikut tergambar (bar lebih baru dari tanggal kurva): '
       + d.behind.map(function(b) { return esc(b.tenor) + ' ' + esc(b.date); }).join(', ') + '</div>';
   }
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). Δ1d/Δ20d dihitung dari bar seri tenor itu sendiri. '
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). Δ1d/Δ20 sesi dihitung dari bar seri tenor itu sendiri. '
     + 'Slope negatif = inversi. Tidak ada slope yang disimpan sebagai seri baru.</div>';
   box.innerHTML = h;
 
@@ -205,7 +207,7 @@ function mrDrawCurve(d) {
         var t = (d.tenors || [])[p.dataIndex] || {};
         var s = '<b>' + esc(t.tenor || '') + '</b> · ' + esc(d.as_of || '') + '<br/>';
         if (p.value === null || p.value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
-        return s + p.value.toFixed(3) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20d ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+        return s + p.value.toFixed(3) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20 sesi ' + mrFmtBp(t.chg_20d_bp) + ' bp';
       }
     },
     grid: BL.grid({ top: 14, bottom: 22, left: 42, right: 12 }),
@@ -225,10 +227,18 @@ function mrDrawCurve(d) {
       markPoint: {
         symbolSize: 34,
         label: { fontSize: 8, color: '#e0e6ed' },
-        data: [10, 3].map(function(tenorMonths) {
-          var t = (d.tenors || []).filter(function(x) { return x.months === tenorMonths && x.close !== null && x.on_curve !== false; })[0];
+        // Titik yang dianotasi = pasangan slope 10Y−3Y. Pilih lewat LABEL tenor ('10Y','3Y'),
+        // JANGAN lewat `months`: di payload satuannya BULAN, jadi 10Y = 120 dan 3Y = 36 —
+        // versi lama memakai angka tahun (10 dan 3) sehingga bubblenya menempel di 3M dan
+        // titik 10Y tidak pernah dapat anotasi (cacat review t_b042b106 r1).
+        data: ['10Y', '3Y'].map(function(tenorLabel) {
+          var t = (d.tenors || []).filter(function(x) {
+            return x.tenor === tenorLabel && x.close !== null && x.close !== undefined && x.on_curve !== false;
+          })[0];
           if (!t) return null;
-          return { name: t.tenor, coord: [labels.indexOf(t.tenor), t.close], value: t.tenor };
+          var idx = labels.indexOf(t.tenor);
+          if (idx < 0) return null;
+          return { name: t.tenor, coord: [idx, t.close], value: t.tenor };
         }).filter(Boolean)
       }
     }]
