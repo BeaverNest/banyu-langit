@@ -206,6 +206,30 @@ function seriesFreshness(ctx, lastDate, code) {
 }
 
 /**
+ * Apakah bar seri ini berasal dari SESI YANG SAMA dengan sesi rujukan?
+ *
+ * Dipakai penjaga divergensi (routes/market.js, koreksi review t_fb5135a3): membandingkan
+ * chg_1d komoditas dengan rata-rata chg_1d saham hanya sah bila keduanya dari sesi yang sama.
+ *
+ * - seri terdeklarasi : `lag_sessions === 0` — lag dihitung terhadap kalender sesi.
+ * - seri 'na'         : kontrak ini TIDAK menghitung lag untuk seri tanpa deklarasi
+ *                       (expected NULL, mis. KRAFT_PULP). Yang dibandingkan adalah tanggal bar
+ *                       SESI REGULER — `stale_date`, BUKAN `date`: `date` bisa bar Sabtu/Minggu
+ *                       sementara bar sesinya justru di hari rujukan. Bar sesi reguler yang
+ *                       tidak lebih tua dari rujukan = satu sesi.
+ * - tanpa rujukan (`ref_date` null) atau tanpa bar -> false.
+ *
+ * `stale` sengaja TIDAK dipakai di sini. Sejak ambang jadi per-seri, 'by_source' berarti
+ * "sumber memang lambat", bukan "se-sesi": memakai `!stale` menerbitkan divergensi lintas sesi,
+ * sedangkan memakai `stale` menolak seri 'na' yang barnya justru se-sesi (dua-duanya salah).
+ */
+function isSameSessionBar(c) {
+  if (!c || !c.ref_date) return false;
+  if (c.lag_sessions != null) return Number(c.lag_sessions) === 0;
+  return !!c.stale_date && String(c.stale_date) >= String(c.ref_date);
+}
+
+/**
  * Ringkasan untuk satu respons panel: kode mana yang tertinggal, dirujuk ke sesi mana.
  * @param {{ref_date:string,ref_source:string}} ctx
  * @param {Array<{code:string,freshness:object}>} entries
@@ -248,6 +272,7 @@ module.exports = {
   REGULAR_SESSION,
   buildContext,
   seriesFreshness,
+  isSameSessionBar,
   lastRegularBarDate,
   summarize,
 };

@@ -36,6 +36,12 @@
 //      sintetis 5 keadaan, pemeriksaan lintas surface, dan asersi anti-perbaikan-palsu
 //      (TIN expected 0 & menyala, CPO expected 2 & tidak menyala pada hari yang sama).
 //      Nomor [7] dipakai karena [6] sudah terisi stock-detail — jangan menimpa [6].
+//  [8] penjaga DIVERGENSI (koreksi review t_fb5135a3 pada kartu yang sama): divergensi
+//      komoditas-vs-saham hanya sah bila barnya dari SESI RUJUKAN. Dua sisi yang harus
+//      dikunci bersamaan: grup 'by_source' (COAL/CPO/RUBBER/STEEL_HRC — lag = kebiasaan
+//      sumbernya, stale false) WAJIB tetap tertahan, sedangkan seri 'na' yang barnya justru
+//      di sesi rujukan (KRAFT_PULP) WAJIB tetap menerbitkan angkanya. Nomor [8] dipakai
+//      karena [6]/[7] sudah terisi — jangan menimpa salah satunya.
 //
 // Jalankan di dalam container (DB tidak ada di host):
 //   docker exec -w /app banyu-langit node server/scripts/check-series-freshness.js
@@ -402,6 +408,72 @@ function main() {
     check('lintas surface: (lag, expected, excess, state) identik untuk seri yang muncul di >=2 surface',
       multi.length > 0 && crossBad.length === 0, `irisan=${multi.length} beda=${crossBad.join(' | ') || '-'}`);
 
+
+    // ── [8] divergensi hanya dari bar SESI RUJUKAN (koreksi review t_fb5135a3) ─────
+    // Ronde review menemukan penjaga `lag_sessions === 0` (a) menolak seri 'na' yang barnya
+    // justru se-sesi — KRAFT_PULP: bar & tape 2026-10-19, chg_1d −0.71 vs avg −4.06, angka
+    // +3.35 pp hilang dengan alasan 'insufficient' — dan (b) tidak dijaga apa pun untuk grup
+    // 'by_source', padahal sejak ambang jadi per-seri merekalah yang berhenti 'stale'
+    // sementara barnya tetap dari sesi lain. Keduanya dikunci di sini.
+    console.log('\n[8] divergensi: bar wajib dari sesi rujukan (by_source tertahan, na se-sesi terbit)');
+
+    // (a) fungsi penjaganya sendiri, sintetis, tanpa DB
+    const sm = fresh.isSameSessionBar;
+    check('sintetis: lag 0 -> se-sesi',
+      sm({ ref_date: '2026-10-19', lag_sessions: 0, stale_date: '2026-10-19' }) === true);
+    check('sintetis: lag 1 (grup by_source) -> BUKAN se-sesi, walau stale false',
+      sm({ ref_date: '2026-10-19', lag_sessions: 1, stale_date: '2026-10-16', stale: false }) === false);
+    check('sintetis: state na tapi bar sesi-reguler == rujukan -> se-sesi (kasus KRAFT_PULP)',
+      sm({ ref_date: '2026-10-19', lag_sessions: null, stale_date: '2026-10-19', stale: null }) === true);
+    check('sintetis: state na & bar lebih tua -> BUKAN se-sesi',
+      sm({ ref_date: '2026-10-19', lag_sessions: null, stale_date: '2026-10-16', stale: null }) === false);
+    check('sintetis: tanpa rujukan / tanpa komoditas -> false (tidak menebak, tidak crash)',
+      sm({ ref_date: null, lag_sessions: null, stale_date: '2026-10-19' }) === false && sm(null) === false && sm({}) === false);
+    // `date` bisa bar Sabtu/Minggu: yang menentukan sesi adalah stale_date, bukan date.
+    check('sintetis: bar weekend terakhir (date < ref) tapi bar sesinya se-sesi -> tetap se-sesi',
+      sm({ ref_date: '2026-10-19', lag_sessions: null, date: '2026-10-18', stale_date: '2026-10-19', stale: null }) === true);
+
+    // (b) live: per grup komoditas, terbit/tidaknya angka = kontrak yang disepakati dengan
+    //     reviewer (dinyatakan dari field yang terlihat di payload, bukan salinan kode).
+    const divGroups = (cmd.commodities || []).filter(g => g.commodity);
+    const divBad = [];
+    for (const g of divGroups) {
+      const c = g.commodity;
+      const same = fresh.isSameSessionBar(c);
+      const can = same && c.chg_1d != null && g.avg_chg != null;
+      if (can && g.divergence == null) divBad.push(g.id + ': se-sesi + angka lengkap tapi divergence null (' + g.divergence_reason + ')');
+      if (!can && g.divergence != null) divBad.push(g.id + ': divergence ' + g.divergence + ' padahal sesi/angka tidak sah');
+      if (g.divergence != null && Math.abs(g.divergence - Math.round((c.chg_1d - g.avg_chg) * 100) / 100) > 1e-9) divBad.push(g.id + ': nilai ' + g.divergence + ' != chg_1d - avg_chg');
+      const wantReason = g.divergence != null ? null
+        : (c.ref_date && c.state !== 'no_series' && !same ? 'commodity_stale' : 'insufficient');
+      if (g.divergence_reason !== wantReason) divBad.push(g.id + ': alasan ' + g.divergence_reason + ' != ' + wantReason);
+    }
+    check('live: tiap grup komoditas sesuai kontrak (angka, nilainya, dan alasan bercerita sama)',
+      divGroups.length > 0 && divBad.length === 0, divBad.join(' | '));
+    const noCmdGroups = (cmd.commodities || []).filter(g => !g.commodity);
+    check('live: grup tanpa seri komoditas tetap null + insufficient (tidak ikut berubah)',
+      noCmdGroups.every(g => g.divergence == null && g.divergence_reason === 'insufficient'),
+      noCmdGroups.map(g => g.id + ':' + g.divergence + '/' + g.divergence_reason).join(','));
+
+    // (c) dua sisi yang dikunci bersamaan
+    const bySourceGroups = divGroups.filter(g => g.commodity.state === 'by_source');
+    check('live: grup by_source (stale false sejak ambang per-seri) tetap tertahan -> divergence null + commodity_stale',
+      bySourceGroups.length > 0 && bySourceGroups.every(g => g.divergence == null && g.divergence_reason === 'commodity_stale'),
+      bySourceGroups.map(g => g.id + ':' + g.divergence + '/' + g.divergence_reason).join(','));
+    const naSameGroups = divGroups.filter(g => g.commodity.state === 'na' && fresh.isSameSessionBar(g.commodity));
+    check('live: seri na yang barnya di sesi rujukan tetap menerbitkan divergensi (kasus KRAFT_PULP)',
+      naSameGroups.every(g => g.divergence != null && g.divergence_reason === null),
+      naSameGroups.map(g => g.id + ':' + g.divergence + '/' + g.divergence_reason).join(',') || 'tidak ada grup na se-sesi');
+    check('live: cakupan (c) terisi — tanpa grup na se-sesi, asersi di atas kosong & revert diam-diam lolos',
+      naSameGroups.length > 0, divGroups.map(g => g.id + ':' + g.commodity.state).join(','));
+
+    // (d) tidak ada jalur kedua yang menerbitkan divergensi tanpa penjaga yang sama
+    const strayDiv = [];
+    for (const pair of [['/api/idx/market-regime', mr], ['/api/market/overview', ov]]) {
+      if (JSON.stringify(pair[1]).indexOf('"divergence"') !== -1) strayDiv.push(pair[0]);
+    }
+    check('live: hanya /api/commodities yang menerbitkan `divergence` (tidak ada surface kedua yang tak dijaga)',
+      strayDiv.length === 0, strayDiv.join(','));
 
     console.log(`\n${pass} lulus, ${failures.length} gagal`);
     if (failures.length) { failures.forEach(f => console.log(' - ' + f)); process.exitCode = 1; }

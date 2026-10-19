@@ -480,11 +480,14 @@ router.get('/commodities', (req, res) => {
       const cmd = cmdStats(g.cmd_code);
       if (cmd) freshEntries.push({ code: cmd.code, freshness: cmd });
       // Divergensi = chg_1d komoditas − avg chg_1d saham pada SESI YANG SAMA. Syaratnya
-      // `lag_sessions === 0`, BUKAN `!stale` (kanban t_b234606a): sejak ambang jadi per-seri,
-      // COAL/CPO (lag = kebiasaan sumbernya) berhenti berstatus 'stale' — tetapi bar-nya tetap
-      // dari sesi lain, jadi membandingkannya dengan tape saham hari ini tetap bukan divergensi.
-      // `stale` sekarang khusus alarm 'excess'; jangan dipakai sebagai penanda "se-sesi".
-      const divValid = cmd && cmd.lag_sessions === 0 && cmd.chg_1d != null && avg(chgs1) != null;
+      // "bar komoditas ini dari sesi rujukan", BUKAN `!stale` (kanban t_b234606a, koreksi
+      // review t_fb5135a3): sejak ambang jadi per-seri, COAL/CPO (lag = kebiasaan sumbernya)
+      // berhenti berstatus 'stale' — tetapi bar-nya tetap dari sesi lain, jadi membandingkannya
+      // dengan tape saham hari ini tetap bukan divergensi. Sebaliknya seri 'na' (mis. KRAFT_PULP)
+      // yang barnya PERSIS di sesi rujukan justru sah: level dan tape-nya se-sesi, hanya
+      // ekspektasinya belum dideklarasikan. `stale` sekarang khusus alarm 'excess'.
+      const sameSession = freshnessUtil.isSameSessionBar(cmd);
+      const divValid = sameSession && cmd.chg_1d != null && avg(chgs1) != null;
       return {
         id: g.id, label: g.label, tv: g.tv, desc: g.desc, icon: g.icon, color: g.color,
         tickers: g.tickers, stocks,
@@ -497,7 +500,11 @@ router.get('/commodities', (req, res) => {
         commodity: cmd,
         // divergensi: komoditas naik tapi saham turun (atau sebaliknya)
         divergence: divValid ? Math.round((cmd.chg_1d - avg(chgs1)) * 100) / 100 : null,
-        divergence_reason: divValid ? null : (cmd && cmd.lag_sessions > 0 ? 'commodity_stale' : 'insufficient')
+        // Alasan harus bercerita sama dengan penjaga di atas: 'commodity_stale' hanya bila ADA
+        // sesi rujukan dan barnya memang bukan dari sesi itu; sisanya 'insufficient' (tanpa bar,
+        // tanpa sesi rujukan, atau angka saham/komoditas yang kurang).
+        divergence_reason: divValid ? null
+          : (cmd && cmd.ref_date && cmd.state !== 'no_series' && !sameSession ? 'commodity_stale' : 'insufficient')
       };
     }).sort((a, b) => {
       const da = a.divergence == null ? -999 : Math.abs(a.divergence);
