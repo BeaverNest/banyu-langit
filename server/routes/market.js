@@ -205,7 +205,7 @@ router.get('/market/overview', (req, res) => {
       if (opts && opts.freshness === true) {
         // Tanggal bar dari helper (bar SESI terakhir): bar Sabtu/Minggu bukan sesi bursa
         // dan tidak boleh dipakai mengukur lag.
-        const f = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
+        const f = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows), code);
         // stale=true -> price/chg_1d/chg_5d/chg_20d di atas milik bar LAMA. Level tetap
         // dikirim (chart/rail memakainya) tapi UI wajib menulis "—" + tanggal.
         item.stale = f.stale;
@@ -213,6 +213,14 @@ router.get('/market/overview', (req, res) => {
         item.lag_sessions = f.lag_sessions;
         item.lag_capped = f.lag_capped;
         item.ref_date = f.ref_date;
+        // Ekspektasi per seri (kanban t_b234606a). `state` membedakan tiga keadaan yang dulu
+        // dipaksa jadi satu boolean: 'excess' (di luar kebiasaan sumber -> alarm + "basi"),
+        // 'by_source' (sumber memang lambat -> harga + tanggal ditulis netral, TANPA kata
+        // "basi"), 'na' (tidak dideklarasikan -> tanggal saja). `expected_lag_sessions` ikut
+        // dikirim walau tidak alarm supaya drift deklarasi terlihat tanpa menunggu alarm.
+        item.expected_lag_sessions = f.expected_lag_sessions;
+        item.excess_sessions = f.excess_sessions;
+        item.state = f.state;
       }
       return item;
     }
@@ -235,7 +243,11 @@ router.get('/market/overview', (req, res) => {
     ].map(([c, l, d]) => fromIndex(c, l, d)).filter(Boolean);
 
     const globalItems = ['SPX', 'VIX', 'DXY', 'US10Y'].map(fromOhlc).filter(Boolean);
-    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS', 'GOLD']
+    // 'GOLD' dihapus dari daftar ini (kanban t_b234606a): tidak ada seri ber-kode GOLD di
+    // custom_ohlc (emas = XAUUSD, dan baris emas di Overview adalah keputusan produk yang
+    // belum diambil — lihat catatan di OV_LABEL). Entri mati itu selalu ter-filter null
+    // sementara daftarnya terbaca seolah emas ikut dikirim.
+    const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS']
       .map(c => fromOhlc(c, { freshness: true })).filter(Boolean);
     const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
     // RATES: kurva belum tersedia dari rail gratis (TE hanya 10Y + level kebijakan),
@@ -434,7 +446,7 @@ router.get('/commodities', (req, res) => {
       const n = asc.length, last = asc[n - 1];
       // Tanggal bar diambil dari helper (bar sesi terakhir), bukan rows[0]: bar Sabtu/Minggu
       // bukan sesi bursa dan tidak boleh dipakai mengukur lag.
-      const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
+      const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows), code);
       return {
         code, price: last, date: rows[0].trade_date,
         chg_1d: pct(last, n > 1 ? asc[n - 2] : null),
@@ -449,6 +461,11 @@ router.get('/commodities', (req, res) => {
         lag_capped: fresh.lag_capped,
         ref_date: fresh.ref_date,
         stale_date: fresh.last_date,
+        // Ekspektasi per seri (t_b234606a): lihat catatan di fromOhlc. Ketiga field ini
+        // wajib ada di setiap seri — bukan hanya yang alarm.
+        expected_lag_sessions: fresh.expected_lag_sessions,
+        excess_sessions: fresh.excess_sessions,
+        state: fresh.state,
       };
     }
 
@@ -462,10 +479,12 @@ router.get('/commodities', (req, res) => {
       const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
       const cmd = cmdStats(g.cmd_code);
       if (cmd) freshEntries.push({ code: cmd.code, freshness: cmd });
-      // Divergensi = chg_1d komoditas − avg chg_1d saham pada SESI YANG SAMA. Kalau bar
-      // komoditas basi, pengurangnya berasal dari sesi lain -> angkanya bukan divergensi,
-      // jadi tidak diterbitkan (null) dan kartunya tidak diranking oleh angka palsu itu.
-      const divValid = cmd && !cmd.stale && cmd.chg_1d != null && avg(chgs1) != null;
+      // Divergensi = chg_1d komoditas − avg chg_1d saham pada SESI YANG SAMA. Syaratnya
+      // `lag_sessions === 0`, BUKAN `!stale` (kanban t_b234606a): sejak ambang jadi per-seri,
+      // COAL/CPO (lag = kebiasaan sumbernya) berhenti berstatus 'stale' — tetapi bar-nya tetap
+      // dari sesi lain, jadi membandingkannya dengan tape saham hari ini tetap bukan divergensi.
+      // `stale` sekarang khusus alarm 'excess'; jangan dipakai sebagai penanda "se-sesi".
+      const divValid = cmd && cmd.lag_sessions === 0 && cmd.chg_1d != null && avg(chgs1) != null;
       return {
         id: g.id, label: g.label, tv: g.tv, desc: g.desc, icon: g.icon, color: g.color,
         tickers: g.tickers, stocks,
@@ -478,7 +497,7 @@ router.get('/commodities', (req, res) => {
         commodity: cmd,
         // divergensi: komoditas naik tapi saham turun (atau sebaliknya)
         divergence: divValid ? Math.round((cmd.chg_1d - avg(chgs1)) * 100) / 100 : null,
-        divergence_reason: divValid ? null : (cmd && cmd.stale ? 'commodity_stale' : 'insufficient')
+        divergence_reason: divValid ? null : (cmd && cmd.lag_sessions > 0 ? 'commodity_stale' : 'insufficient')
       };
     }).sort((a, b) => {
       const da = a.divergence == null ? -999 : Math.abs(a.divergence);

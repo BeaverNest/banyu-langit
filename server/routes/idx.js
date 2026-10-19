@@ -3864,11 +3864,15 @@ module.exports = function(upload) {
           // no_series: tidak ada seri harga (≤1 observasi). Dipakai UI untuk menulis
           // "tanpa seri harga" alih-alih menampilkan level tunggal/0 seolah tren
           // (COKING_COAL & KRAFT_PULP: tidak ada kandidat di investing, t_6d027516 r5).
-          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null, stale: null, lag_sessions: null, ref_date: freshCtx.ref_date, stale_date: null };
+          // Tanpa bar: keadaan 'no_series' dihitung util yang sama, bukan ditebak pemanggil.
+          if (!rows.length) {
+            const nf = freshnessUtil.seriesFreshness(freshCtx, null, t.code);
+            return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null, stale: nf.stale, lag_sessions: nf.lag_sessions, lag_capped: nf.lag_capped, ref_date: nf.ref_date, stale_date: nf.last_date, expected_lag_sessions: nf.expected_lag_sessions, excess_sessions: nf.excess_sessions, state: nf.state };
+          }
           const now = rows[0].close;
           const d5 = rows[4] ? rows[4].close : now;
           const d20 = rows[19] ? rows[19].close : now;
-          const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
+          const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows), t.code);
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
             no_series: rows.length < 2,
@@ -3885,6 +3889,11 @@ module.exports = function(upload) {
             lag_capped: fresh.lag_capped,
             ref_date: fresh.ref_date,
             stale_date: fresh.last_date,
+            // Ekspektasi per seri (t_b234606a): 'excess' = alarm, 'by_source' = sumber memang
+            // lambat (tampil netral, tanpa kata "basi"), 'na' = tidak dideklarasikan.
+            expected_lag_sessions: fresh.expected_lag_sessions,
+            excess_sessions: fresh.excess_sessions,
+            state: fresh.state,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
             linked_sector: t.linked_sector || ''
@@ -4900,13 +4909,16 @@ module.exports = function(upload) {
             // sebagai harga hari ini. Level + persen TETAP dikirim (dipakai hitungan lain),
             // tapi `stale=true` mewajibkan UI menulis "—" + tanggal — satu aturan dengan
             // /api/commodities, /api/idx/market-regime, /api/market/overview.
-            const fresh = freshnessUtil.seriesFreshness(freshnessUtil.buildContext(db), freshnessUtil.lastRegularBarDate(cmdRows));
+            const fresh = freshnessUtil.seriesFreshness(freshnessUtil.buildContext(db), freshnessUtil.lastRegularBarDate(cmdRows), commodityCode);
             commodityContext = {
               code: commodityCode, label: commodityLabel, price: now,
               date: cmdRows[0].trade_date,
               stale: fresh.stale, stale_date: fresh.last_date,
               lag_sessions: fresh.lag_sessions, lag_capped: fresh.lag_capped,
               ref_date: fresh.ref_date,
+              expected_lag_sessions: fresh.expected_lag_sessions,
+              excess_sessions: fresh.excess_sessions,
+              state: fresh.state,
               chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
               chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0
             };

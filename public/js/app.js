@@ -115,11 +115,14 @@ async function loadMktOverview(){
         // ditulis, pembaca menyimpulkan instrumennya datar dua hari padahal kita tidak
         // punya datanya. chg 1D/5D/20D tetap ditampilkan (itu gerakan bar terakhir seri
         // itu) tapi warnanya dinetralkan, sama seperti tabel Market Regime.
-        var stale=i.stale===true;
-        var dim=stale?' style="color:var(--t3)"':'';
+        var stale=i.stale===true;                        // 'excess': di luar kebiasaan sumber (t_b234606a)
+        var bySrc=i.state==='by_source';                 // sumber memang lambat — netral, tanpa kata "basi"
+        var dim=(stale||bySrc)?' style="color:var(--t3)"':'';
         var priceCell=stale
           ?'<span class="mkt-price" style="white-space:nowrap" title="level bar '+esc(shortDay(i.stale_date||i.date))+' = '+num(i.price,i.price>=1000?0:2)+'; sumber belum menerbitkan bar untuk '+(i.lag_sessions||0)+' sesi — retry tidak menolong, yang berhenti di hulu"><b style="font-family:var(--fm);color:var(--t2)">—</b> <span style="font-size:9px;color:var(--am)">⏸ basi '+esc(shortDay(i.stale_date||i.date))+'</span></span>'
-          :'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>';
+          :(bySrc
+            ?'<span class="mkt-price" style="white-space:nowrap" title="ekspektasi sumber ini '+(i.expected_lag_sessions==null?'?':i.expected_lag_sessions)+' sesi">'+num(i.price,i.price>=1000?0:2)+' <span style="font-size:9px;color:var(--t3)">sumber lag '+(i.lag_sessions||0)+' sesi ('+esc(shortDay(i.stale_date||i.date))+')</span></span>'
+            :'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>');
         h+='<div class="mkt-item">'
           +'<span class="mkt-label">'+esc(i.label)+'</span>'
           +'<span class="mkt-desc">'+esc(i.desc||'')+(i.linked_sector?' <span class="mkt-link">→ '+esc(i.linked_sector)+'</span>':'')+'</span>'

@@ -1276,12 +1276,19 @@ function sdCommentary(d) {
   var cmd = d.commodity_context;
   if (cmd) {
     var pctS = function(v){ v = v || 0; return (v > 0 ? '+' : '') + v + '%'; };
-    if (cmd.stale === true) {
+    if (cmd.stale === true || cmd.state === 'excess') {
       var cmdAsOf = shortDay(cmd.stale_date);
       h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' <b style="color:var(--t3)">—</b>'
         + ' <span style="color:var(--t3)" title="level bar ' + esc(cmdAsOf) + ': ' + (cmd.price||0).toLocaleString() + ' — tidak dipakai sebagai harga terkini">'
         + '⏸ basi · terakhir ' + cmdAsOf + ' · ' + (cmd.lag_sessions == null ? '?' : cmd.lag_sessions) + ' sesi</span>'
         + ' (5D: ' + pctS(cmd.chg_5d) + ', 20D: ' + pctS(cmd.chg_20d) + ' s/d ' + cmdAsOf + ').</p>';
+    } else if (cmd.state === 'by_source') {
+      // Sumber memang lambat: harganya tetap harga bar terakhir, dan itu ditulis apa adanya
+      // (tanggal + lag) tanpa kata "basi" (kanban t_b234606a).
+      var cmdAsOf2 = shortDay(cmd.stale_date || cmd.date);
+      h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' ' + (cmd.price||0).toLocaleString()
+        + ' <span style="color:var(--t3)">· sumber lag ' + (cmd.lag_sessions == null ? '?' : cmd.lag_sessions) + ' sesi (' + cmdAsOf2 + ')</span>'
+        + ', 5D: ' + pctS(cmd.chg_5d) + '%, 20D: ' + pctS(cmd.chg_20d) + '% s/d ' + cmdAsOf2 + '.</p>';
     } else {
       h += '<p style="margin:0 0 8px"><b>Commodity:</b> ' + esc(cmd.label) + ' ' + (cmd.price||0).toLocaleString() + ', 5D: ' + (cmd.chg_5d > 0 ? '+' : '') + cmd.chg_5d + '%, 20D: ' + (cmd.chg_20d > 0 ? '+' : '') + cmd.chg_20d + '%.</p>';
     }

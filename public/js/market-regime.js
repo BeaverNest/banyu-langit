@@ -157,7 +157,8 @@ function mrRenderCommodity(cmds) {
   cmds.forEach(function(c) {
     var pts = c.points || 0;
     var thin = pts > 0 && pts < 6;                 // histori belum cukup untuk hitung 5D/20D
-    var stale = c.stale === true;                  // bar terakhir tertinggal dari sesi rujukan (t_61ccbdbe)
+    var stale = c.stale === true;                  // 'excess': di luar kebiasaan sumber (t_b234606a)
+    var bySource = c.state === 'by_source';        // sumber memang lambat — netral, tanpa kata "basi"
     var chg5v = thin ? null : (c.chg_5d || 0);
     var chg20v = thin ? null : (c.chg_20d || 0);
     var chg5 = chg5v === null ? 0 : chg5v, chg20 = chg20v === null ? 0 : chg20v;
@@ -168,8 +169,13 @@ function mrRenderCommodity(cmds) {
     var priceCell = stale
       ? '<span style="color:var(--t2)" title="bar terakhir ' + esc(c.date || '') + ' (level ' + (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + ') — bukan sesi ' + esc(c.ref_date || '') + '">—</span>'
         + ' <span style="font-size:9px;color:var(--am);white-space:nowrap" title="sumber tidak menerbitkan bar untuk ' + (c.lag_sessions || 0) + ' sesi terakhir; retry tidak menolong">⏸ basi ' + esc(shortDay(c.stale_date || c.date)) + '</span>'
-      : (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
-    var dimStale = stale ? 'color:var(--t3);' : '';
+      : ((c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2})
+        + (bySource
+          ? ' <span style="font-size:9px;color:var(--t3);white-space:nowrap" title="ekspektasi sumber ini ' + (c.expected_lag_sessions == null ? '?' : c.expected_lag_sessions) + ' sesi">sumber lag ' + (c.lag_sessions || 0) + ' sesi (' + esc(shortDay(c.stale_date || c.date)) + ')</span>'
+          : ''));
+    // by_source juga diredam: angkanya dari bar sesi lama, jadi tidak boleh diwarnai seperti
+    // pergerakan hari ini — bedanya, di sini tidak ada kata "basi" dan tidak ada banner ⏸.
+    var dimStale = (stale || bySource) ? 'color:var(--t3);' : '';
     // Baris basi: 5D/20D tetap dihitung dari bar terakhir seri itu, tapi diwarnai netral —
     // warnanya tidak boleh mengklaim pergerakan "sampai hari ini".
     var c5style = stale ? dimStale : (chg5 > 0 ? 'color:var(--gn);' : chg5 < 0 ? 'color:var(--rd);' : '');

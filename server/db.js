@@ -864,6 +864,23 @@ try {
   if (!ctCols2.includes('ohlc_mode')) db.exec("ALTER TABLE custom_tickers ADD COLUMN ohlc_mode TEXT");
 } catch (e) { console.error('Migration custom_tickers.ohlc_mode:', e.message); }
 
+// Ekspektasi lag per seri (kanban t_b234606a, keputusan eko). Menggantikan ambang global
+// "lag >= 1 sesi = basi": alarm hanya menyala bila lag melebihi kebiasaan SUMBER seri itu.
+//   expected_lag_sessions = lag yang WAJAR (satuan: sesi IDX). NULL = belum/tidak
+//                           dideklarasikan -> status 'na', tidak pernah alarm. 0 = sumber
+//                           seharusnya menerbitkan bar sesi berjalan.
+//   lag_basis             = asal nilai: 'declared' | 'na' | NULL (belum diisi).
+//   lag_declared_at       = kapan dideklarasikan (ISO). Deklarasi tua = sinyal review.
+// Nilainya SENGAJA tidak di-seed di sini: nilai di berkas ini akan menimpa deklarasi manual
+// setiap restart, dan expectation yang menyesuaikan diri sendiri mematikan alarm tepat saat
+// dibutuhkan. Seed-nya lewat server/scripts/seed_expected_lag.js (idempotent).
+try {
+  const ctCols3 = db.prepare('PRAGMA table_info(custom_tickers)').all().map(c => c.name);
+  if (!ctCols3.includes('expected_lag_sessions')) db.exec('ALTER TABLE custom_tickers ADD COLUMN expected_lag_sessions INTEGER');
+  if (!ctCols3.includes('lag_basis')) db.exec("ALTER TABLE custom_tickers ADD COLUMN lag_basis TEXT");
+  if (!ctCols3.includes('lag_declared_at')) db.exec('ALTER TABLE custom_tickers ADD COLUMN lag_declared_at TEXT');
+} catch (e) { console.error('Migration custom_tickers.lag:', e.message); }
+
 // ═══ Helper functions ═══
 function latestSnap() {
   const r = db.prepare('SELECT MAX(snapshot_date) as d FROM holdings').get();

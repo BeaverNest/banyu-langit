@@ -56,9 +56,15 @@ function cmdRender(el){
     // hanya tanggalnya; menampilkan 50.127 di sini akan mengarang sesi yang tidak ada.
     var cm=c.commodity;
     h+='<div style="display:flex;align-items:baseline;gap:6px;font-size:11px;margin-bottom:3px">';
-    if(cm&&cm.stale){
+    if(cm&&(cm.state==='excess'||cm.stale===true)){
       h+='<b style="font-family:monospace;color:var(--t2)" title="bar terakhir '+shortDay(cm.stale_date||cm.date)+' (level '+px(cm.price)+') — bukan sesi '+shortDay(cm.ref_date)+'">—</b>';
       h+='<span style="color:var(--am);font-weight:600;font-size:9px" title="sumber tidak menerbitkan bar untuk '+(cm.lag_sessions||0)+' sesi terakhir; retry tidak menolong, yang berhenti di hulu">⏸ basi · terakhir '+shortDay(cm.stale_date||cm.date)+' · '+(cm.lag_sessions||0)+' sesi</span>';
+    } else if(cm&&cm.state==='by_source'){
+      // Sumber memang lambat (CPO/RSS3: nol bar Jumat). Bukan alarm: harga + tanggal bar
+      // ditulis apa adanya dalam warna netral, tanpa kata "basi" dan tanpa banner ⏸ —
+      // alarm-kelelahan berasal dari kata, bukan cuma dari warna (kanban t_b234606a).
+      h+='<b style="font-family:monospace">'+px(cm.price)+'</b>';
+      h+='<span style="color:var(--t3);font-size:9px" title="lag '+(cm.lag_sessions||0)+' sesi masih dalam kebiasaan sumber (ekspektasi '+(cm.expected_lag_sessions==null?'?':cm.expected_lag_sessions)+' sesi)">sumber lag '+(cm.lag_sessions||0)+' sesi ('+shortDay(cm.stale_date||cm.date)+')</span>';
     } else if(cm){
       h+='<b style="font-family:monospace">'+px(cm.price)+'</b>';
       h+='<span style="color:'+cl(cm.chg_1d)+';font-weight:600">'+pc(cm.chg_1d)+'</span>';
@@ -110,12 +116,15 @@ function cmdRender(el){
   if(cmdData.trade_date)h+='<div style="font-size:10px;color:var(--t2);padding:4px 0">IDX Data: '+cmdData.trade_date+'</div>';
   // Penanda basi tidak boleh cuma menumpang di kartu: baris ini menyebut SESI RUJUKAN
   // yang dipakai gerbang per-seri, jadi pembaca tahu "terakhir 15 Okt" diukur terhadap apa.
+  // Banner ⏸ hanya untuk 'excess' (di luar kebiasaan sumber). Seri 'by_source' tidak masuk
+  // sini walau lag-nya > 0 — kalau masuk, kembalilah alarm-kelelahan yang kartu t_b234606a
+  // hapus. Karena itu pembandingnya `state`/`stale`, bukan `lag_sessions > 0`.
   var cf=cmdData.freshness;
   if(cf&&cf.stale_codes&&cf.stale_codes.length){
     var parts=[];
     for(var m=0;m<cmds.length;m++){
       var cq=cmds[m].commodity;
-      if(cq&&cq.stale)parts.push(cq.code+' ('+shortDay(cq.stale_date||cq.date)+', '+cq.lag_sessions+' sesi)');
+      if(cq&&(cq.state==='excess'||cq.stale===true))parts.push(cq.code+' ('+shortDay(cq.stale_date||cq.date)+', '+(cq.excess_sessions==null?cq.lag_sessions:cq.excess_sessions)+' sesi di atas kebiasaan)');
     }
     h+='<div style="font-size:10px;color:var(--am);padding:0 0 4px;line-height:1.4">⏸ '+parts.length+' seri komoditas tertinggal dari sesi '+shortDay(cf.ref_date)+': '+parts.join(' · ')+'</div>';
   }
