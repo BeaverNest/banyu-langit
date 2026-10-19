@@ -1,0 +1,11 @@
+const D=require('/app/node_modules/better-sqlite3');const db=new D('/app/data/trading.db',{readonly:true});
+console.log('TOP 10 harian:');
+db.prepare('SELECT trade_date, r_pct, close FROM market_index_constructed ORDER BY r_pct DESC LIMIT 10').all().forEach(r=>console.log('  ',r.trade_date,(r.r_pct*100).toFixed(2)+'%',r.close));
+console.log('BOTTOM 5:');
+db.prepare('SELECT trade_date, r_pct FROM market_index_constructed ORDER BY r_pct ASC LIMIT 5').all().forEach(r=>console.log('  ',r.trade_date,(r.r_pct*100).toFixed(2)+'%'));
+const s=db.prepare('SELECT AVG(r_pct) a, COUNT(*) n, SUM(r_pct) tot FROM market_index_constructed WHERE r_pct IS NOT NULL').get();
+console.log('rata2 harian:',(s.a*100).toFixed(4)+'%','selama',s.n,'sesi','| jumlah r:',(s.tot*100).toFixed(1)+'%');
+const big = db.prepare('SELECT COUNT(*) n FROM idx_daily WHERE close > prev_close*3 AND prev_close>0').get();
+console.log('baris dengan lonjakan >200% (raw):', big);
+const disc = db.prepare("SELECT trade_date, code, prev_close, close FROM idx_daily WHERE close > prev_close*3 AND prev_close>0 ORDER BY trade_date DESC LIMIT 8").all();
+disc.forEach(r=>console.log('  ',r.trade_date,r.code,'prev',r.prev_close,'close',r.close));

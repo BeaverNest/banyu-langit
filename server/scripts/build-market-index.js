@@ -22,14 +22,27 @@ db.exec(`
   );
 `);
 
-const rows = db.prepare(`SELECT trade_date, code, close, prev_close, listed_shares
+// Hanya saham yang likuid (median nilai transaksi 20 sesi >= ambang) supaya
+// benchmark tidak didominasi mikro-cap dan tidak kena premi rebalancing
+// equal-weight. Ambang default Rp1 miliar, sama dengan lantai universe strategi.
+const LIQ_MIN = parseFloat(process.argv[2] || '1000000000');
+const rows = db.prepare(`SELECT trade_date, code, close, prev_close, value,
+  COALESCE(listed_shares,0) AS listed_shares
   FROM idx_daily WHERE close>0 ORDER BY trade_date, code`).all();
 
-const ins = db.prepare(`INSERT INTO market_index_constructed (trade_date, close, r_pct, n_stocks)
-  VALUES (?,?,?,?) ON CONFLICT(trade_date) DO UPDATE SET close=excluded.close, r_pct=excluded.r_pct,
-  n_stocks=excluded.n_stocks, updated_at=datetime('now')`);
+const liqQ = new Map();
+function median(a) {
+  if (!a.length) return 0;
+  const s = a.slice().sort((x, y) => x - y);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const ins = db.prepare(`INSERT INTO market_index_constructed (trade_date, close, r_pct, n_stocks, basis)
+  VALUES (?,?,?,?,'equal_weighted_liquid') ON CONFLICT(trade_date) DO UPDATE SET close=excluded.close,
+  r_pct=excluded.r_pct, n_stocks=excluded.n_stocks, basis=excluded.basis, updated_at=datetime('now')`);
 
 let prevMap = new Map();      // code -> {close, shares}
+const valueHist = new Map();  // code -> median nilai transaksi 20 sesi (likuiditas)
 let idxLevel = 1000;
 let curDate = null;
 let bucket = [];
@@ -40,7 +53,10 @@ function flush() {
   // total mcap sesi sebelumnya untuk kode yang ada di kedua sesi
   let n = 0, sum = 0;
   for (const r of bucket) {
-    if (!prevMap.has(r.code) || !(r.prev_close > 0)) continue;
+    const p = prevMap.get(r.code);
+    if (!p || !(r.prev_close > 0)) continue;
+    if (valueHist.get(r.code) == null) continue;      // belum punya histori likuiditas
+    if (valueHist.get(r.code) < LIQ_MIN) continue;    // di bawah lantai likuiditas
     sum += (r.close / r.prev_close - 1);
     n++;
   }
@@ -50,7 +66,14 @@ function flush() {
   days++;
   // sesi ini menjadi acuan sesi berikutnya
   prevMap = new Map();
-  for (const r of bucket) prevMap.set(r.code, { close: r.close, shares: r.listed_shares || 0 });
+  for (const r of bucket) {
+    prevMap.set(r.code, { close: r.close, shares: r.listed_shares || 0 });
+    const q = liqQ.get(r.code) || [];
+    q.push(r.value || 0);
+    if (q.length > 20) q.shift();
+    liqQ.set(r.code, q);
+    valueHist.set(r.code, median(q));
+  }
   bucket = [];
 }
 

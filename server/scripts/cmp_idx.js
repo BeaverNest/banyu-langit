@@ -1,0 +1,5 @@
+const D=require('/app/node_modules/better-sqlite3');const db=new D('/app/data/trading.db',{readonly:true});
+function ret(name){const r=db.prepare('SELECT trade_date,close FROM daily_index WHERE index_name=? ORDER BY trade_date').all(name);if(r.length<2)return null;return {n:r.length,a:r[0].trade_date,b:r[r.length-1].trade_date,pct:((r[r.length-1].close/r[0].close-1)*100).toFixed(2)};}
+['Composite Index','LQ45','KOMPAS100','IDX30','Main Board Index','IDX SMC Composite','Indeks Investor33'].forEach(n=>{const x=ret(n);if(x)console.log(n.padEnd(24),x.n,'sesi',x.a,'->',x.b,x.pct+'%');});
+const r=db.prepare("SELECT trade_date,close FROM market_index_constructed WHERE trade_date>='2025-07-01' ORDER BY trade_date").all();
+console.log('konstruksi (likuid)'.padEnd(24),r.length,'sesi',r[0].trade_date,'->',r[r.length-1].trade_date,((r[r.length-1].close/r[0].close-1)*100).toFixed(2)+'%');
