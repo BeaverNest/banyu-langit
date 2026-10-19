@@ -153,8 +153,7 @@ function sdRenderTab(tabId) {
     }
     if (tabId === 'ownership' && d.ownership) sdDrawOwnershipCharts(d.ownership);
     if (tabId === 'flow') {
-      if (d.chart) sdDrawFnetChart(d.chart);
-      if (d.bid_offer && d.bid_offer.data) sdDrawBOChart(d.bid_offer.data);
+      if (d.chart) sdDrawFlowCharts(d);
     }
     if (tabId === 'news') sdLoadNews(d.code);
     // Resize
@@ -783,37 +782,83 @@ function sdTabOwnership(d) {
 // TAB: FLOW
 // ═══════════════════════════════════════════════════════════════
 function sdTabFlow(d) {
-  var h = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  var ch = d.chart || [];
+  if (ch.length < 10) return '<div style="padding:20px;color:var(--t3)">No flow data</div>';
   var ff = d.foreign || {};
+  var h = '';
 
-  // Foreign Flow
-  h += '<div style="padding:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
-  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:8px">FOREIGN FLOW</div>';
-  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
-  h += sdFlowCard('5D Net', ff.fnet_5d);
-  h += sdFlowCard('10D Net', ff.fnet_10d);
-  h += sdFlowCard('20D Net', ff.fnet_20d);
-  var totLbl = ff.fnet_total_since ? 'Total sejak ' + String(ff.fnet_total_since).slice(0, 7) : 'Total';
-  h += sdFlowCard(totLbl, ff.fnet_total);
-  h += '</div>';
-  if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">🔥 Accumulating ' + ff.accum_streak + ' consecutive days</div>';
-  if (ff.distrib_streak > 0) h += '<div style="font-size:11px;color:var(--rd);font-weight:600;margin-bottom:6px">⚠ Distributing ' + ff.distrib_streak + ' consecutive days</div>';
-  h += '<div id="sd-fnet-chart" style="width:100%;height:240px"></div>';
+  // ── KPI: net per jendela + intensitas ──
+  function netN(n) {
+    var rows = ch.slice(-n), t = 0;
+    rows.forEach(function (r) { t += (r.fnet || 0); });
+    return t;
+  }
+  function valN(n) {
+    var t = 0;
+    ch.slice(-n).forEach(function (r) { t += (r.close || 0) * (r.volume || 0); });
+    return t;
+  }
+  var n20 = netN(20), v20 = valN(20);
+  var intens = v20 > 0 ? n20 / v20 * 100 : null;
+
+  h += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px">';
+  [['5D', netN(5)], ['10D', netN(10)], ['20D', netN(20)], ['60D', netN(60)]].forEach(function (x) {
+    var c = x[1] >= 0 ? 'var(--gn)' : 'var(--rd)';
+    h += '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
+    h += '<div style="font-size:9px;color:var(--t3)">' + x[0] + ' NET</div>';
+    h += '<div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + c + '">' + fmtRp(x[1]) + '</div></div>';
+  });
+  var ic = intens == null ? 'var(--t3)' : intens >= 0 ? 'var(--gn)' : 'var(--rd)';
+  h += '<div style="padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
+  h += '<div style="font-size:9px;color:var(--t3)">INTENSITAS 20D</div>';
+  h += '<div style="font-size:16px;font-weight:800;font-family:var(--fm);color:' + ic + '">' + (intens == null ? '—' : (intens >= 0 ? '+' : '') + intens.toFixed(2) + '%') + '</div>';
+  h += '<div style="font-size:8px;color:var(--t3)">net asing ÷ nilai transaksi</div></div>';
   h += '</div>';
 
-  // Bid/Offer
-  var bo = d.bid_offer || {};
-  h += '<div style="padding:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px">';
-  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:8px">BID/OFFER ANALYSIS</div>';
-  var avgR = bo.avg_ratio || 50;
-  var boColor = avgR > 55 ? 'var(--gn)' : avgR < 45 ? 'var(--rd)' : 'var(--am)';
-  h += '<div style="text-align:center;margin-bottom:8px"><div style="font-size:32px;font-weight:800;font-family:var(--fm);color:' + boColor + '">' + avgR.toFixed(1) + '%</div><div style="font-size:10px;color:var(--t3)">20D Avg Bid Ratio</div></div>';
-  h += '<div id="sd-bo-chart" style="width:100%;height:240px"></div>';
+  if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">Accumulating ' + ff.accum_streak + ' hari berturut-turut</div>';
+  if (ff.distrib_streak > 0) h += '<div style="font-size:11px;color:var(--rd);font-weight:600;margin-bottom:6px">Distributing ' + ff.distrib_streak + ' hari berturut-turut</div>';
+
+  // ── Grafik ──
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">KUMULATIF ARUS ASING vs HARGA <span style="font-weight:400;color:var(--t3)">(120 sesi)</span></div>';
+  h += '<div id="sd-fnet-chart" style="width:100%;height:250px"></div></div>';
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BID RATIO <span style="font-weight:400;color:var(--t3)">(sesi tersedia)</span></div>';
+  h += '<div id="sd-bo-chart" style="width:100%;height:250px"></div></div>';
   h += '</div>';
 
+  // ── Tabel 20 sesi ──
+  var last20 = ch.slice(-20);
+  var cum = 0, cumArr = [];
+  last20.forEach(function (r) { cum += (r.fnet || 0); cumArr.push(cum); });
+  h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">RINCIAN 20 SESI TERAKHIR</div>';
+  h += '<div style="overflow-x:auto"><table class="bei-tbl" style="font-size:11px;width:100%"><thead style="font-size:9px"><tr>';
+  h += '<th class="al">Tanggal</th><th class="ar">Close</th><th class="ar">Chg</th><th class="ar">F.Net</th><th class="ar">Kum. 20D</th><th class="ar">Bid%</th><th class="ar">Nilai</th></tr></thead><tbody>';
+  last20.slice().reverse().forEach(function (r, revIdx) {
+    var i = last20.length - 1 - revIdx;
+    var p = last20[i - 1];
+    var chg = p ? (r.close - p.close) / p.close * 100 : 0;
+    var fv = (r.fnet || 0);
+    var bv = r.bid_vol || 0, ov = r.offer_vol || 0, tot = bv + ov;
+    var br = (bv > 0 && ov > 0) ? bv / tot * 100 : null;
+    var val = (r.close || 0) * (r.volume || 0);
+    h += '<tr><td class="al" style="font-family:var(--fm);color:var(--t2)">' + esc(r.date) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + (r.close || 0).toLocaleString() + '</td>';
+    h += '<td class="ar ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
+    h += '<td class="ar ' + (fv > 0 ? 'up' : fv < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + fmtRp(fv) + '</td>';
+    h += '<td class="ar ' + (cumArr[i] > 0 ? 'up' : cumArr[i] < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + fmtRp(cumArr[i]) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm);color:' + (br == null ? 'var(--t3)' : br >= 55 ? 'var(--gn)' : br <= 45 ? 'var(--rd)' : 'var(--t2)') + '">' + (br == null ? '—' : br.toFixed(1)) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + fmtRp(val) + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">Bid% = bid volume ÷ (bid + offer) pada snapshot harian; kosong bila data bid/offer tidak tersedia.</div>';
   h += '</div>';
+
   return h;
 }
+
 
 // ═══════════════════════════════════════════════════════════════
 // TAB: NEWS
@@ -922,32 +967,57 @@ function sdDrawRadar(sc) {
 }
 
 // ═══ FOREIGN FLOW BAR CHART ═══
-function sdDrawFnetChart(chartData) {
-  var el = $('sd-fnet-chart'); if (!el) return;
-  var c = BL.init(el, 'sd-fnet'); if (!c) return;
-  var last20 = chartData.slice(-20);
-  c.setOption({
-    grid: { left: 50, right: 10, top: 8, bottom: 24 },
-    tooltip: { trigger: 'axis', textStyle: { fontSize: 10 } },
-    xAxis: { type: 'category', data: last20.map(function(r) { return r.date; }), axisLabel: { fontSize: 8, formatter: function(v) { return v.substring(8); } } },
-    yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: function(v) { return BL.fmtRp(v); } }, splitLine: { lineStyle: { color: '#1e2836' } } },
-    series: [{ type: 'bar', barMaxWidth: 14, data: last20.map(function(r) { var v = r.fnet || 0; return { value: v, itemStyle: { color: v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)' } }; }) }]
-  }, true);
-}
+// ═══ FLOW CHARTS ═══
+function sdDrawFlowCharts(d) {
+  var ch = d.chart || [];
+  var rows = ch.slice(-120);
+  if (rows.length < 10) return;
 
-// ═══ BID/OFFER CHART ═══
-function sdDrawBOChart(boData) {
-  var el = $('sd-bo-chart'); if (!el) return;
-  var c = BL.init(el, 'sd-bo'); if (!c) return;
-  c.setOption({
-    grid: { left: 35, right: 10, top: 8, bottom: 24 },
-    xAxis: { type: 'category', data: boData.map(function(r) { return r.date; }), axisLabel: { fontSize: 8, formatter: function(v) { return v.substring(8); } } },
-    yAxis: { type: 'value', min: 20, max: 80, axisLabel: { fontSize: 8, formatter: function(v) { return v + '%'; } }, splitLine: { lineStyle: { color: '#1e2836' } } },
-    series: [
-      { type: 'bar', data: boData.map(function(r) { return { value: r.ratio, itemStyle: { color: r.ratio > 55 ? 'rgba(34,197,94,0.6)' : r.ratio < 45 ? 'rgba(239,68,68,0.6)' : 'rgba(255,152,0,0.4)' } }; }), barMaxWidth: 12 },
-      { type: 'line', data: boData.map(function() { return 50; }), symbol: 'none', lineStyle: { color: '#555', type: 'dashed', width: 1 }, silent: true }
-    ]
-  }, true);
+  var el1 = document.getElementById('sd-fnet-chart');
+  if (el1) {
+    var cum = [], acc = 0;
+    rows.forEach(function (r) { acc += (r.fnet || 0) / 1e9; cum.push(Math.round(acc * 10) / 10); });
+    var c1 = BL.init(el1, 'sd-fnet-chart'); if (c1) c1.setOption({
+      grid: { left: 48, right: 52, top: 24, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: { type: 'category', data: rows.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(rows.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: [
+        { type: 'value', name: 'kum (miliar)', nameTextStyle: { fontSize: 8, color: '#7d8fa8' }, axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
+        { type: 'value', name: 'harga', nameTextStyle: { fontSize: 8, color: '#7d8fa8' }, axisLabel: { fontSize: 8, formatter: function (v) { return v.toLocaleString(); } }, splitLine: { show: false } }
+      ],
+      series: [
+        { name: 'Kumulatif asing', type: 'line', data: cum, symbol: 'none', lineStyle: { width: 1.8, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' }, areaStyle: { opacity: 0.1 },
+          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 0 }] } },
+        { name: 'Harga', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.close; }), symbol: 'none', lineStyle: { width: 1.2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } }
+      ]
+    });
+  }
+
+  var bo = rows.filter(function (r) { return (r.bid_vol || 0) > 0 && (r.offer_vol || 0) > 0; });
+  var el2 = document.getElementById('sd-bo-chart');
+  if (el2 && bo.length >= 3) {
+    var ratio = bo.map(function (r) { var t = (r.bid_vol || 0) + (r.offer_vol || 0); return Math.round((r.bid_vol || 0) / t * 1000) / 10; });
+    var ma20 = ratio.map(function (_, i) {
+      if (i < 4) return null;
+      var k = Math.max(0, i - 19), s = 0;
+      for (var j = k; j <= i; j++) s += ratio[j];
+      return Math.round(s / (i - k + 1) * 10) / 10;
+    });
+    var c2 = BL.init(el2, 'sd-bo-chart'); if (c2) c2.setOption({
+      grid: { left: 40, right: 14, top: 24, bottom: 22 },
+      tooltip: { trigger: 'axis' },
+      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
+      xAxis: { type: 'category', data: bo.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(bo.length / 5) }, axisLine: { lineStyle: { color: '#1e2836' } } },
+      yAxis: { type: 'value', min: 0, max: 100, axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } },
+      series: [
+        { name: 'Bid ratio', type: 'bar', data: ratio, barMaxWidth: 10,
+          itemStyle: { color: function (p) { return p.value >= 55 ? 'rgba(34,197,94,0.8)' : p.value <= 45 ? 'rgba(239,68,68,0.8)' : 'rgba(148,163,184,0.6)'; } } },
+        { name: 'MA20', type: 'line', data: ma20, symbol: 'none', lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' },
+          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 50 }] } }
+      ]
+    });
+  }
 }
 
 // ═══ OWNERSHIP CHARTS ═══
