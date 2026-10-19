@@ -38,6 +38,20 @@
 //   `not_yet` (rc 0): belum ada yang bisa dinilai, dan penjaga yang berteriak sebelum
 //   jadwalnya tiba akan diabaikan orang. Baris pra-jendela tetap dilaporkan (`early_pulls`).
 //
+// CAKUPAN PER-RAIL (`--codes` / `--codes-file`) — WAJIB untuk kesimpulan
+//   Ada DUA rail yang sama-sama menulis dengan sumber `investing/<pin>`: rail komoditas
+//   (`investing_push_bl.py`, 16 seri) dan rail kurva SUN (`bi_curve_push_bl.py`, 11 tenor
+//   ID1M..ID30Y). Filter lama `source LIKE 'investing/%'` tidak bisa membedakan keduanya,
+//   sehingga sejak rail SUN dijadwalkan (kanban t_b2c644a0) rail SUN yang jalan akan
+//   MEMENUHI syarat "ada tarikan rail hari ini" untuk penjadwal komoditas yang mati —
+//   penjaga ini berhenti membuktikan apa pun.
+//   Karena itu cakupan dinyatakan sebagai DAFTAR KODE rail (bukan pola sumber): penjadwal
+//   meneruskan kode rail-nya (`--codes "$(rail --list-codes)"`, lihat scripts/daily-rails.sh)
+//   dan pembungkus penjaga mengulang per rail (scripts/rail-liveness.sh).
+//   Tanpa `--codes`, skrip ini tetap jalan untuk DIAGNOSA tetapi menyebut dirinya
+//   `all-investing` + `mixed_rails: true` di keluaran teks maupun JSON — jawabannya TIDAK
+//   memisahkan rail, dan tidak boleh dipakai untuk menyimpulkan "penjadwal X jalan".
+//
 // Kode keluar:
 //   0  = sehat (hari bursa & ada tarikan dalam jendela), hari non-bursa, atau `not_yet`
 //        (jam WIB belum melewati jendela tarik — belum ada yang dinilai)
@@ -50,6 +64,9 @@
 //   docker exec -w /app banyu-langit node server/scripts/check-rail-liveness.js
 //   ... --date 2026-10-24      # nilai tanggal lain (uji, tanpa menulis apa pun)
 //   ... --window-start 00:00   # hitung juga tarikan pra-jendela (uji/diagnosa)
+//   ... --codes COAL,WTI       # cakupan PER RAIL (wajib untuk kesimpulan; lihat bawah)
+//   ... --codes-file /tmp/k    # daftar kode dari berkas (satu per baris / dipisah koma)
+//   ... --codes COAL,WTI --codes-ok   # kode rail ini yang sudah `ok` sejak jendela tarik
 //   ... --json                 # keluaran mesin
 // Hanya membaca DB (readonly) — tidak menulis satu baris pun.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -73,6 +90,39 @@ const WANT_JSON = process.argv.indexOf('--json') !== -1;
 // Kontraknya mesin: stdout bersih, exit 0 walau kosong; kegagalan DB tetap exit 2.
 const CODES_ONLY = process.argv.indexOf('--codes-ok') !== -1;
 const DATE_ARG = arg('date', null);
+// Cakupan per-rail = daftar kode (lihat kepala berkas). Divalidasi ketat karena nilainya
+// masuk ke teks SQL; kode yang tidak valid membuat skrip berhenti (rc 2), bukan diabaikan.
+const CODES_ARG = arg('codes', null);
+const CODES_FILE = arg('codes-file', null);
+const CODE_RE = /^[A-Za-z0-9_]{1,32}$/;
+
+function readCodes() {
+  if (CODES_ARG === true) return { error: '--codes butuh daftar kode (mis. --codes COAL,WTI)' };
+  if (CODES_FILE === true) return { error: '--codes-file butuh path' };
+  const out = [];
+  const push = (v) => String(v || '').split(/[,\s]+/).forEach(t => { if (t) out.push(t.toUpperCase()); });
+  if (typeof CODES_ARG === 'string' && CODES_ARG.trim()) push(CODES_ARG);
+  if (typeof CODES_FILE === 'string') {
+    let raw;
+    try { raw = fs.readFileSync(CODES_FILE, 'utf8'); }
+    catch (e) { return { error: 'codes-file tidak terbaca: ' + e.message }; }
+    push(raw);
+  }
+  const uniq = [...new Set(out)];
+  const bad = uniq.filter(c => !CODE_RE.test(c));
+  if (bad.length) return { error: 'kode tidak valid: ' + bad.slice(0, 5).join(',') };
+  return { codes: uniq };
+}
+
+/** Cakupan query: daftar kode (per-rail) atau seluruh `investing/%` (diagnosa, campur rail). */
+function scopeOf() {
+  const r = readCodes();
+  if (r.error) return { error: r.error };
+  const codes = r.codes || [];
+  if (!codes.length) return { mode: 'all-investing', codes: [], mixed: true, sql: '' };
+  const list = codes.map(c => "'" + c + "'").join(',');
+  return { mode: 'codes', codes, mixed: false, sql: ' AND code IN (' + list + ')' };
+}
 // Ambang jendela tarik — HARUS sama dengan market-rails/scripts/daily-rails.sh (env yang sama).
 const WINDOW_START = arg('window-start', process.env.RAIL_WINDOW_START || '18:30');
 const WINDOW_OK = typeof WINDOW_START === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(WINDOW_START);
@@ -129,6 +179,11 @@ function main() {
     console.error('GAGAL: --window-start/RAIL_WINDOW_START harus HH:MM (00:00-23:59), diterima: ' + WINDOW_START);
     return 2;
   }
+  const SCOPE = scopeOf();
+  if (SCOPE.error) {
+    console.error('GAGAL: ' + SCOPE.error);
+    return 2;
+  }
   const s = sessionOf(date, CALENDAR);
 
   let db;
@@ -139,11 +194,13 @@ function main() {
     return 2;
   }
 
-  // "Rail investing" = baris yang sumbernya pin investing (rail komoditas + kurva SUN).
+  // "Rail investing" = baris yang sumbernya pin investing, DIBATASI ke kode rail pemanggil
+  // bila `--codes` diberikan (dua rail berbagi pola sumber yang sama — lihat kepala berkas).
   // Derived table tidak dipakai: SQL-nya harus jelas di sini, bukan di lapisan lain.
   const WIB_TS = "datetime(substr(pulled_at,1,19),'+7 hours')";
   const WIB_DAY = "date(" + WIB_TS + ")";
   const WIB_HM = "strftime('%H:%M'," + WIB_TS + ")";
+  const SCOPE_SQL = SCOPE.sql;
   let rail, early, all, recent;
   try {
     rail = db.prepare(
@@ -153,14 +210,14 @@ function main() {
               SUM(CASE WHEN status='no_data' THEN 1 ELSE 0 END) no_data_pulls,
               MIN(pulled_at) first_pull, MAX(pulled_at) last_pull,
               GROUP_CONCAT(DISTINCT endpoint) endpoints
-         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'
+         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}
           AND ${WIB_HM} >= @since`).get({ date, since: WINDOW_START });
     // Baris pra-jendela dihitung terpisah: sah sebagai telemetri, TIDAK sah sebagai bukti
     // "hari ini ditarik" (lihat kepala berkas).
     early = db.prepare(
       `SELECT COUNT(*) pulls, SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) ok_pulls,
               MIN(pulled_at) first_pull, MAX(pulled_at) last_pull
-         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'
+         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}
           AND ${WIB_HM} < @since`).get({ date, since: WINDOW_START });
     all = db.prepare(
       `SELECT COUNT(*) pulls, COUNT(DISTINCT code) codes FROM custom_pull_log WHERE ${WIB_DAY}=?`).get(date);
@@ -179,7 +236,7 @@ function main() {
     try {
       const rows = db.prepare(
         `SELECT DISTINCT code FROM custom_pull_log
-          WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%' AND status='ok'
+          WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%' AND status='ok'${SCOPE_SQL}
             AND ${WIB_HM} >= @since
           ORDER BY code`).all({ date, since: WINDOW_START });
       db.close();
@@ -203,33 +260,40 @@ function main() {
   const earlyNote = earlyPulls
     ? ' [' + earlyPulls + ' tarikan pra-jendela (' + earlyOk + ' ok) diabaikan: ditarik sebelum ' + WINDOW_START + ' WIB]'
     : '';
+  // Cakupan ikut DICETAK di setiap putusan: tanpa ini, jawaban "ok" dari cakupan campuran
+  // mudah dibaca sebagai "rail X jalan" padahal yang terbukti cuma "ada rail yang jalan".
+  const scopeNote = SCOPE.mode === 'codes'
+    ? ' [cakupan: ' + SCOPE.codes.length + ' kode rail]'
+    : ' [cakupan: SELURUH investing/% — TIDAK memisahkan rail; rail komoditas & rail SUN saling menutupi]';
   let code = 0, verdict, detail;
   if (!s.session) {
     verdict = 'not_expected';
-    detail = 'hari non-bursa (' + s.reason + ') — penjadwal tidak diharapkan menarik' + earlyNote;
+    detail = 'hari non-bursa (' + s.reason + ') — penjadwal tidak diharapkan menarik' + earlyNote + scopeNote;
   } else if (beforeWindow) {
     verdict = 'not_yet';
-    detail = 'jendela tarik belum tiba (sekarang ' + nowHm + ' WIB < ' + WINDOW_START + ' WIB) — belum ada yang dinilai' + earlyNote;
+    detail = 'jendela tarik belum tiba (sekarang ' + nowHm + ' WIB < ' + WINDOW_START + ' WIB) — belum ada yang dinilai' + earlyNote + scopeNote;
   } else if (railPulls === 0) {
     verdict = 'scheduler_silent';
-    detail = 'HARI BURSA tetapi 0 baris tarikan rail investing di ' + date + ' WIB sejak ' + WINDOW_START + ' WIB'
-      + earlyNote
-      + (Number(all.pulls || 0) ? ' (ada ' + all.pulls + ' baris sumber lain, jadi hanya rail ini yang diam)' : '');
+    detail = 'HARI BURSA tetapi 0 baris tarikan rail dalam cakupan ini di ' + date + ' WIB sejak ' + WINDOW_START + ' WIB'
+      + earlyNote + scopeNote
+      + (Number(all.pulls || 0) ? ' (ada ' + all.pulls + ' baris sumber lain hari itu, jadi hanya cakupan ini yang diam)' : '');
     code = 1;
   } else if (railOk === 0) {
     verdict = 'rail_failed';
     detail = railPulls + ' baris tarikan ada tetapi 0 ber-status ok (error=' + Number(rail.error_pulls || 0)
-      + ', no_data=' + Number(rail.no_data_pulls || 0) + ')' + earlyNote;
+      + ', no_data=' + Number(rail.no_data_pulls || 0) + ')' + earlyNote + scopeNote;
     code = 3;
   } else {
     verdict = 'ok';
-    detail = railOk + '/' + railPulls + ' tarikan ok, ' + Number(rail.codes) + ' kode' + earlyNote;
+    detail = railOk + '/' + railPulls + ' tarikan ok, ' + Number(rail.codes) + ' kode' + earlyNote + scopeNote;
   }
 
   if (WANT_JSON) {
     console.log(JSON.stringify({
       date_wib: date, verdict, exit_code: code, detail,
       window_start_wib: WINDOW_START, now_wib: nowHm,
+      scope: { mode: SCOPE.mode, code_count: SCOPE.codes.length,
+               codes: SCOPE.codes, mixed_rails: SCOPE.mixed },
       session: { is_session: s.session, basis: s.basis, reason: s.reason, warn: s.warn || null },
       calendar: CALENDAR,
       rail: { pulls: railPulls, ok_pulls: railOk, codes: Number(rail.codes || 0),
@@ -243,7 +307,12 @@ function main() {
   } else {
     console.log('rail-liveness date=' + date + ' session=' + (s.session ? 'ya' : 'TIDAK')
       + ' basis=' + s.basis + ' reason=' + s.reason
-      + ' window_start=' + WINDOW_START + ' now=' + nowHm);
+      + ' window_start=' + WINDOW_START + ' now=' + nowHm
+      + ' scope=' + (SCOPE.mode === 'codes' ? SCOPE.codes.length + 'kode' : 'ALL-investing'));
+    if (SCOPE.mixed) {
+      console.log('  CAKUPAN CAMPURAN: filter ini menghitung SEMUA investing/% — rail komoditas dan'
+        + ' rail kurva SUN saling menutupi. Pakai --codes untuk putusan per rail.');
+    }
     console.log('  verdict=' + verdict + ' exit=' + code + ' — ' + detail);
     if (railPulls) {
       console.log('  rail investing: pulls=' + railPulls + ' ok=' + railOk + ' codes=' + Number(rail.codes)
