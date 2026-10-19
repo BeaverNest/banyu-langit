@@ -226,6 +226,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cohlc_code ON custom_ohlc(code);
   CREATE INDEX IF NOT EXISTS idx_cohlc_date ON custom_ohlc(trade_date);
 
+  -- Jejak PENULISAN ULANG bar yang SUDAH tersimpan (kanban t_7be29126).
+  -- Sebelum tabel ini, re-pull seri pin berkelanjutan (investing 8849 / 961730 / 992745) menimpa
+  -- bar lama di custom_ohlc tanpa bekas sama sekali: UNIQUE(trade_date, code) + ON CONFLICT DO
+  -- UPDATE membuat 2026-10-15 WTI berubah 97,97 (NOV-26) -> 96,50 (DEC-26) saat roll, dan angka
+  -- lamanya hilang (bukan di custom_ohlc_archive — arsip itu hanya untuk baris yang SUMBERNYA
+  -- diganti, bukan untuk nilai yang ditulis ulang sumber yang sama).
+  -- Sengaja APPEND-ONLY dan tanpa UNIQUE(code, trade_date, source): satu bar bisa ditulis ulang
+  -- berkali-kali (bar sesi berjalan direvisi vendor sebelum settle), dan setiap revisi adalah
+  -- fakta tersendiri. age_days = umur bar saat ditulis ulang, supaya "revisi sesi berjalan"
+  -- (0-1 hari) bisa dibedakan dari "penulisan ulang bar lama" (>= 2 hari) tanpa menebak.
+  -- CATATAN: komentar di dalam db.exec(...) ini TIDAK boleh memuat backtick — backtick menutup
+  -- template literal-nya dan file gagal di-parse (pernah terjadi saat tabel ini ditambahkan).
+  CREATE TABLE IF NOT EXISTS custom_ohlc_rewrites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    source TEXT,
+    old_source TEXT,
+    age_days INTEGER,
+    old_open REAL, old_high REAL, old_low REAL, old_close REAL, old_volume REAL,
+    new_open REAL, new_high REAL, new_low REAL, new_close REAL, new_volume REAL,
+    detected_by TEXT DEFAULT '',
+    detected_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cohlc_rw_code_date ON custom_ohlc_rewrites(code, trade_date);
+  CREATE INDEX IF NOT EXISTS idx_cohlc_rw_at ON custom_ohlc_rewrites(detected_at);
+
   CREATE TABLE IF NOT EXISTS quarterly_financials (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,

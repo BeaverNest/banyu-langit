@@ -2867,12 +2867,99 @@ module.exports = function(upload) {
     ).run(code, name, category, source, cnt, dr.f, dr.l);
     return { total_rows: cnt, date_range: { first: dr.f, last: dr.l } };
   }
+  // ─── Jejak PENULISAN ULANG bar yang sudah tersimpan (kanban t_7be29126) ───
+  // Seri pin berkelanjutan (investing 8849 CL · 961730 HRCc1 · 992745 FCPOc1) BUKAN harga satu
+  // kontrak sepanjang sejarah: ketika pin pindah bulan, vendor menulis ULANG bar yang sudah terbit.
+  // Terukur 19 Okt 2026: bar WTI 2026-10-15 tersimpan 97,97 (NOV-26) lalu menjadi 96,50 (DEC-26)
+  // setelah re-pull. Kunci barisnya UNIQUE(trade_date, code), jadi re-pull menimpa nilai lama dan
+  // angka lamanya hilang tanpa bekas — custom_ohlc_archive TIDAK menolong karena arsip itu hanya
+  // untuk baris yang SUMBERNYA diganti, bukan untuk nilai yang ditulis ulang sumber yang sama.
+  // Fungsi ini TIDAK mengubah nilai yang disimpan: seri tidak dibuat immutable dan tiap bar tidak
+  // dilabeli bulan kontrak — keduanya keputusan produk (a/b di kartu). Yang dicatat hanya fakta
+  // "bar ini sudah ada, nilainya berubah dari X ke Y pada waktu Z, umur bar saat itu N hari".
+  // age_days dipisahkan supaya revisi sesi berjalan (0-1 hari, vendor menyempurnakan bar sebelum
+  // settle) tidak tertukar dengan penulisan ulang bar lama (>= 2 hari, pola roll).
+  const REWRITE_FIELDS = ['open', 'high', 'low', 'close', 'volume'];
+
+  function sameNum(a, b) {
+    if (a === null || a === undefined) return b === null || b === undefined;
+    if (b === null || b === undefined) return false;
+    const x = Number(a), y = Number(b);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return Math.abs(x - y) <= 1e-9;
+  }
+
+  /** Catat bar yang SUDAH ada lalu ditulis dengan nilai berbeda.
+   *  Mengembalikan {count, max_age_days}: umur tertua yang berubah itu yang membedakan
+   *  "revisi sesi berjalan" (0-1 hari) dari "bar lama ditulis ulang" (>= 2 hari, pola roll). */
+  function logRewrites(code, gated, source, priceOnly, endpoint) {
+    // Untuk seri price_only, O/H/L sengaja dinull-kan lebih dulu (normalizePriceOnly). Kalau ikut
+    // dibandingkan, setiap run akan mencatat "O/H/L hilang" sebagai penulisan ulang — bukan roll.
+    const fields = priceOnly ? ['close', 'volume'] : REWRITE_FIELDS;
+    const sel = db.prepare(
+      `SELECT open, high, low, close, volume, COALESCE(source,'') AS src
+       FROM custom_ohlc WHERE code=? AND trade_date=?`);
+    const ins = db.prepare(
+      `INSERT INTO custom_ohlc_rewrites
+       (code, trade_date, source, old_source, age_days,
+        old_open, old_high, old_low, old_close, old_volume,
+        new_open, new_high, new_low, new_close, new_volume, detected_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    // Umur bar dihitung di SQL dengan +7 jam (WIB), konvensi yang sama dengan epochToDate() di app
+    // ini. Kalau dihitung dari `new Date()` di Node, container berjalan di UTC dan bar "hari ini"
+    // (WIB) akan terbaca 1 hari lebih tua antara 00:00-07:00 WIB — cukup untuk membuat ambang
+    // "bar lama" (>=2 hari) salah pada bar kemarin. tanggal tak valid -> julianday NULL -> age NULL.
+    const ageStmt = db.prepare(
+      "SELECT CAST(julianday(date('now','+7 hours')) - julianday(?) AS INTEGER) AS age");
+    let count = 0, maxAge = null;
+    for (const g of gated) {
+      const cur = sel.get(code, g.date);
+      if (!cur) continue;                                      // bar baru = INSERT, bukan tulis ulang
+      if (!fields.some(f => !sameNum(cur[f], g[f]))) continue;  // identik = bukan tulis ulang
+      const age = ageStmt.get(g.date).age;
+      ins.run(code, g.date, source, cur.src || null, age,
+              cur.open, cur.high, cur.low, cur.close, cur.volume,
+              g.open, g.high, g.low, g.close, g.volume, endpoint);
+      count++;
+      if (age !== null && (maxAge === null || age > maxAge)) maxAge = age;
+    }
+    return { count, max_age_days: maxAge };
+  }
+
   // List all custom tickers
   router.get('/custom/tickers', (req, res) => {
     try {
       const rows = db.prepare('SELECT * FROM custom_tickers ORDER BY code').all();
       res.json(rows);
     } catch (e) { res.json([]); }
+  });
+
+  // Riwayat penulisan ulang bar (kanban t_7be29126) — baca-saja, tanpa mengubah seri apa pun.
+  //   ?code=WTI            batasi satu seri
+  //   ?min_age_days=2      hanya bar LAMA yang ditulis ulang (pola roll); revisi sesi berjalan = 0-1
+  //   ?limit=200           maks 2000
+  // close_pct dihitung di sini (old_close 0/NULL -> null, bukan 0 palsu).
+  router.get('/custom/rewrites', (req, res) => {
+    try {
+      const code = String(req.query.code || '').toUpperCase().trim();
+      const limit = Math.min(2000, Math.max(1, Number.parseInt(req.query.limit, 10) || 200));
+      const minAgeRaw = req.query.min_age_days;
+      const minAge = (minAgeRaw === undefined || minAgeRaw === '' || !Number.isFinite(Number(minAgeRaw)))
+        ? null : Number(minAgeRaw);
+      const where = [], args = [];
+      if (code) { where.push('code=?'); args.push(code); }
+      if (minAge !== null) { where.push('age_days >= ?'); args.push(minAge); }
+      const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+      const rows = db.prepare(`SELECT * FROM custom_ohlc_rewrites${clause} ORDER BY id DESC LIMIT ?`)
+        .all(...args, limit);
+      const total = db.prepare(`SELECT COUNT(*) c FROM custom_ohlc_rewrites${clause}`).get(...args).c;
+      for (const r of rows) {
+        r.close_pct = (r.old_close === null || r.new_close === null || !r.old_close) ? null
+          : Number((((r.new_close - r.old_close) / r.old_close) * 100).toFixed(4));
+      }
+      res.json({ ok: true, code: code || null, min_age_days: minAge, total, count: rows.length,
+                 rewrites: rows });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
   // Delete custom ticker + its OHLC data
@@ -2909,7 +2996,13 @@ module.exports = function(upload) {
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
 
       let written = 0;
+      let rewrites = { count: 0, max_age_days: null };
       db.transaction(() => {
+        // HARUS sebelum loop upsert: pembandingnya adalah nilai yang SEKARANG tersimpan. Kalau
+        // dipanggil sesudahnya, yang dibandingkan adalah nilai baru dengan nilai baru (= tidak
+        // pernah ada penulisan ulang yang tercatat). Satu transaksi dengan penulisannya, jadi
+        // catatan dan perubahan baris batal bersama kalau ada error.
+        rewrites = logRewrites(code, gated, source, priceOnly, 'POST /custom/upsert');
         const up = db.prepare(
           `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume) VALUES(?,?,?,?,?,?,?)
            ON CONFLICT(trade_date, code) DO UPDATE SET
@@ -2944,6 +3037,7 @@ module.exports = function(upload) {
         ).run(code, name, category, source, cnt, dr.f, dr.l);
       }
       res.json({ ok: true, code, written, total_rows: cnt, fill_missing: fillMissing,
+                 rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
                  date_range: { first: dr.f, last: dr.l } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
