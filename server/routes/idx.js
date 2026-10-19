@@ -5,6 +5,7 @@ const { toIsoDate } = require('../utils/iso-date');
 const { getCodeVersion } = require('../utils/code-version');
 const { loadFactors, adjustRows, factorAt, factorForRow, fallbackRatioActions, registerSqlAdjust } = require('../utils/price-adjust');
 const freshnessUtil = require('../utils/series-freshness');
+const pullLog = require('../utils/pull-log');
 
 // Provenance stamp written into every daily_scores row (agent rail contract):
 // names the variant of each derived indicator, so a stored number stays auditable
@@ -2865,6 +2866,15 @@ module.exports = function(upload) {
        WHERE code=? GROUP BY COALESCE(source,'') ORDER BY n DESC`).all(code);
   }
 
+  /** Sesi rujukan saat tarik DIMULAI — dipakai telemetri tarikan (kanban t_57252454) untuk
+   *  menghitung lag frontier. Dibaca sekali per request supaya semua kode dalam satu run
+   *  (fetch-all/fetch-eod loop) diukur terhadap sesi yang sama, bukan terhadap sesi yang
+   *  bergeser di tengah loop gara-gara kode pertama sudah menulis bar hari ini.
+   *  Kegagalannya tidak boleh menggagalkan penulisan data: null = lag tidak dihitung. */
+  function pullRefDate() {
+    try { return freshnessUtil.buildContext(db).ref_date || null; } catch (e) { return null; }
+  }
+
   /** Salin baris yang sumbernya bukan keepSource ke arsip, lalu hapus dari tabel hidup.
    *  Arsip = janji "jangan hapus seri lama"; tanpa salinan, klaim itu kosong. */
   function archiveForeignRows(code, keepSource, reason) {
@@ -3138,6 +3148,30 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
+  // Telemetri TARIKAN per seri (kanban t_57252454) — baca-saja, tidak menulis apa pun.
+  //   ?code=CPO     batasi satu seri
+  //   ?limit=200    baris mentah terbaru (maks 2000)
+  // Ringkasan per kode yang menjawab "kenapa seri ini tertinggal?":
+  //   pull_behind    true  = sumber sudah terbit, tabel kita belum punya barnya -> CACAT KITA
+  //   source_stalled true  = frontier tidak maju N tarikan sukses -> SUMBER berhenti terbit
+  //   frontier_lag_p50/p95 = lag (SESI) antara frontier sumber dan sesi rujukan PADA JAM TARIK.
+  // Angka-angka ini MELAPORKAN; ia tidak dipakai menulis ulang expected_lag_sessions (lihat
+  // catatan di utils/pull-log.js: ratchet otomatis = cara mematikan alarm).
+  router.get('/custom/pull-log', (req, res) => {
+    try {
+      const code = String(req.query.code || '').toUpperCase().trim();
+      const limit = Math.min(2000, Math.max(1, Number.parseInt(req.query.limit, 10) || 200));
+      const where = code ? ' WHERE code=?' : '';
+      const args = code ? [code] : [];
+      const rows = db.prepare(`SELECT * FROM custom_pull_log${where} ORDER BY id DESC LIMIT ?`)
+        .all(...args, limit);
+      const total = db.prepare(`SELECT COUNT(*) c FROM custom_pull_log${where}`).get(...args).c;
+      const report = pullLog.pullReport(db, { code: code || null });
+      res.json({ ok: true, code: code || null, total, count: rows.length,
+                 thresholds: report.thresholds, by_code: report.by_code, rows });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
   // Delete custom ticker + its OHLC data — tapi barisnya diarsipkan dulu (bukan hilang).
   router.delete('/custom/tickers/:code', (req, res) => {
     try {
@@ -3206,6 +3240,8 @@ module.exports = function(upload) {
       let normalized = 0;
       let rewrites = { count: 0, max_age_days: null };
       const droppedByState = {};
+      // Telemetri tarikan (t_57252454): sesi rujukan dibaca SEBELUM menulis.
+      const pullRef = pullRefDate();
       db.transaction(() => {
         // Seri price_only: arsipkan + null-kan O/H/L LAMA lebih dulu, SEBELUM payload menimpa
         // baris yang sama (payload price_only menulis NULL) — kalau urutannya dibalik, nilai
@@ -3252,11 +3288,21 @@ module.exports = function(upload) {
         ).run(code, name, category, source, cnt, dr.f, dr.l);
         if (verdict) db.prepare('UPDATE custom_tickers SET ohlc_mode=? WHERE code=?').run(verdict, code);
       }
+      // Telemetri tarikan (t_57252454): frontier = MAX(trade_date) dari PAYLOAD, bukan dari DB
+      // kita. Ditulis SESUDAH data + custom_tickers, dan logPull tidak pernah melempar, jadi
+      // kegagalan mencatat tidak bisa membatalkan penulisan yang sudah sah.
+      const frontier = pullLog.frontierOf(gated);
+      const pullStatus = pullLog.logPull(db, {
+        code, source, frontier, rows: gated.length, written,
+        endpoint: 'POST /custom/upsert', refDate: pullRef,
+        status: written > 0 ? 'ok' : 'no_data',
+      });
       res.json({ ok: true, code, source, written,
                  rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
                  total_rows: cnt, fill_missing: fillMissing,
                  ohlc_mode: verdict || getTickerMode(code), price_only: priceOnly,
                  nulled_ohlc_rows: normalized, bar_states: droppedByState, states_in_table: stateCounts(code),
+                 pull: { status: pullStatus, source_frontier_date: frontier, ref_date: pullRef },
                  date_range: { first: dr.f, last: dr.l } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -3371,6 +3417,9 @@ module.exports = function(upload) {
       const tickers = db.prepare('SELECT code, name, category, source FROM custom_tickers ORDER BY code').all();
       const detail = [];
       let skipped = 0;
+      // Telemetri tarikan (t_57252454): satu sesi rujukan untuk seluruh run, supaya seri pertama
+      // yang menulis bar hari ini tidak menggeser pembanding seri berikutnya di run yang sama.
+      const pullRef = pullRefDate();
       for (const t of tickers) {
         if (!isYahooOwned(t.source)) {
           skipped++;
@@ -3394,8 +3443,18 @@ module.exports = function(upload) {
           const cnt = db.prepare('SELECT COUNT(*) c FROM custom_ohlc WHERE code=?').get(t.code).c;
           db.prepare(`UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime('now') WHERE code=?`)
             .run(cnt, dr.f, dr.l, t.code);
-          detail.push({ code: t.code, ok: true, written, last: dr.l, bar_states: barStates });
+          const pullFrontier = pullLog.frontierOf(r.rows || []);
+          const pullStatus = pullLog.logPull(db, {
+            code: t.code, source: String(r.source || 'yahoo'), frontier: pullFrontier,
+            rows: (r.rows || []).length, written,
+            endpoint: 'POST /custom/fetch-all', refDate: pullRef,
+            status: written > 0 ? 'ok' : 'no_data',
+          });
+          detail.push({ code: t.code, ok: true, written, last: dr.l, bar_states: barStates,
+                        pull: { status: pullStatus, source_frontier_date: pullFrontier } });
         } catch (e) {
+          pullLog.logPull(db, { code: t.code, source: 'yahoo', frontier: null, rows: 0, written: 0,
+            endpoint: 'POST /custom/fetch-all', refDate: pullRef, status: 'error', error: e.message });
           detail.push({ code: t.code, ok: false, error: e.message });
         }
       }
@@ -3411,6 +3470,9 @@ module.exports = function(upload) {
 
   router.post('/custom/fetch-eod', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found. Place eod-fetcher.js in server/routes/' });
+    // Telemetri tarikan (t_57252454) butuh kode + sumber juga saat tarikan GAGAL: tanpa baris
+    // 'error', jalur tarik yang rusak tidak bisa dibedakan dari sumber yang berhenti terbit.
+    let pullCode = '', pullSource = '', pullRef = null;
     try {
       const code = (req.body.code || '').toUpperCase().trim();
       const category = (req.body.category || '').trim();
@@ -3419,10 +3481,19 @@ module.exports = function(upload) {
 
       const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
       const det = eodFetcher.detectSource(code, category);
+      pullCode = code;
+      pullSource = String(det.source || 'external');
+      pullRef = pullRefDate();
 
       const result = await eodFetcher.fetchEOD(code, category, apiKey, fullHistory);
       const rows = result.rows;
-      if (!rows.length) return res.json({ ok: true, code, inserted: 0, updated: 0, message: 'No data returned' });
+      pullSource = String(result.source || pullSource);
+      if (!rows.length) {
+        const st = pullLog.logPull(db, { code, source: pullSource, frontier: null, rows: 0, written: 0,
+          endpoint: 'POST /custom/fetch-eod', refDate: pullRef, status: 'no_data', error: 'no rows from vendor' });
+        return res.json({ ok: true, code, inserted: 0, updated: 0, message: 'No data returned',
+                          pull: { status: st, source_frontier_date: null, ref_date: pullRef } });
+      }
 
       const upsert = gatedUpsertStmt();
       const barStates = {};
@@ -3448,10 +3519,24 @@ module.exports = function(upload) {
          source=excluded.source, updated_at=datetime('now')`
       ).run(code, name, category || 'custom', result.source, totalRows, dateRange?.first || '', dateRange?.last || '');
 
+      // Telemetri tarikan (t_57252454): frontier payload, bukan MAX(custom_ohlc).
+      const pullFrontier = pullLog.frontierOf(rows);
+      const pullStatus = pullLog.logPull(db, {
+        code, source: pullSource, frontier: pullFrontier, rows: rows.length, written: inserted + updated,
+        endpoint: 'POST /custom/fetch-eod', refDate: pullRef,
+        status: (inserted + updated) > 0 ? 'ok' : 'no_data',
+      });
       res.json({ ok: true, code, source: result.source, inserted, updated, total_rows: totalRows,
         bar_states: barStates,
+        pull: { status: pullStatus, source_frontier_date: pullFrontier, ref_date: pullRef },
         date_range: { first: dateRange?.first, last: dateRange?.last } });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+      if (pullCode) {
+        pullLog.logPull(db, { code: pullCode, source: pullSource || null, frontier: null, rows: 0, written: 0,
+          endpoint: 'POST /custom/fetch-eod', refDate: pullRef, status: 'error', error: e.message });
+      }
+      res.status(500).json({ error: e.message });
+    }
   });
 
   router.post('/custom/sync-stale', async (req, res) => {
@@ -3470,6 +3555,8 @@ module.exports = function(upload) {
       if (!stale.length) return res.json({ ok: true, synced: 0, message: 'All tickers up to date' });
 
       const results = [];
+      // Telemetri tarikan (t_57252454): satu sesi rujukan untuk seluruh run (lihat fetch-all).
+      const pullRef = pullRefDate();
       for (const ticker of stale) {
         try {
           const det = eodFetcher.detectSource(ticker.code, ticker.category);
@@ -3492,11 +3579,23 @@ module.exports = function(upload) {
           const dateRange = db.prepare('SELECT MIN(trade_date) as first, MAX(trade_date) as last FROM custom_ohlc WHERE code=?').get(ticker.code);
           db.prepare('UPDATE custom_tickers SET rows=?, first_date=?, last_date=?, updated_at=datetime(\'now\') WHERE code=?')
             .run(totalRows, dateRange?.first || '', dateRange?.last || '', ticker.code);
-          results.push({ code: ticker.code, inserted, updated, source: data.source, bar_states: barStates });
+          const pullFrontier = pullLog.frontierOf(data.rows || []);
+          const pullStatus = pullLog.logPull(db, {
+            code: ticker.code, source: String(data.source || 'external'), frontier: pullFrontier,
+            rows: (data.rows || []).length, written: inserted + updated,
+            endpoint: 'POST /custom/sync-stale', refDate: pullRef,
+            status: (inserted + updated) > 0 ? 'ok' : 'no_data',
+          });
+          results.push({ code: ticker.code, inserted, updated, source: data.source, bar_states: barStates,
+                         pull: { status: pullStatus, source_frontier_date: pullFrontier } });
 
           // Rate limit: 2s between requests
           await new Promise(r => setTimeout(r, 2000));
-        } catch (e) { results.push({ code: ticker.code, error: e.message }); }
+        } catch (e) {
+          pullLog.logPull(db, { code: ticker.code, source: null, frontier: null, rows: 0, written: 0,
+            endpoint: 'POST /custom/sync-stale', refDate: pullRef, status: 'error', error: e.message });
+          results.push({ code: ticker.code, error: e.message });
+        }
       }
       res.json({ ok: true, synced: results.length, results });
     } catch (e) { res.status(500).json({ error: e.message }); }

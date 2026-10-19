@@ -51,6 +51,7 @@
 
 const Database = require('/app/node_modules/better-sqlite3');
 const fresh = require('/app/server/utils/series-freshness');
+const pullLog = require('/app/server/utils/pull-log');
 
 const BL = process.env.BL_URL || 'http://127.0.0.1:3000';
 const db = new Database('/app/data/trading.db', { readonly: true });
@@ -474,6 +475,221 @@ function main() {
     }
     check('live: hanya /api/commodities yang menerbitkan `divergence` (tidak ada surface kedua yang tak dijaga)',
       strayDiv.length === 0, strayDiv.join(','));
+
+    // ── [9] telemetri tarikan: pull_behind vs source_stalled (kanban t_57252454) ─────
+    // Yang dikunci: (a) frontier beku N tarikan sukses = sumber berhenti, (b) satu tarikan
+    // HILANG (error) tidak boleh menghitung sebagai tarikan sukses, (c) lag kita sendiri
+    // (last_date < frontier) dipisahkan dari lag sumber, (d) ambang snapshot 7 bukan 3,
+    // (e) ringkasan panel menerbitkan keduanya tanpa mengubah aturan stale/excess,
+    // (f) angka p50/p95 dihitung dari frontier + ref_date yang TERSIMPAN saat tarik.
+    console.log('\n[9] telemetri tarikan — frontier sumber per tarikan (pull_behind / source_stalled)');
+
+    // (a) DB tiruan: pullContext hanya memakai 2 query (baris terakhir per kode + custom_tickers),
+    // jadi perilakunya bisa diuji tanpa menulis satu baris pun ke DB asli.
+    const mockDb = (pullRows, tickers) => ({
+      prepare(sql) {
+        const s = String(sql);
+        if (s.indexOf('custom_pull_log') !== -1) {
+          return {
+            all: (n) => {
+              const by = {}, out = [];
+              for (const r of pullRows.slice().sort((x, y) => y.id - x.id)) {
+                const a = (by[r.code] = by[r.code] || []);
+                if (a.length < (n || 8)) a.push(r);
+              }
+              for (const k of Object.keys(by)) out.push(...by[k]);
+              return out;
+            },
+          };
+        }
+        if (s.indexOf('custom_tickers') !== -1) {
+          return { all: () => Object.keys(tickers || {}).map(c => ({ code: c, last_date: tickers[c] })) };
+        }
+        throw new Error('mockDb: SQL tak dikenal: ' + s.slice(0, 60));
+      },
+    });
+    const pr = (code, id, at, frontier, status, source) => ({
+      id, code, source: source || 'investing/959209', pulled_at: at,
+      ref_date: '2026-10-19', source_frontier_date: frontier, status: status || 'ok', rows: 1, written: 1,
+    });
+
+    const frozen3 = [pr('ZZF', 1, '2026-10-17T10:00:00Z', '2026-10-15'),
+                     pr('ZZF', 2, '2026-10-18T10:00:00Z', '2026-10-15'),
+                     pr('ZZF', 3, '2026-10-19T10:00:00Z', '2026-10-15')];
+    const pFrozen = pullLog.pullContext(mockDb(frozen3, { ZZF: '2026-10-15' })).by_code.ZZF;
+    check('sintetis: frontier beku 3 tarikan sukses -> source_stalled TRUE (ambang rail sesi = 3)',
+      pFrozen.source_stalled === true && pFrozen.frontier_frozen_pulls === 3 && pFrozen.stall_threshold === 3,
+      JSON.stringify(pFrozen));
+
+    // satu tarikan HILANG (error) di antara tiga: hanya 2 tarikan sukses -> belum stalled.
+    const withHole = [pr('ZZH', 1, '2026-10-17T10:00:00Z', '2026-10-15'),
+                      pr('ZZH', 2, '2026-10-18T10:00:00Z', null, 'error'),
+                      pr('ZZH', 3, '2026-10-19T10:00:00Z', '2026-10-15')];
+    const pHole = pullLog.pullContext(mockDb(withHole, { ZZH: '2026-10-15' })).by_code.ZZH;
+    check('sintetis: satu tarikan HILANG (error) -> TIDAK stalled (2 tarikan sukses < 3)',
+      pHole.source_stalled === false && pHole.frontier_frozen_pulls === 2 && pHole.last_status === 'ok',
+      JSON.stringify(pHole));
+
+    const advancing = [pr('ZZA', 1, '2026-10-15T10:00:00Z', '2026-10-14'),
+                       pr('ZZA', 2, '2026-10-16T10:00:00Z', '2026-10-15'),
+                       pr('ZZA', 3, '2026-10-19T10:00:00Z', '2026-10-16')];
+    const pAdv = pullLog.pullContext(mockDb(advancing, { ZZA: '2026-10-16' })).by_code.ZZA;
+    check('sintetis: frontier MAJU tiap tarikan -> tidak stalled (frozen_pulls 1)',
+      pAdv.source_stalled === false && pAdv.frontier_frozen_pulls === 1, JSON.stringify(pAdv));
+
+    // rail snapshot: ritmenya beda -> ambang 7, jadi 3 tarikan beku BUKAN temuan.
+    const snap3 = [pr('ZZS', 1, '2026-10-17T10:00:00Z', '2026-10-16', 'ok', 'tradingeconomics/snapshot'),
+                   pr('ZZS', 2, '2026-10-18T10:00:00Z', '2026-10-16', 'ok', 'tradingeconomics/snapshot'),
+                   pr('ZZS', 3, '2026-10-19T10:00:00Z', '2026-10-16', 'ok', 'tradingeconomics/snapshot')];
+    const pSnap3 = pullLog.pullContext(mockDb(snap3, { ZZS: '2026-10-16' })).by_code.ZZS;
+    check('sintetis: rail snapshot (tradingeconomics/snapshot) 3 tarikan beku -> BELUM stalled (ambang 7)',
+      pSnap3.source_stalled === false && pSnap3.stall_threshold === 7 && pSnap3.frontier_frozen_pulls === 3,
+      JSON.stringify(pSnap3));
+    const snap7 = [];
+    for (let i = 1; i <= 7; i++) snap7.push(pr('ZZS', i, '2026-10-1' + i + 'T10:00:00Z', '2026-10-16', 'ok', 'tradingeconomics/snapshot'));
+    const pSnap7 = pullLog.pullContext(mockDb(snap7, { ZZS: '2026-10-16' })).by_code.ZZS;
+    check('sintetis: rail snapshot 7 tarikan beku -> source_stalled TRUE',
+      pSnap7.source_stalled === true && pSnap7.frontier_frozen_pulls === 7, JSON.stringify(pSnap7));
+
+    // jendela pindai terbatas (SCAN_ROWS): deret beku yang lebih panjang dari jendela
+    // dilaporkan sebagai BATAS BAWAH + frozen_capped, bukan angka palsu yang terpotong diam-diam.
+    const longFreeze = [];
+    for (let i = 1; i <= 9; i++) longFreeze.push(pr('ZZW', i, '2026-10-0' + i + 'T10:00:00Z', '2026-10-01'));
+    const pLong = pullLog.pullContext(mockDb(longFreeze, { ZZW: '2026-10-01' })).by_code.ZZW;
+    check('sintetis: deret beku lebih panjang dari jendela -> frozen = SCAN_ROWS + frozen_capped true (batas bawah jujur)',
+      pLong.frontier_frozen_pulls === pullLog.SCAN_ROWS && pLong.frozen_capped === true && pLong.source_stalled === true,
+      JSON.stringify(pLong));
+
+    // (b) pull_behind: cacat KITA vs lag sumber
+    const behind = [pr('ZZB', 1, '2026-10-19T10:00:00Z', '2026-10-16')];
+    check('sintetis: last_date (15 Okt) < frontier (16 Okt) -> pull_behind TRUE (cacat kita)',
+      pullLog.pullContext(mockDb(behind, { ZZB: '2026-10-15' })).by_code.ZZB.pull_behind === true);
+    check('sintetis: last_date == frontier -> pull_behind FALSE (tidak ada lag di sisi kita)',
+      pullLog.pullContext(mockDb(behind, { ZZB: '2026-10-16' })).by_code.ZZB.pull_behind === false);
+    check('sintetis: last_date > frontier (bar dari sumber lain lebih baru) -> pull_behind FALSE',
+      pullLog.pullContext(mockDb(behind, { ZZB: '2026-10-19' })).by_code.ZZB.pull_behind === false);
+    check('sintetis: tarikan tanpa frontier (error/no_data) -> pull_behind FALSE (tidak menuduh tanpa dasar)',
+      pullLog.pullContext(mockDb([pr('ZZC', 1, '2026-10-19T10:00:00Z', null, 'error')], { ZZC: '2026-10-10' })).by_code.ZZC.pull_behind === false);
+
+    // (c) frontierOf: MAX(payload), bukan MAX(DB); baris tak layak simpan tidak jadi frontier.
+    check('sintetis: frontierOf = MAX(trade_date) payload (urutan acak, bar lama tetap frontier bila terbesar)',
+      pullLog.frontierOf([{ date: '2026-10-15', close: 9 }, { date: '2026-10-16', close: 8 }, { date: '2026-10-14', close: 7 }]) === '2026-10-16');
+    check('sintetis: frontierOf melewati baris tanpa tanggal / close<=0 (bukan bukti sumber terbit)',
+      pullLog.frontierOf([{ date: '2026-10-15', close: 9 }, { date: '', close: 9 }, { date: '2026-10-17', close: 0 }]) === '2026-10-15');
+    check('sintetis: frontierOf payload kosong -> null', pullLog.frontierOf([]) === null && pullLog.frontierOf(null) === null);
+
+    // (d) ringkasan: dua kelas diterbitkan TERPISAH, dan aturan stale/excess tidak ikut berubah.
+    const sctx = {
+      ref_date: '2026-10-19', ref_source: 'test', sessions,
+      window_from: sessions[0], expected_lag: ctx.expected_lag,
+      pull: { available: true, thresholds: { session_rail: 3, snapshot_rail: 7 },
+              by_code: { TIN: { pull_behind: true, source_stalled: true }, STALLED: { pull_behind: false, source_stalled: true } } },
+    };
+    const sEnt = [
+      { code: 'TIN', freshness: fresh.seriesFreshness(sctx, '2026-10-15', 'TIN') },
+      { code: 'STALLED', freshness: fresh.seriesFreshness(sctx, '2026-10-19', 'CPO') },
+      { code: 'CPO', freshness: fresh.seriesFreshness(sctx, '2026-10-15', 'CPO') },
+    ];
+    const sSum = fresh.summarize(sctx, sEnt);
+    check('ringkasan: pull_behind_codes & source_stalled_codes terbit terpisah (tidak menumpang stale_codes)',
+      sSum.pull_behind_codes.join(',') === 'TIN' && sSum.source_stalled_codes.join(',') === 'STALLED,TIN'
+        && sSum.stale_codes.join(',') === 'TIN' && sSum.delayed_codes.join(',') === 'CPO',
+      JSON.stringify({ stale: sSum.stale_codes, delayed: sSum.delayed_codes, behind: sSum.pull_behind_codes, stalled: sSum.source_stalled_codes }));
+    check('ringkasan: pull_log.thresholds ikut terkirim (angka N terbaca, bukan sihir di kode)',
+      sSum.pull_log.available === true && sSum.pull_log.thresholds.session_rail === 3 && sSum.pull_log.thresholds.snapshot_rail === 7);
+    const sumNoPull = fresh.summarize(ctx, sEnt);
+    check('ringkasan: ctx tanpa telemetri (DB lama) -> array kosong, tidak crash, stale/excess tetap',
+      Array.isArray(sumNoPull.pull_behind_codes) && sumNoPull.pull_behind_codes.length === 0
+        && sumNoPull.pull_log.available === false && sumNoPull.stale_codes.join(',') === 'TIN');
+
+    // (e) live: telemetri dibaca dari tabel asli, dan flag-nya cocok dengan SQL INDEPENDEN
+    const liveCtx = fresh.buildContext(db);
+    check('live: buildContext membawa pull.available=true (tabel custom_pull_log ada)',
+      !!(liveCtx.pull && liveCtx.pull.available === true), JSON.stringify(liveCtx.pull && liveCtx.pull.thresholds));
+    const pullRows = db.prepare(
+      'SELECT id, code, source, pulled_at, ref_date, source_frontier_date, status FROM custom_pull_log ORDER BY code, id DESC').all();
+    const liveBad = [];
+    const grouped = {};
+    for (const r of pullRows) (grouped[r.code] = grouped[r.code] || []).push(r);
+    const tickers = {};
+    for (const t of db.prepare('SELECT code, last_date FROM custom_tickers').all()) tickers[t.code] = t.last_date || '';
+    const liveReport = pullLog.pullReport(db);
+    // Deret beku dihitung ulang DI SINI (bukan dari util): tarikan sukses berturut-turut
+    // dengan frontier sama, baris non-ok dilewati. Jendela = baris yang benar-benar dipindai.
+    const streakOf = (list, limit) => {
+      let streak = 0, front = null;
+      for (const r of list.slice(0, limit)) {
+        if (r.status !== 'ok' || !r.source_frontier_date) continue;
+        if (front === null) front = r.source_frontier_date;
+        if (r.source_frontier_date !== front) break;
+        streak++;
+      }
+      return streak;
+    };
+    for (const code of Object.keys(grouped)) {
+      const list = grouped[code];                        // id DESC = terbaru dulu
+      const flags = liveCtx.pull.by_code[code] || {};
+      const rep = liveReport.by_code[code] || {};
+      const lastFrontier = (list.find(r => r.source_frontier_date) || {}).source_frontier_date || null;
+      const streakWindow = streakOf(list, pullLog.SCAN_ROWS);
+      const streakFull = streakOf(list, list.length);
+      const thr = pullLog.stallThresholdFor((list.find(r => r.source_frontier_date) || {}).source || '');
+      if (flags.last_frontier_date !== lastFrontier) liveBad.push(code + ': frontier ' + flags.last_frontier_date + ' != ' + lastFrontier);
+      if (flags.frontier_frozen_pulls !== streakWindow) liveBad.push(code + ': frozen window ' + flags.frontier_frozen_pulls + ' != ' + streakWindow);
+      if (flags.frozen_capped !== (list.length >= pullLog.SCAN_ROWS && streakWindow >= pullLog.SCAN_ROWS)) {
+        liveBad.push(code + ': frozen_capped ' + flags.frozen_capped + ' != ' + (list.length >= pullLog.SCAN_ROWS && streakWindow >= pullLog.SCAN_ROWS));
+      }
+      if (flags.source_stalled !== (streakFull >= thr)) liveBad.push(code + ': stalled ' + flags.source_stalled + ' != ' + (streakFull >= thr));
+      if (flags.stall_threshold !== thr) liveBad.push(code + ': threshold ' + flags.stall_threshold + ' != ' + thr);
+      // Laporan (seluruh riwayat) tidak boleh terpotong jendela request.
+      if (rep.frontier_frozen_pulls !== streakFull) liveBad.push(code + ': report frozen ' + rep.frontier_frozen_pulls + ' != ' + streakFull);
+      if (rep.frozen_capped !== false) liveBad.push(code + ': report frozen_capped harus false (laporan penuh)');
+      const wantBehind = !!(lastFrontier && Object.prototype.hasOwnProperty.call(tickers, code)
+        && (!tickers[code] || tickers[code] < lastFrontier));
+      if (flags.pull_behind !== wantBehind) liveBad.push(code + ': behind ' + flags.pull_behind + ' != ' + wantBehind);
+      if (rep.pull_behind !== wantBehind) liveBad.push(code + ': report behind ' + rep.pull_behind + ' != ' + wantBehind);
+      if (rep.last_frontier_date !== lastFrontier) liveBad.push(code + ': report frontier ' + rep.last_frontier_date + ' != ' + lastFrontier);
+    }
+    check('live: tiap flag (frontier, frozen, stalled, threshold, behind) = hitungan SQL independen',
+      pullRows.length > 0 && liveBad.length === 0,
+      pullRows.length ? liveBad.join(' | ') : 'custom_pull_log masih kosong — tarik satu seri dulu');
+    check('live: deret beku laporan >= deret beku jendela request (laporan tidak boleh lebih pendek)',
+      Object.keys(liveReport.by_code).every(c => {
+        const comp = (Object.keys(grouped).indexOf(c) === -1);   // kode di luar jendela? tidak mungkin, laporkan apa adanya
+        return comp || liveReport.by_code[c].frontier_frozen_pulls >= ((liveCtx.pull.by_code[c] || {}).frontier_frozen_pulls || 0);
+      }), Object.keys(liveReport.by_code).join(','));
+
+    // (f) live: lag frontier MAKS (sesi) vs nilai deklaratif — angka yang menggantikan deklarasi
+    const report = pullLog.pullReport(db);
+    const lagBad = [];
+    for (const code of Object.keys(report.by_code)) {
+      const r = report.by_code[code];
+      if (r.ok_pulls > 0 && r.frontier_lag_samples === 0 && r.frontier_lag_na === 0) lagBad.push(code + ': tarikan ok tanpa sampel lag');
+      for (const k of ['frontier_lag_p50', 'frontier_lag_p95']) {
+        const v = r[k];
+        if (v !== null && (typeof v !== 'number' || v < 0 || v > 200)) lagBad.push(code + ' ' + k + '=' + v);
+      }
+      if (r.frontier_lag_p50 !== null && r.frontier_lag_p95 !== null && r.frontier_lag_p50 > r.frontier_lag_p95) lagBad.push(code + ': p50 > p95');
+      const decl = liveCtx.expected_lag[code];
+      const exp = decl && decl.expected_lag_sessions != null ? Number(decl.expected_lag_sessions) : null;
+      if (r.frontier_lag_p50 !== null && exp !== null && r.frontier_lag_samples >= 5 && r.frontier_lag_p50 !== exp) {
+        // Bukan kegagalan: telemetri MELAPORKAN, manusia yang mendeklarasikan ulang.
+        console.log(`  note ${code}: frontier_lag_p50=${r.frontier_lag_p50} vs expected_lag_sessions=${exp} (deklarasi perlu ditinjau, bukan di-ratchet otomatis)`);
+      }
+    }
+    check('live: laporan lag frontier konsisten (p50 <= p95, 0..200 sesi, tiap tarikan ok punya sampel)',
+      lagBad.length === 0, lagBad.join(' | '));
+    const lagRows = Object.keys(report.by_code).filter(c => report.by_code[c].frontier_lag_samples > 0);
+    console.log('  lag frontier per kode (sesi, pada jam tarik; n = tarikan sukses bersampel):');
+    if (!lagRows.length) console.log('    (belum ada tarikan yang tercatat — tabel baru, lihat DoD-1)');
+    for (const c of lagRows.sort()) {
+      const r = report.by_code[c];
+      console.log(`    ${c.padEnd(14)} pulls=${String(r.pulls).padStart(3)} ok=${String(r.ok_pulls).padStart(3)}`
+        + ` err=${String(r.error_pulls).padStart(2)} n=${String(r.frontier_lag_samples).padStart(2)}`
+        + ` lag p50=${r.frontier_lag_p50} p95=${r.frontier_lag_p95} (min ${r.frontier_lag_min}, max ${r.frontier_lag_max})`
+        + ` frontier=${r.last_frontier_date} last_date=${r.last_date}`
+        + (r.pull_behind ? ' PULL_BEHIND' : '') + (r.source_stalled ? ' SOURCE_STALLED' : ''));
+    }
 
     console.log(`\n${pass} lulus, ${failures.length} gagal`);
     if (failures.length) { failures.forEach(f => console.log(' - ' + f)); process.exitCode = 1; }

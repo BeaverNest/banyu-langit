@@ -269,6 +269,34 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cohlc_rw_code_date ON custom_ohlc_rewrites(code, trade_date);
   CREATE INDEX IF NOT EXISTS idx_cohlc_rw_at ON custom_ohlc_rewrites(detected_at);
 
+  -- Telemetri TARIKAN per seri (kanban t_57252454). Satu baris per seri per tarikan.
+  -- Kenapa perlu: lag terhadap kalender sesi IDX mencampur tiga hal yang berbeda --
+  -- kita gagal menyimpan, sumber memang terbit lambat, dan sumber BERHENTI terbit.
+  -- Pembeda satu-satunya adalah frontier SUMBER pada tiap tarikan, yang dulu tidak direkam.
+  -- Kolom source_frontier_date = MAX(trade_date) dari PAYLOAD sumber (bukan dari DB kita),
+  -- ditulis oleh jalur tulis /custom/upsert, /custom/fetch-eod, /custom/fetch-all,
+  -- /custom/sync-stale -- bukan oleh skrip host, supaya investing/yahoo/fred/tradingeconomics
+  -- terekam di satu tempat.
+  -- Sengaja APPEND-ONLY dan tanpa UNIQUE: tiap tarikan adalah fakta tersendiri (termasuk
+  -- yang gagal), dan ukurannya dijaga oleh ritme tarik (~40 baris/hari), bukan oleh update.
+  -- Tabel ini MELAPORKAN; ia tidak pernah menulis ulang custom_tickers.expected_lag_sessions
+  -- (expectation yang menyesuaikan diri = ratchet, dan itu cara mematikan alarm).
+  CREATE TABLE IF NOT EXISTS custom_pull_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    source TEXT,
+    pulled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    ref_date TEXT,
+    source_frontier_date TEXT,
+    rows INTEGER DEFAULT 0,
+    written INTEGER DEFAULT 0,
+    endpoint TEXT,
+    status TEXT NOT NULL DEFAULT 'ok',
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_cpull_code_at ON custom_pull_log(code, pulled_at);
+  CREATE INDEX IF NOT EXISTS idx_cpull_at ON custom_pull_log(pulled_at);
+
   CREATE TABLE IF NOT EXISTS quarterly_financials (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,

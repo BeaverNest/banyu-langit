@@ -48,6 +48,8 @@
 // (kartu t_b234606a). Satuannya "sesi di atas kebiasaan sumber", BUKAN "lag minimum".
 // Namanya sengaja TIDAK dinaikkan jadi 2: menaikkan ambang global adalah gerakan yang
 // justru dilarang kartu ini (TIN lag 2 harus tetap menyala).
+const pullLog = require('./pull-log');
+
 const MIN_EXCESS_SESSIONS = 1;
 // Alias lama supaya pemanggil/uji lama tidak pecah — artinya sudah bergeser (lihat di atas).
 const STALE_LAG_SESSIONS = MIN_EXCESS_SESSIONS;
@@ -124,6 +126,13 @@ function buildContext(db) {
       };
     }
   } catch (e) { /* tabel/kolom belum ada -> tidak ada yang dideklarasikan, semua seri 'na' */ }
+
+  // Telemetri tarikan (kartu t_57252454): apa frontier SUMBER pada tiap tarikan, dibaca
+  // sekali per request (2 query, SCAN_ROWS baris terakhir per kode). Dipakai summarize()
+  // untuk memisahkan "kita tertinggal" (pull_behind) dari "sumber berhenti" (source_stalled).
+  // Kalau tabelnya belum ada, ctx.pull.available=false dan kedua kelas itu kosong — bukan
+  // dianggap "tidak ada temuan".
+  const pull = pullLog.pullContext(db);
 
   return {
     ref_date: ref,
@@ -231,11 +240,20 @@ function isSameSessionBar(c) {
 
 /**
  * Ringkasan untuk satu respons panel: kode mana yang tertinggal, dirujuk ke sesi mana.
- * @param {{ref_date:string,ref_source:string}} ctx
+ *
+ * Dua kelas temuan tambahan (kartu t_57252454) — SENGAJA terpisah dari stale_codes/delayed_codes,
+ * karena artinya beda dan yang bisa kita perbaiki hanya yang pertama:
+ *   pull_behind_codes    custom_tickers.last_date < frontier terakhir tarikan = CACAT KITA
+ *   source_stalled_codes frontier tidak maju N tarikan sukses = SUMBER berhenti menerbitkan
+ * Keduanya dibatasi pada kode yang muncul di `entries` permukaan ini (ringkasan ini per-surface),
+ * dan tidak pernah mengubah aturan stale/excess per seri. Gambaran penuh per kode ada di
+ * GET /api/idx/custom/pull-log (pullReport).
+ * @param {{ref_date:string,ref_source:string,pull?:object}} ctx
  * @param {Array<{code:string,freshness:object}>} entries
  */
 function summarize(ctx, entries) {
   const stale_codes = [], delayed_codes = [], na_codes = [], undeclared_codes = [];
+  const pull_behind_codes = [], source_stalled_codes = [];
   const push = (arr, code) => { if (code && arr.indexOf(code) === -1) arr.push(code); };
   for (const e of entries) {
     const f = e && e.freshness;
@@ -249,8 +267,13 @@ function summarize(ctx, entries) {
       const decl = ctx && ctx.expected_lag ? ctx.expected_lag[e.code] : null;
       if (!decl || !decl.lag_basis) push(undeclared_codes, e.code);
     }
+    const p = ctx && ctx.pull && ctx.pull.by_code ? ctx.pull.by_code[e.code] : null;
+    if (p && p.pull_behind) push(pull_behind_codes, e.code);
+    if (p && p.source_stalled) push(source_stalled_codes, e.code);
   }
   stale_codes.sort(); delayed_codes.sort(); na_codes.sort(); undeclared_codes.sort();
+  pull_behind_codes.sort(); source_stalled_codes.sort();
+  const pullCtx = (ctx && ctx.pull) || null;
   return {
     ref_date: ctx ? ctx.ref_date : null,
     ref_source: ctx ? ctx.ref_source : null,
@@ -262,6 +285,14 @@ function summarize(ctx, entries) {
     delayed_codes,
     na_codes,
     undeclared_codes,
+    // Telemetri tarikan: dua kelas yang DULU tidak bisa dibedakan dari lag sesi.
+    pull_behind_codes,
+    source_stalled_codes,
+    pull_log: {
+      available: !!(pullCtx && pullCtx.available),
+      thresholds: pullCtx ? pullCtx.thresholds : null,
+      scanned_codes: pullCtx ? Object.keys(pullCtx.by_code || {}).length : 0,
+    },
   };
 }
 
