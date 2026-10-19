@@ -135,6 +135,30 @@ function mrRenderCurve(box, d) {
     // Kurva sengaja lebih tua dari bar terbaru supaya tidak mencampur sesi — katakan, jangan diam.
     h += '<span style="color:var(--am)">bar terbaru ' + esc(d.latest_date) + ' — kurva diambil dari sesi sebelumnya agar satu tanggal</span>';
   }
+  // Kesegaran TANGGAL KURVA (kanban t_4648c065). `is_latest` di atas hanya bilang "tidak ada
+  // bar yang lebih baru di DB": kalau rail berhenti TOTAL, latest_date ikut basi, is_latest
+  // tetap true, dan dulu tidak ada satu pun penanda. `freshness` mengukur umur sesi dengan
+  // aturan yang sama seperti seri lain (server/utils/series-freshness.js): lag sesi terhadap
+  // sesi rujukan vs `expected_lag_sessions` per seri di custom_tickers. Kurva TIDAK
+  // disembunyikan — hanya diberi badge.
+  var fr = d.freshness || null;
+  if (fr && fr.state === 'excess') {
+    var lagTxt = (fr.lag_capped ? '≥ ' : '') + fr.lag_sessions;
+    h += '<span id="mr-curve-stale" data-state="excess" data-lag="' + fr.lag_sessions + '"'
+      + ' data-ref="' + esc(fr.ref_date || '') + '"'
+      + ' data-expected="' + (fr.expected_lag_sessions == null ? '' : fr.expected_lag_sessions) + '"'
+      + ' style="background:rgba(239,68,68,.12);border:1px solid var(--rd);border-radius:4px;padding:1px 6px;font-weight:700;color:var(--rd)"'
+      + ' title="tanggal kurva ' + esc(d.as_of || '') + ' vs sesi rujukan ' + esc(fr.ref_date || '')
+      + '; ambang expected_lag_sessions=' + (fr.expected_lag_sessions == null ? '—' : fr.expected_lag_sessions)
+      + ' sesi (deklarasi ' + esc(fr.threshold_code || '') + ' di custom_tickers)">'
+      + '⚠ kurva tertinggal ' + lagTxt + ' sesi</span>';
+  } else if (fr && fr.state === 'by_source' && fr.lag_sessions > 0) {
+    // Masih di dalam kebiasaan sumber: sebut netral (tanggal + jumlah sesi), jangan pakai
+    // kata "basi"/merah. Ini pembeda yang sama dengan panel seri lain ('by_source').
+    h += '<span id="mr-curve-delayed" data-state="by_source" data-lag="' + fr.lag_sessions + '"'
+      + ' style="color:var(--am)">sumber terlambat ' + fr.lag_sessions + ' sesi (wajar ≤ '
+      + fr.expected_lag_sessions + ')</span>';
+  }
   if (d.anchor_fallback) h += '<span style="color:var(--am)">cakupan tanggal terbaik &lt; ' + (d.min_coverage || 0) + ' tenor</span>';
   h += '</div>';
 
@@ -185,7 +209,9 @@ function mrRenderCurve(box, d) {
       + d.behind.map(function(b) { return esc(b.tenor) + ' ' + esc(b.date); }).join(', ') + '</div>';
   }
   h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). Δ1d/Δ20 sesi dihitung dari bar seri tenor itu sendiri. '
-    + 'Slope negatif = inversi. Tidak ada slope yang disimpan sebagai seri baru.</div>';
+    + 'Slope negatif = inversi. Tidak ada slope yang disimpan sebagai seri baru. '
+    + 'Kesegaran kurva: umur tanggal kurva dihitung dalam SESI bursa terhadap sesi rujukan (max frontier rail, idx_daily) '
+    + 'lalu dibandingkan dengan ambang <b>expected_lag_sessions</b> per seri di custom_tickers — aturan yang sama dengan panel seri lain.</div>';
   box.innerHTML = h;
 
   mrDrawCurve(d);

@@ -18,6 +18,11 @@
 //     tanggal dengan cakupan maksimum: itu membekukan kurva selamanya begitu satu tenor mati
 //     di hulu (kasus TIN, t_61ccbdbe). Toleransi 1 tenor yang hilang + penanda eksplisit
 //     (`coverage`, `behind[]`) adalah kompromi yang bisa dibaca pembaca panel.
+//  4. `is_latest` TIDAK cukup (t_4648c065): ia hanya bilang "tidak ada bar lebih baru di DB".
+//     Kalau rail berhenti total, kurva ikut tua tanpa satu pun penanda. `freshness` mengukur
+//     umur tanggal kurva dengan aturan seri lain (series-freshness.js) — lihat curveFreshness().
+
+const freshnessUtil = require('./series-freshness');
 
 const TENORS = [
   { code: 'ID1M',  tenor: '1M',  months: 1 },
@@ -94,6 +99,77 @@ function chooseAnchor(seriesByCode, codes, allowMissing) {
 }
 
 /**
+ * Kesegaran TANGGAL KURVA (kanban t_4648c065).
+ *
+ * `is_latest` hanya bilang "tidak ada bar yang lebih baru di DB". Kalau rail berhenti total,
+ * SEMUA 11 tenor basi bersamaan, `latest_date` ikut basi, `is_latest` tetap true, dan pembaca
+ * tidak dapat sinyal apa pun selain tanggal. Jadi umur sesi kurva dibandingkan dengan aturan
+ * yang SUDAH ADA untuk seri lain — tidak ada definisi kesegaran baru di sini:
+ *
+ *   ref_date    = max(frontier rail custom_ohlc sesi reguler, MAX(idx_daily))
+ *                 (series-freshness.buildContext)
+ *   lag_sesi    = jumlah sesi kalender IDX dengan as_of < sesi <= ref_date
+ *                 (series-freshness.seriesFreshness)
+ *   ambang      = expected_lag_sessions PER SERI di custom_tickers
+ *                 (deklarasi manual: scripts/seed_expected_lag.js)
+ *   basi        = lag_sesi > ambang  (MIN_EXCESS_SESSIONS = 1 di series-freshness)
+ *
+ * Aturan tambahan khusus kurva, dan alasannya: dipakai ambang PALING KETAT di antara tenor yang
+ * PUNYA deklarasi. Kurva tidak boleh terbaca lebih tua dari kebiasaan sumber tenor mana pun yang
+ * sudah kita deklarasikan; memakai yang paling longgar akan menenggelamkan alarm. Tenor tanpa
+ * deklarasi (expected NULL -> state 'na') tidak boleh menghidupkan alarm, persis seperti seri
+ * lain; bila TIDAK ADA tenor yang dideklarasikan, kurva juga 'na' dan hanya tanggalnya yang
+ * ditampilkan (jangan menuduh basi tanpa dasar).
+ *
+ * Fungsi ini murni: `ctx` = keluaran buildContext (atau tiruannya di harness), tidak menyentuh DB.
+ *
+ * @param {object|null} ctx   konteks kesegaran {ref_date, ref_source, sessions, expected_lag, ...}
+ * @param {string|null} asOf  tanggal kurva (YYYY-MM-DD)
+ * @param {string[]} codes    kode tenor yang membentuk kurva
+ * @returns {{state:string, lag_sessions:number|null, expected_lag_sessions:number|null,
+ *   excess_sessions:number|null, lag_basis:string|null, lag_capped:boolean,
+ *   ref_date:string|null, ref_source:string|null, threshold_code:string|null,
+ *   declared_codes:string[]}}
+ */
+function curveFreshness(ctx, asOf, codes) {
+  const base = {
+    state: 'na',
+    lag_sessions: null,
+    expected_lag_sessions: null,
+    excess_sessions: null,
+    lag_basis: null,
+    lag_capped: false,
+    ref_date: (ctx && ctx.ref_date) || null,
+    ref_source: (ctx && ctx.ref_source) || null,
+    threshold_code: null,
+    declared_codes: [],
+  };
+  if (!ctx || !ctx.ref_date || !asOf) return base;
+
+  const declared = [];
+  for (const code of (codes || [])) {
+    const f = freshnessUtil.seriesFreshness(ctx, asOf, code);
+    if (f.expected_lag_sessions != null) declared.push({ code, f });
+  }
+  if (!declared.length) return base;
+  // Stabil: expected terkecil menang; seri tanpa deklarasi sudah dibuang di atas.
+  declared.sort((a, b) => a.f.expected_lag_sessions - b.f.expected_lag_sessions);
+  const pick = declared[0];
+  return {
+    state: pick.f.state,
+    lag_sessions: pick.f.lag_sessions,
+    expected_lag_sessions: pick.f.expected_lag_sessions,
+    excess_sessions: pick.f.excess_sessions,
+    lag_basis: pick.f.lag_basis,
+    lag_capped: !!pick.f.lag_capped,
+    ref_date: pick.f.ref_date,
+    ref_source: (ctx && ctx.ref_source) || null,
+    threshold_code: pick.code,
+    declared_codes: declared.map(d => d.code),
+  };
+}
+
+/**
  * Rakit kurva dari seri mentah. Fungsi murni (tanpa DB) supaya kasus "tenor tertinggal"
  * bisa diuji tanpa menulis data palsu ke tabel produksi.
  * @param {Object} seriesByCode  { CODE: [{date:'YYYY-MM-DD', close:number, source?:string}] } urut DESC
@@ -108,6 +184,7 @@ function assembleCurve(seriesByCode, opts) {
       as_of: null, source: 'investing', tenors: [], slopes: [],
       coverage: { present: 0, total: codes.length }, missing: codes.slice(),
       latest_date: null, is_latest: false, behind: [], available: false,
+      freshness: null,
     };
   }
   const asOf = anchor.date;
@@ -168,6 +245,10 @@ function assembleCurve(seriesByCode, opts) {
   const behind = tenors.filter(t => t.own_latest_date && t.own_latest_date > asOf)
     .map(t => ({ code: t.code, tenor: t.tenor, date: t.own_latest_date }));
 
+  // Kesegaran tanggal kurva: hanya bila pemanggil mengirim konteks kesegaran (route selalu
+  // mengirim; harness boleh tidak, dan `null` berarti "tidak diukur", bukan "segar").
+  const freshness = o.freshnessCtx ? curveFreshness(o.freshnessCtx, asOf, codes) : null;
+
   return {
     as_of: asOf,
     source: 'investing',
@@ -180,15 +261,28 @@ function assembleCurve(seriesByCode, opts) {
     anchor_fallback: !!anchor.fallback,
     min_coverage: anchor.min_coverage,
     behind,
+    freshness,
     available: present > 1,
   };
 }
 
-/** Entry point untuk route: baca DB lalu rakit. */
+/**
+ * Entry point untuk route: baca DB lalu rakit.
+ *
+ * Konteks kesegaran dibangun SEKALI di sini (3 query: dua frontier + kalender sesi) supaya
+ * panel bisa membandingkan umur tanggal kurva dengan sesi rujukan yang sama seperti seri lain.
+ * Jalur baca tetap murni: tidak ada retry/fetch ke sumber, tidak ada tulis ke DB
+ * (DoD kartu t_4648c065 butir 3).
+ */
 function buildYieldCurve(db, opts) {
   const o = opts || {};
   const series = readSeries(db, o);
-  return assembleCurve(series, o);
+  let freshnessCtx = o.freshnessCtx || null;
+  if (!freshnessCtx) {
+    try { freshnessCtx = freshnessUtil.buildContext(db); }
+    catch (e) { freshnessCtx = null; }   // tanpa kalender -> state 'na', kurva tetap dikirim
+  }
+  return assembleCurve(series, Object.assign({}, o, { freshnessCtx }));
 }
 
-module.exports = { TENORS, SLOPES, assembleCurve, readSeries, buildYieldCurve, chooseAnchor };
+module.exports = { TENORS, SLOPES, assembleCurve, readSeries, buildYieldCurve, chooseAnchor, curveFreshness };

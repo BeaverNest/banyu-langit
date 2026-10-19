@@ -188,6 +188,28 @@ function mkSeries(overrides) {
       check('slope 10Y-3Y di endpoint = hitungan dari dua titik itu', s && s.bp === expect, JSON.stringify(s) + ' vs ' + expect);
       check('slope tidak disimpan sebagai seri baru (tidak ada kode 10Y-3Y/10Y-1Y/30Y-10Y di custom_tickers)',
         db.prepare("SELECT COUNT(*) c FROM custom_tickers WHERE code IN ('10Y-3Y','10Y-1Y','30Y-10Y')").get().c === 0);
+
+      // Kesegaran live (t_4648c065): lag di endpoint harus sama dengan hitungan INDEPENDEN
+      // dari kalender sesi, dan ambangnya harus deklarasi yang sudah ada di custom_tickers.
+      const railD = db.prepare(`SELECT MAX(trade_date) d FROM custom_ohlc WHERE COALESCE(session,'regular')<>'weekend'`).get().d || '';
+      const idxD = db.prepare('SELECT MAX(trade_date) d FROM idx_daily').get().d || '';
+      const refD = railD > idxD ? railD : idxD;
+      const cal = db.prepare('SELECT DISTINCT trade_date d FROM idx_daily ORDER BY trade_date DESC LIMIT 120').all().map(r => r.d);
+      if (refD && cal.indexOf(refD) === -1) cal.push(refD);
+      const lagIndep = cal.filter(s => s > d.as_of && s <= refD).length;
+      const declLive = db.prepare("SELECT code, expected_lag_sessions e FROM custom_tickers WHERE code=? AND expected_lag_sessions IS NOT NULL").get(d.freshness && d.freshness.threshold_code || 'ID10Y');
+      check('endpoint mengirim freshness', !!d.freshness, JSON.stringify(d.freshness));
+      check('lag endpoint = hitungan independen dari kalender sesi',
+        d.freshness && d.freshness.lag_sessions === lagIndep,
+        JSON.stringify({ api: d.freshness && d.freshness.lag_sessions, sql: lagIndep, ref: refD, as_of: d.as_of }));
+      check('sesi rujukan endpoint = max(frontier rail, idx_daily)',
+        d.freshness && d.freshness.ref_date === refD, JSON.stringify({ api: d.freshness && d.freshness.ref_date, sql: refD }));
+      check('ambang = expected_lag_sessions dari custom_tickers (bukan angka baru)',
+        d.freshness && declLive && d.freshness.expected_lag_sessions === declLive.e && d.freshness.threshold_code === declLive.code,
+        JSON.stringify({ api: d.freshness, db: declLive }));
+      check('state konsisten dengan lag vs ambang (fresh bila lag 0)',
+        d.freshness && d.freshness.state === (lagIndep === 0 ? 'fresh' : (lagIndep > d.freshness.expected_lag_sessions ? 'excess' : 'by_source')),
+        JSON.stringify({ state: d.freshness && d.freshness.state, lag: lagIndep }));
     }
   }
 
@@ -214,6 +236,124 @@ function mkSeries(overrides) {
       check('header kolom memakai "Δ20 sesi (bp)"', src.indexOf("'Δ20 sesi (bp)'") >= 0);
       check('label lama "Δ20d (bp)" hilang', src.indexOf("'Δ20d (bp)'") < 0);
       check('tidak ada sisa "Δ20d" di panel', src.indexOf('Δ20d') < 0);
+    }
+  }
+
+  // ── [9] kesegaran tanggal kurva (kanban t_4648c065) ──────────────────────
+  // Cacat yang ditutup: `is_latest` hanya membandingkan tanggal kurva dengan bar terbaru DI DB.
+  // Kalau rail berhenti total, semua 11 tenor basi bersamaan -> is_latest tetap true, tanpa
+  // penanda. Semua kasus di bawah memakai payload SINTETIS di memori: tidak ada tulisan ke DB.
+  console.log('[9] kesegaran kurva — ambang memakai expected_lag_sessions yang sudah ada');
+  {
+    const rowsBefore = db.prepare('SELECT COUNT(*) c FROM custom_ohlc').get().c;
+    const maxBefore = db.prepare('SELECT MAX(trade_date) d FROM custom_ohlc').get().d;
+
+    // Konteks kesegaran tiruan — bentuknya sama dengan buildContext (series-freshness.js).
+    function mkFresh(o) {
+      const opt = o || {};
+      const sessions = (opt.sessions || ['2026-10-19', '2026-10-16', '2026-10-15', '2026-10-14', '2026-10-13']).slice().sort();
+      return {
+        ref_date: opt.ref_date || sessions[sessions.length - 1],
+        ref_source: 'rail+idx_daily',
+        sessions,
+        expected_lag: opt.expected_lag === undefined
+          ? { ID10Y: { expected_lag_sessions: 0, lag_basis: 'declared' } }
+          : opt.expected_lag,
+        window_from: opt.window_from !== undefined ? opt.window_from : sessions[0],
+      };
+    }
+    const DECL0 = { ID10Y: { expected_lag_sessions: 0, lag_basis: 'declared' } };
+    void DECL0;
+
+    // (a) NORMAL: tanggal kurva = sesi rujukan -> lag 0, tidak ada penanda.
+    const normal = yc.assembleCurve(mkSeries(), { freshnessCtx: mkFresh() });
+    check('normal: freshness terkirim', !!normal.freshness, JSON.stringify(normal.freshness));
+    check('normal: state=fresh, lag 0', normal.freshness.state === 'fresh' && normal.freshness.lag_sessions === 0,
+      JSON.stringify(normal.freshness));
+    check('normal: ambang = expected_lag_sessions ID10Y (0) yang sudah ada',
+      normal.freshness.expected_lag_sessions === 0 && normal.freshness.threshold_code === 'ID10Y',
+      JSON.stringify(normal.freshness));
+    check('normal: is_latest true DAN fresh (dua hal berbeda, dua-duanya benar di sini)',
+      normal.is_latest === true && normal.freshness.state === 'fresh');
+
+    // (b) RAIL BERHENTI TOTAL: kurva 2 sesi lebih tua sementara rujukan sudah 19 Okt.
+    //     is_latest TETAP true (bar terbaru di DB = tanggal kurva) — inilah cacatnya.
+    const STALE_SERIES = mkSeries();
+    const staleAsOf = '2026-10-15';
+    for (const t of yc.TENORS) STALE_SERIES[t.code] = STALE_SERIES[t.code].filter(r => r.date <= staleAsOf);
+    const stale = yc.assembleCurve(STALE_SERIES, { freshnessCtx: mkFresh({ sessions: ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19'] }) });
+    check('basi: tanggal kurva 15 Okt', stale.as_of === staleAsOf, stale.as_of);
+    check('basi: is_latest tetap true (bar terbaru DB = tanggal kurva) — cacat yang ditutup',
+      stale.is_latest === true && stale.latest_date === staleAsOf, stale.is_latest + ' / ' + stale.latest_date);
+    check('basi: state=excess', stale.freshness.state === 'excess', JSON.stringify(stale.freshness));
+    check('basi: lag_sessions = 2 (16 & 19 Okt dihitung, 15 Okt tidak)', stale.freshness.lag_sessions === 2,
+      String(stale.freshness.lag_sessions));
+    check('basi: excess_sessions = 2 di atas ambang 0', stale.freshness.excess_sessions === 2,
+      String(stale.freshness.excess_sessions));
+    check('basi: sesi rujukan dilaporkan (bukan angka tanpa rujukan)', stale.freshness.ref_date === '2026-10-19',
+      String(stale.freshness.ref_date));
+
+    // (c) Masih di dalam kebiasaan sumber: expected 2, lag 2 -> 'by_source', BUKAN basi.
+    const slowSeries = mkSeries();
+    for (const t of yc.TENORS) slowSeries[t.code] = slowSeries[t.code].filter(r => r.date <= '2026-10-15');
+    const slow = yc.assembleCurve(slowSeries, { freshnessCtx: mkFresh({
+      sessions: ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19'],
+      expected_lag: { ID10Y: { expected_lag_sessions: 2, lag_basis: 'declared' } },
+    }) });
+    check('by_source: lag 2 dengan ambang 2 tidak dituduh basi', slow.freshness.state === 'by_source',
+      JSON.stringify(slow.freshness));
+
+    // (d) Tanpa deklarasi: tidak ada dasar menuduh -> 'na', tanpa angka lag palsu.
+    const undecl = yc.assembleCurve(slowSeries, { freshnessCtx: mkFresh({
+      sessions: ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19'], expected_lag: {},
+    }) });
+    check('na: tanpa expected_lag_sessions -> state na, lag null',
+      undecl.freshness.state === 'na' && undecl.freshness.lag_sessions === null, JSON.stringify(undecl.freshness));
+    check('na: idem bila ctx tidak dikirim (freshness null, bukan "segar")',
+      yc.assembleCurve(slowSeries).freshness === null);
+
+    // (e) Ambang PALING KETAT yang menang di antara tenor yang dideklarasikan.
+    const two = yc.assembleCurve(slowSeries, { freshnessCtx: mkFresh({
+      sessions: ['2026-10-15', '2026-10-16', '2026-10-19'],
+      expected_lag: { ID10Y: { expected_lag_sessions: 2, lag_basis: 'declared' }, ID3Y: { expected_lag_sessions: 0, lag_basis: 'declared' } },
+    }) });
+    check('dua deklarasi: ambang ketat (0) dipakai, threshold_code=ID3Y',
+      two.freshness.expected_lag_sessions === 0 && two.freshness.threshold_code === 'ID3Y',
+      JSON.stringify(two.freshness));
+    check('dua deklarasi: lag 2 -> excess 2', two.freshness.state === 'excess' && two.freshness.excess_sessions === 2,
+      JSON.stringify(two.freshness));
+
+    // (f) Lag lebih tua dari jendela kalender: lag cuma batas bawah -> lag_capped.
+    const capped = yc.assembleCurve(slowSeries, { freshnessCtx: mkFresh({
+      sessions: ['2026-10-16', '2026-10-19'], window_from: '2026-10-16',
+    }) });
+    check('lag_capped=true bila bar lebih tua dari jendela kalender', capped.freshness.lag_capped === true,
+      JSON.stringify(capped.freshness));
+
+    // (g) Jalur baca tetap murni: tidak ada tulisan ke DB selama seluruh uji di atas.
+    const rowsAfter = db.prepare('SELECT COUNT(*) c FROM custom_ohlc').get().c;
+    const maxAfter = db.prepare('SELECT MAX(trade_date) d FROM custom_ohlc').get().d;
+    check('custom_ohlc tidak berubah (payload sintetis tidak ditulis ke DB)', rowsBefore === rowsAfter && maxBefore === maxAfter,
+      rowsBefore + '->' + rowsAfter + ' / ' + maxBefore + '->' + maxAfter);
+
+    // (h) Penjaga sumber: util tidak menulis & tidak menarik data dari sumber.
+    let ycSrc = '';
+    try { ycSrc = fs.readFileSync('/app/server/utils/yield-curve.js', 'utf8'); } catch (e) { check('yield-curve.js terbaca', false, e.message); }
+    if (ycSrc) {
+      check('yield-curve.js tidak menulis DB (tanpa INSERT/UPDATE/DELETE)',
+        !/INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+custom_ohlc/i.test(ycSrc));
+      check('yield-curve.js tidak fetch ke sumber di jalur baca',
+        !/\bfetch\s*\(|require\(['"](axios|node-fetch)/.test(ycSrc));
+      check('yield-curve.js memakai util kesegaran yang sudah ada',
+        ycSrc.indexOf("require('./series-freshness')") >= 0);
+    }
+    let mrSrc = '';
+    try { mrSrc = fs.readFileSync('/app/public/js/market-regime.js', 'utf8'); } catch (e) { check('market-regime.js terbaca', false, e.message); }
+    if (mrSrc) {
+      check('panel punya badge basi (id mr-curve-stale + jumlah sesi)',
+        mrSrc.indexOf('id="mr-curve-stale"') >= 0 || mrSrc.indexOf("id=\\'mr-curve-stale\\'") >= 0);
+      check('panel menyebut ambang expected_lag_sessions', mrSrc.indexOf('expected_lag_sessions') >= 0);
+      check('panel membedakan by_source dari excess', mrSrc.indexOf("state === 'by_source'") >= 0);
     }
   }
 
