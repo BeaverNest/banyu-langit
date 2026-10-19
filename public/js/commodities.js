@@ -37,11 +37,17 @@ function cmdRender(el){
     h+='<div style="background:'+(isExp?'var(--blB,rgba(255,152,0,.08))':'var(--bg2,#fff)')+';border:1px solid '+(isExp?'var(--bl,var(--bl))':'var(--b2,var(--b2))')+';border-radius:10px;padding:10px 12px;cursor:pointer" onclick="cmdToggle(\''+c.id+'\')">';
 
     // Row 1: icon + label + chart link
-    h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+    // Deskripsi turun ke barisnya sendiri (t_4f60bcc4): caveat roll CPO/STEEL panjang (72-86
+    // karakter), dan kalau ditempel inline di samping label ia pecah jadi 4-5 baris 9px dalam
+    // kolom ~150px sehingga tinggi header kartu naik 18px -> 64px. Satu baris penuh selebar
+    // kartu: teks tetap sama kata-per-kata, kartu tidak melar.
+    var hasDesc=!!c.desc;
+    h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:'+(hasDesc?2:6)+'px">';
     h+='<span style="font-size:16px">'+(c.icon||'📦')+'</span>';
-    h+='<div style="flex:1"><b style="font-size:13px">'+(c.label||'?')+'</b> <span style="font-size:9px;color:var(--t2)">'+(c.desc||'')+'</span></div>';
+    h+='<div style="flex:1;min-width:0"><b style="font-size:13px">'+(c.label||'?')+'</b></div>';
     if(c.tv)h+='<a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(c.tv)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;padding:3px 8px;border-radius:4px;background:var(--bl);color:#fff;text-decoration:none;font-weight:600">📈 Chart</a>';
     h+='</div>';
+    if(hasDesc)h+='<div style="font-size:9px;color:var(--t2);line-height:1.35;margin-bottom:6px">'+c.desc+'</div>';
 
     // Row 2: harga komoditas
     var cm=c.commodity;
