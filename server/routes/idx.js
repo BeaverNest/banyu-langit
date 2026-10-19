@@ -4498,8 +4498,8 @@ module.exports = function(upload) {
 
       const verdict = { score: verdictScore, label: verdictLabel, color: verdictColor, bull: bullSignals, bear: bearSignals, total: totalSignals, signals, warnings };
 
-      // ── Build chart data (last 500 for performance) ──
-      const chartData = data.slice(-500).map((r, i, arr) => ({
+      // ── Build chart data: full history (idx_daily sejak 2020) ──
+      const chartData = data.map((r, i, arr) => ({
         date: r.trade_date, open: r.ao, high: r.ah, low: r.al, close: r.ac,
         volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0,
         value: r.value || null, fbuy: r.foreign_buy || 0, fsell: r.foreign_sell || 0,
@@ -4629,7 +4629,7 @@ module.exports = function(upload) {
         code, name: last.name || '',
         current: { close: last.ac, prev_close: last.prev_close, change: last.ac - (data[n - 2]?.ac || last.ac), trade_date: last.trade_date, volume: last.volume, value: last.value, market_cap: last.ac * (last.listed_shares || 0) },
         phase: lastPhase,
-        phases: phaseResult.slice(-30),
+        phases: phaseResult.slice(-60),
         stage,
         ma_respect: maRespect,
         verdict,
