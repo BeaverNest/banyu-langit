@@ -30,7 +30,8 @@ const router = express.Router();
 const CODE_RE = /^[A-Z0-9][A-Z0-9._-]{0,11}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Date-column rule: identity list, kept aligned with scripts/audit-rail-freshness.sh
-// (DATE_RE there) plus the columns added for the KSEI / issued_history findings
+// (its DATE_COLS is a hand-maintained mirror of this list — re-prove with the diff in
+// params.counts_reproduce) plus the columns added for the KSEI / issued_history findings
 // (kanban t_b00757f3). Deliberately NOT a generic *_date scan: cum_date / dist_date /
 // letter_date carry future-dated or empty values, and letting those set as_of makes the
 // rail look fresher than the data it serves (the same trap as ann_date, t_bf6259d8).
@@ -181,7 +182,7 @@ router.get('/', (req, res) => {
     params: { market_as_of: latestIdxDate() || null },
     as_of: latestIdxDate() || '',
     rows: [
-      { endpoint: 'GET /api/v1/idx/freshness', params: '[format=json|text]', returns: 'per-table row count, date column, as_of, is_month_complete; format=text reproduces scripts/audit-rail-freshness.sh layout — the rail also dates snapshot_date/issue_date, normalises non-ISO text dates and reports period coverage, which the shell script does not yet do' },
+      { endpoint: 'GET /api/v1/idx/freshness', params: '[format=json|text]', returns: 'per-table row count, date column, as_of, is_month_complete; format=text mirrors the layout of scripts/audit-rail-freshness.sh — a hand-maintained mirror of this endpoint (the script lives in the eko economics skill, not in this repo) that applies the same date-column and coverage rules, so the two agree byte for byte when the diff is empty; see params.counts_reproduce for the check' },
       { endpoint: 'GET /api/v1/idx/series', params: 'code, from, to', returns: 'raw OHLCV + foreign buy/sell per trading day, gaps in missing[]' },
       { endpoint: 'GET /api/v1/idx/indicator', params: 'code, indicator=rsi|ma|ema|macd, period, variant, from, to', returns: 'value series + variant echo + code_version' },
       { endpoint: 'GET /api/v1/idx/scores', params: 'date, codes', returns: 'persisted daily_scores rows with variant + code_version per row' },
@@ -291,7 +292,7 @@ router.get('/freshness', (req, res) => {
       coverage_rule: 'period-reporting tables (' + Object.keys(COVERAGE_TABLES).join(', ') + '): as_of = mode of MAX(period) per code — the period most codes have most recently reported — not MAX(period); rows[].as_of_raw still carries the raw MAX(period), rows[].coverage_max_period the widest-coverage period',
       is_month_complete_rule: IS_MONTH_COMPLETE_RULE,
       inventory_as_of: maxAsOf,
-      counts_reproduce: 'scripts/audit-rail-freshness.sh (format=text): rows/date_col/as_of layout matches; the rail applies the wider date-column rule above, so the script lags on snapshot_date/issue_date until it is updated',
+      counts_reproduce: 'scripts/audit-rail-freshness.sh (format=text) is a hand-maintained MIRROR of this endpoint, not generated from it: the rows/date_col/as_of layout and the date-column + coverage rules above match on both sides. Byte equality is a property to re-prove, not a claim — diff <(bash scripts/audit-rail-freshness.sh) <(curl -sS http://127.0.0.1:3003/api/v1/idx/freshness?format=text) must be empty; it was empty on 2026-10-19 (60 lines each, md5 2ec488c8bfd2724109a52b3aba5d1aa4), and the mirror can drift the next time either rule changes on one side only',
     },
     rows,
     missing: rows.filter(r => !r.as_of).map(r => r.table),
