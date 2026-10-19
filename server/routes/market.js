@@ -250,8 +250,9 @@ router.get('/market/overview', (req, res) => {
     const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS']
       .map(c => fromOhlc(c, { freshness: true })).filter(Boolean);
     const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
-    // RATES: kurva belum tersedia dari rail gratis (TE hanya 10Y + level kebijakan),
-    // jadi yang ditampilkan level + spread, bukan kurva penuh.
+    // RATES: kurva lengkap 11 tenor SUN sejak t_b042b106 — dibaca oleh
+    // GET /api/idx/yield-curve (panel "Kurva Imbal Hasil" di Market Regime). Baris di
+    // sini sengaja tetap level + spread: satu baris per kode, bukan kurva.
     const rateItems = ['ID10Y', 'BI_RATE', 'US10Y'].map(fromOhlc).filter(Boolean);
     const close = (code) => {
       const r = db.prepare('SELECT close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 1').get(code);
