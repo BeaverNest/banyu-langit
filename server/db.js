@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { toIsoDate } = require('./utils/iso-date');
 
 const dataDir = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
@@ -785,6 +786,34 @@ try {
   if (!cols.includes('upload_type')) db.exec("ALTER TABLE upload_logs ADD COLUMN upload_type TEXT DEFAULT ''");
   if (!cols.includes('warnings')) db.exec("ALTER TABLE upload_logs ADD COLUMN warnings TEXT DEFAULT ''");
 } catch (e) { console.error('Migration:', e.message); }
+
+// ═══ Auto-migrate (data): issued_history.issue_date → ISO YYYY-MM-DD ═══
+// /ksei/import menyimpan "Listing Date" dari file master KSEI apa adanya
+// (DD-MMM-YYYY), sehingga kolom ini CAMPURAN: sebagian ISO (fallback snapshot),
+// sebagian teks hari-dulu. Di kolom campuran MIN(issue_date) = '01-APR-2024' dan
+// MAX(issue_date) = '31-OCT-2023' — min > max — sehingga setiap filter rentang,
+// urutan, atau "snapshot terakhir" di atasnya salah TANPA error (kanban t_b00757f3).
+// Idempoten: setelah bersih, WHERE-nya tidak cocok lagi. Baris berbentuk tak dikenal
+// dibiarkan apa adanya (tidak ditebak); bila hasil normalisasi bentrok dengan baris
+// ISO yang sudah ada di UNIQUE(code, issue_date, type), baris teks itulah duplikatnya.
+try {
+  const dirty = db.prepare("SELECT id, code, issue_date, type FROM issued_history WHERE issue_date IS NOT NULL AND issue_date <> '' AND issue_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'").all();
+  if (dirty.length) {
+    const exists = db.prepare('SELECT id FROM issued_history WHERE code=? AND issue_date=? AND type=? AND id<>?');
+    const upd = db.prepare('UPDATE issued_history SET issue_date=? WHERE id=?');
+    const del = db.prepare('DELETE FROM issued_history WHERE id=?');
+    let fixed = 0, duplicates = 0, skipped = 0;
+    db.transaction(() => {
+      for (const r of dirty) {
+        const iso = toIsoDate(r.issue_date);
+        if (!iso) { skipped++; continue; }
+        if (exists.get(r.code, iso, r.type, r.id)) { del.run(r.id); duplicates++; continue; }
+        upd.run(iso, r.id); fixed++;
+      }
+    })();
+    console.log('[migrate] issued_history.issue_date -> ISO: fixed=' + fixed + ' duplicates_removed=' + duplicates + ' skipped=' + skipped);
+  }
+} catch (e) { console.error('Migration issued_history.issue_date:', e.message); }
 
 // Auto-migrate daily_scores for new demand/supply + foreign columns
 try {

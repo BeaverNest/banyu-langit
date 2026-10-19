@@ -1,6 +1,7 @@
 const express = require('express');
 const { db, latestIdxDate } = require('../db');
 const { parseTradeDate } = require('../utils/normalize');
+const { toIsoDate } = require('../utils/iso-date');
 const { getCodeVersion } = require('../utils/code-version');
 const { loadFactors, adjustRows, factorAt, factorForRow, fallbackRatioActions, registerSqlAdjust } = require('../utils/price-adjust');
 
@@ -1198,7 +1199,11 @@ module.exports = function(upload) {
         for (const m of master) {
           const code = String(m.code || '').toUpperCase();
           if (!code || !m.shares) continue;
-          const dt = m.listing_date || snap;
+          // Listing Date di file master KSEI berformat DD-MMM-YYYY ("01-APR-2024").
+          // Disimpan mentah, kolom ini tidak bisa diurutkan/di-MIN-MAX: teks itu
+          // membandingkan hari lebih dulu, sehingga MIN() bisa > MAX() (kanban
+          // t_b00757f3). Normalisasi ke ISO di sini; bentuk tak dikenal -> pakai snap.
+          const dt = toIsoDate(m.listing_date) || snap;
           insI.run(code, dt, 'LISTED', m.shares, m.shares);
           nI++;
         }

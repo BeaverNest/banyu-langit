@@ -20,6 +20,7 @@ const { db, latestIdxDate } = require('../db');
 const { getCodeVersion, getCodeVersionSource, getCodeFingerprint } = require('../utils/code-version');
 const IND = require('../utils/indicators');
 const { registerSqlAdjust } = require('../utils/price-adjust');
+const { toIsoDate } = require('../utils/iso-date');
 
 // ca_adj(close, code, trade_date) — harga terkoreksi aksi korporasi untuk query agregat.
 registerSqlAdjust(db);
@@ -28,8 +29,22 @@ const router = express.Router();
 
 const CODE_RE = /^[A-Z0-9][A-Z0-9._-]{0,11}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-// Date-column rule kept identical to scripts/audit-rail-freshness.sh (DATE_RE there).
-const DATE_COLS = ['trade_date', 'ann_date', 'period', 'snapshot_month', 'snap_date', 'date'];
+// Date-column rule: identity list, kept aligned with scripts/audit-rail-freshness.sh
+// (DATE_RE there) plus the columns added for the KSEI / issued_history findings
+// (kanban t_b00757f3). Deliberately NOT a generic *_date scan: cum_date / dist_date /
+// letter_date carry future-dated or empty values, and letting those set as_of makes the
+// rail look fresher than the data it serves (the same trap as ann_date, t_bf6259d8).
+const DATE_COLS = ['trade_date', 'ann_date', 'period', 'snapshot_month', 'snapshot_date', 'snap_date', 'issue_date', 'date'];
+// Tanggal yang tersimpan sebagai teks NON-ISO (DD-MMM-YYYY). MAX() atas teks itu
+// membandingkan hari lebih dulu, jadi as_of dihitung dengan menormalkan setiap nilai
+// distinct ke ISO — bukan dengan mempercayai MAX() mentah.
+const NON_ISO_DATE_COLS = ['issue_date'];
+// Tabel yang kolom tanggalnya adalah PERIODE LAPORAN, bukan tanggal kejadian:
+// MAX(period) mengembalikan periode terakhir yang ADA (financial_ratios 2026-07-31 =
+// SATU baris), bukan periode yang membawa datanya. as_of = periode yang dilaporkan
+// paling banyak kode (mode dari MAX(period) per kode); MAX() mentah tetap dikirim
+// sebagai as_of_raw supaya periode "kerangka" itu tidak tersembunyi.
+const COVERAGE_TABLES = { financial_ratios: 'period' };
 const MAX_BARS = 5000;
 const MAX_RANGE_DAYS = 3650;
 const MAX_CODES = 200;
@@ -166,7 +181,7 @@ router.get('/', (req, res) => {
     params: { market_as_of: latestIdxDate() || null },
     as_of: latestIdxDate() || '',
     rows: [
-      { endpoint: 'GET /api/v1/idx/freshness', params: '[format=json|text]', returns: 'per-table row count, date column, as_of, is_month_complete; format=text reproduces scripts/audit-rail-freshness.sh verbatim' },
+      { endpoint: 'GET /api/v1/idx/freshness', params: '[format=json|text]', returns: 'per-table row count, date column, as_of, is_month_complete; format=text reproduces scripts/audit-rail-freshness.sh layout — the rail also dates snapshot_date/issue_date, normalises non-ISO text dates and reports period coverage, which the shell script does not yet do' },
       { endpoint: 'GET /api/v1/idx/series', params: 'code, from, to', returns: 'raw OHLCV + foreign buy/sell per trading day, gaps in missing[]' },
       { endpoint: 'GET /api/v1/idx/indicator', params: 'code, indicator=rsi|ma|ema|macd, period, variant, from, to', returns: 'value series + variant echo + code_version' },
       { endpoint: 'GET /api/v1/idx/scores', params: 'date, codes', returns: 'persisted daily_scores rows with variant + code_version per row' },
@@ -191,14 +206,50 @@ router.get('/freshness', (req, res) => {
     let count = null;
     try { count = db.prepare('select count(*) c from "' + t + '"').get().c; } catch (e) { count = null; }
     const dc = cols.find(c => DATE_COLS.indexOf(c) !== -1);
-    let mx = '';
+    let raw = '';
+    let asOf = '';
+    let basis = '';
     if (dc && count !== 0) {
       try {
         const v = db.prepare('select max("' + dc + '") m from "' + t + '"').get().m;
-        mx = (v === null || v === undefined) ? '' : String(v);
-      } catch (e) { mx = 'ERR'; }
+        raw = (v === null || v === undefined) ? '' : String(v);
+      } catch (e) { raw = 'ERR'; }
+      asOf = raw;
+      // MAX() atas teks non-ISO membandingkan hari lebih dulu → normalisasi nilai
+      // distinct ke ISO (jumlahnya kecil: issued_history 792) lalu ambil yang terbesar.
+      if (NON_ISO_DATE_COLS.indexOf(dc) !== -1 && raw && raw !== 'ERR') {
+        try {
+          const vals = db.prepare('select distinct "' + dc + '" v from "' + t + '" where "' + dc + '" is not null and "' + dc + '" <> \'\'').all();
+          let best = '';
+          for (const vr of vals) {
+            const iso = toIsoDate(vr.v);
+            if (iso && (best === '' || iso > best)) best = iso;
+          }
+          if (best) { asOf = best; basis = 'normalised_non_iso_text'; }
+        } catch (e) { /* biarkan as_of = raw; nilai mentah tetap terlihat di as_of_raw */ }
+      }
     }
-    rows.push({ table: t, rows: count, date_col: dc || '-', as_of: mx });
+    const row = { table: t, rows: count, date_col: dc || '-', as_of: asOf, as_of_raw: raw, as_of_basis: basis };
+    // Periode laporan: as_of = mode(MAX(period) per kode), bukan MAX(period).
+    if (dc && count !== 0 && COVERAGE_TABLES[t] === dc) {
+      try {
+        const col = COVERAGE_TABLES[t];
+        const mode = db.prepare(
+          'SELECT p AS period, c AS codes FROM ('
+          + 'SELECT p AS p, COUNT(*) AS c FROM (SELECT code, MAX("' + col + '") AS p FROM "' + t + '" GROUP BY code)'
+          + ' GROUP BY p) ORDER BY c DESC, period DESC LIMIT 1').get();
+        if (mode && mode.period) {
+          const at = db.prepare('SELECT COUNT(*) n FROM "' + t + '" WHERE "' + col + '"=?').get(mode.period);
+          const max = db.prepare('SELECT "' + col + '" p, COUNT(DISTINCT code) c FROM "' + t + '" GROUP BY 1 ORDER BY c DESC, p DESC LIMIT 1').get();
+          row.as_of = mode.period;
+          row.as_of_basis = 'mode_of_per_code_max_period';
+          row.as_of_codes = mode.codes;
+          row.as_of_rows = at ? at.n : null;
+          if (max) { row.coverage_max_period = max.p; row.coverage_max_codes = max.c; }
+        }
+      } catch (e) { row.coverage_error = e.message; }
+    }
+    rows.push(row);
   }
   const w = rows.reduce((a, r) => Math.max(a, r.table.length), 5);
   rows.forEach(r => {
@@ -236,9 +287,11 @@ router.get('/freshness', (req, res) => {
     params: {
       format, tables: rows.length,
       as_of_rule: 'as_of = market clock = max(idx_daily.trade_date); inventory_as_of = max(as_of) over every table reported; per-table dates live in rows[].as_of',
+      date_col_rule: 'DATE_COLS (identity list, not a generic *_date scan) = ' + DATE_COLS.join(', ') + '; non-ISO text date columns (' + NON_ISO_DATE_COLS.join(', ') + ') are normalised to YYYY-MM-DD before as_of is taken, and the raw MAX() stays visible in rows[].as_of_raw',
+      coverage_rule: 'period-reporting tables (' + Object.keys(COVERAGE_TABLES).join(', ') + '): as_of = mode of MAX(period) per code — the period most codes have most recently reported — not MAX(period); rows[].as_of_raw still carries the raw MAX(period), rows[].coverage_max_period the widest-coverage period',
       is_month_complete_rule: IS_MONTH_COMPLETE_RULE,
       inventory_as_of: maxAsOf,
-      counts_reproduce: 'scripts/audit-rail-freshness.sh (format=text)',
+      counts_reproduce: 'scripts/audit-rail-freshness.sh (format=text): rows/date_col/as_of layout matches; the rail applies the wider date-column rule above, so the script lags on snapshot_date/issue_date until it is updated',
     },
     rows,
     missing: rows.filter(r => !r.as_of).map(r => r.table),
