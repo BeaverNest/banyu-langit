@@ -2855,7 +2855,37 @@ module.exports = function(upload) {
   // Rail non-Yahoo: nilainya tidak boleh ditimpa /custom/fetch-all (fetch-all memakai Yahoo),
   // karena pada tanggal yang sama keduanya menulis baris yang sama.
   const NON_YAHOO_RAIL = /^(investing|fred|tradingeconomics|te|rates|external|archive|csv)/i;
+  const SOURCE_RE = /^[A-Za-z0-9_.:\/-]{1,64}$/;
   const isYahooOwned = (src) => !src || !NON_YAHOO_RAIL.test(String(src).trim());
+
+  function existingSources(code) {
+    return db.prepare(
+      `SELECT COALESCE(source,'') AS source, COUNT(*) AS n FROM custom_ohlc
+       WHERE code=? GROUP BY COALESCE(source,'') ORDER BY n DESC`).all(code);
+  }
+
+  /** Salin baris yang sumbernya bukan keepSource ke arsip, lalu hapus dari tabel hidup.
+   *  Arsip = janji "jangan hapus seri lama"; tanpa salinan, klaim itu kosong. */
+  function archiveForeignRows(code, keepSource, reason) {
+    const keep = keepSource == null ? '' : String(keepSource);
+    const rows = db.prepare(
+      `SELECT trade_date, open, high, low, close, volume, COALESCE(source,'') AS source
+       FROM custom_ohlc WHERE code=? AND COALESCE(source,'') <> ?`).all(code, keep);
+    const bySource = {};
+    if (!rows.length) return { archived: 0, by_source: bySource };
+    const ins = db.prepare(
+      `INSERT OR REPLACE INTO custom_ohlc_archive
+       (code, trade_date, open, high, low, close, volume, source, archived_at, reason)
+       VALUES (?,?,?,?,?,?,?,?, datetime('now'), ?)`);
+    for (const r of rows) {
+      const label = r.source || 'unlabeled';
+      ins.run(code, r.trade_date, r.open, r.high, r.low, r.close, r.volume, label, reason);
+      bySource[label] = (bySource[label] || 0) + 1;
+    }
+    db.prepare(`DELETE FROM custom_ohlc WHERE code=? AND COALESCE(source,'') <> ?`).run(code, keep);
+    return { archived: rows.length, by_source: bySource };
+  }
+
   // `name` diperbarui HANYA kalau pemanggil mengirim nama sungguhan (bukan sekadar mengulang kode) —
   // aturan yang SAMA dengan /custom/upsert. Sebelum ini /custom/replace menulis seri baru tetapi
   // label lama menempel (ON CONFLICT tidak memuat name), sehingga label bisa menyebut sumber/bursa
@@ -3107,13 +3137,18 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
-  // Delete custom ticker + its OHLC data
+  // Delete custom ticker + its OHLC data — tapi barisnya diarsipkan dulu (bukan hilang).
   router.delete('/custom/tickers/:code', (req, res) => {
     try {
       const code = req.params.code.toUpperCase().trim();
-      db.prepare('DELETE FROM custom_ohlc WHERE code=?').run(code);
-      db.prepare('DELETE FROM custom_tickers WHERE code=?').run(code);
-      res.json({ ok: true, deleted: code });
+      const reason = String(req.query.reason || req.body?.reason || 'delete via API').slice(0, 200);
+      let arch = { archived: 0, by_source: {} };
+      db.transaction(() => {
+        arch = archiveForeignRows(code, null, reason);
+        db.prepare('DELETE FROM custom_ohlc WHERE code=?').run(code);
+        db.prepare('DELETE FROM custom_tickers WHERE code=?').run(code);
+      })();
+      res.json({ ok: true, deleted: code, archived: arch.archived, archived_by_source: arch.by_source });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -3122,8 +3157,13 @@ module.exports = function(upload) {
   try { eodFetcher = require('./eod-fetcher'); } catch (e) { /* module not available */ }
 
   // ═══ UPSERT CUSTOM OHLC (jalur kedua: sumber non-Yahoo, mis. investing/TE) ═══
-  // Body: {code, name?, category?, rows:[{date, close, open?, high?, low?, volume?}]}
+  // Body: {code, name?, category?, source?, rows:[{date, close, open?, high?, low?, volume?}]}
   // Dipakai skrip host yang punya akses ke rail lain (investing pinned ids, Trading Economics).
+  //
+  // GUARD "satu seri = satu sumber": kalau baris yang sudah ada berlabel sumber LAIN, upsert
+  // menjawab 409 dan tidak menulis apa pun. Dulu nilai rail berbeda bisa saling menimpa pada
+  // tanggal yang sama tanpa jejak (deret tercampur). Untuk sengaja mengganti sumber satu seri,
+  // pakai POST /custom/replace — jalur itu mengarsipkan baris lama lebih dulu.
   router.post('/custom/upsert', (req, res) => {
     try {
       const code = String(req.body.code || '').toUpperCase().trim();
@@ -3142,6 +3182,8 @@ module.exports = function(upload) {
       const explicitMode = OHLC_MODES.includes(String(req.body.ohlc_mode || '')) ? String(req.body.ohlc_mode) : null;
       if (!code) return res.status(400).json({ error: 'code required' });
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
+      if (!SOURCE_RE.test(source)) return res.status(400).json({ error: 'source tidak valid (maks 64 karakter, [A-Za-z0-9_.:/-])' });
+
       const gated = rows.filter(r => r && r.date && r.close > 0).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
       const verdict = explicitMode || seriesVerdict(gated);
       const priceOnly = verdict === 'price_only';
@@ -3149,6 +3191,15 @@ module.exports = function(upload) {
       // "kita yang buang", bukan "sumber tidak punya" (lihat writeState).
       const declaredPriceOnly = explicitMode === 'price_only';
 
+      const foreign = existingSources(code).filter(s => s.source !== source);
+      if (foreign.length && req.body.allow_mix !== true) {
+        return res.status(409).json({
+          ok: false, error: 'seri ini sudah bersumber lain — upsert tidak menulis apa pun',
+          code, incoming_source: source, existing_sources: foreign,
+          hint: 'pindah sumber = POST /custom/replace (mengarsipkan baris lama lebih dulu); ' +
+                'allow_mix:true hanya untuk penggabungan yang memang disengaja',
+        });
+      }
 
       let written = 0;
       let normalized = 0;
@@ -3209,7 +3260,110 @@ module.exports = function(upload) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ═══ REPLACE CUSTOM SERIES — pindah sumber satu seri secara utuh ═══
+  // Body: {code, name?, category?, source, rows:[{date,open,high,low,close,volume}],
+  //        fill_missing?, archive_previous, archive_reason?}
+  //
+  // Bedanya dengan /custom/upsert: baris lama yang bersumber lain DIARSIPKAN ke
+  // custom_ohlc_archive lebih dulu (bukan ditimpa / dihapus tanpa jejak), baru seri baru ditulis.
+  // `archive_previous: true` wajib kalau seri sudah punya baris berlabel sumber lain — tanpa itu
+  // permintaan dijawab 409, supaya pencampuran dua basis tidak pernah terjadi "kecelakaan".
+  // fill_missing default FALSE di sini: jalur baru, jadi jangan warisi kebiasaan mengisi nilai
+  // hilang dengan close (itu mengarang angka — temuan review t_2bda3126).
+  router.post('/custom/replace', (req, res) => {
+    try {
+      const code = String(req.body.code || '').toUpperCase().trim();
+      const source = String(req.body.source || '').trim();
+      const name = String(req.body.name || code);
+      const category = String(req.body.category || 'custom').trim();
+      const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+      const fillMissing = req.body.fill_missing === true;
+      const explicitMode = OHLC_MODES.includes(String(req.body.ohlc_mode || '')) ? String(req.body.ohlc_mode) : null;
+      const reason = String(req.body.archive_reason || '').slice(0, 200)
+        || `replace source -> ${source || '?'}`;
+
+      if (!code) return res.status(400).json({ error: 'code required' });
+      if (!SOURCE_RE.test(source)) return res.status(400).json({ error: 'source required (maks 64 karakter, [A-Za-z0-9_.:/-])' });
+      if (!rows.length) return res.status(400).json({ error: 'rows required' });
+
+      // Gerbang OHLC yang sama seperti /custom/upsert — jalur tulis tidak boleh berbeda aturan.
+      const gated = rows.filter(r => r && r.date && r.close > 0).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const verdict = explicitMode || seriesVerdict(gated);
+      const priceOnly = verdict === 'price_only';
+      const declaredPriceOnly = explicitMode === 'price_only';
+
+      // Satu permintaan, satu sumber: baris tidak boleh membawa label sendiri yang berbeda.
+      const rowSources = new Set(rows.map(r => r && r.source).filter(Boolean));
+      if (rowSources.size > 1 || (rowSources.size === 1 && !rowSources.has(source))) {
+        return res.status(400).json({ error: 'rows ikut membawa source berbeda dari body.source',
+                                      row_sources: [...rowSources] });
+      }
+
+      const existing = existingSources(code);
+      const foreign = existing.filter(s => s.source !== source);
+      if (foreign.length && req.body.archive_previous !== true) {
+        return res.status(409).json({
+          ok: false, error: 'seri ini sudah punya baris bersumber lain; kirim archive_previous:true ' +
+                            'supaya baris lama diarsipkan lebih dulu',
+          code, incoming_source: source, existing_sources: foreign,
+        });
+      }
+
+      let arch = { archived: 0, by_source: {} };
+      let written = 0;
+      let normalized = 0;
+      let rewrites = { count: 0, max_age_days: null };
+      const droppedByState = {};
+      db.transaction(() => {
+        if (foreign.length) arch = archiveForeignRows(code, source, reason);
+        // Sama seperti /custom/upsert: arsipkan + null-kan O/H/L lama SEBELUM payload menimpanya.
+        if (priceOnly) normalized = normalizePriceOnly(code);
+        // Setelah baris sumber lain diarsipkan (jadi yang tersisa = sumber yang sama) dan SEBELUM
+        // upsert: catat bar yang nilainya berubah. Lihat catatan di /custom/upsert (t_7be29126).
+        rewrites = logRewrites(code, gated, source, priceOnly, 'POST /custom/replace');
+        const up = db.prepare(
+          `INSERT INTO custom_ohlc(trade_date, code, open, high, low, close, volume, source, ohlc_state)
+           VALUES(?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(trade_date, code) DO UPDATE SET
+           open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+           volume=excluded.volume, source=excluded.source, ohlc_state=excluded.ohlc_state`);
+        for (const g of gated) {
+          const st = writeState(g, priceOnly, declaredPriceOnly);
+          droppedByState[st] = (droppedByState[st] || 0) + 1;
+          up.run(g.date, code,
+            priceOnly ? null : g.open,
+            priceOnly ? null : g.high,
+            priceOnly ? null : g.low,
+            g.close, g.volume, source, st);
+          written++;
+        }
+      })();
+
+      const meta = touchTicker(code, name, category, source);
+      if (verdict) db.prepare('UPDATE custom_tickers SET ohlc_mode=? WHERE code=?').run(verdict, code);
+      const after = existingSources(code);
+      const okSingle = after.length === 1 && after[0].source === source;
+      res.status(okSingle ? 200 : 500).json({
+        ok: okSingle, code, source, written,
+        rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
+        archived: arch.archived, archived_by_source: arch.by_source,
+        total_rows: meta.total_rows, date_range: meta.date_range, fill_missing: fillMissing,
+        ohlc_mode: verdict || getTickerMode(code), price_only: priceOnly,
+        nulled_ohlc_rows: normalized, bar_states: droppedByState, states_in_table: stateCounts(code),
+        sources_in_table: after,
+        error: okSingle ? undefined : 'gagal: tabel masih memuat lebih dari satu sumber untuk kode ini',
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ═══ EOD REFRESH SEMUA CUSTOM TICKER (untuk dijadwalkan, mis. harian) ═══
+  // Seri yang sumbernya rail PIN (investing/fred/te/rates/external) DILEWATI: EOD fetcher hanya
+  // tahu Yahoo/CoinGecko, jadi menjalankannya berarti menulis bar Yahoo ke seri yang dibangun dari
+  // konvensi lain (LME/Newcastle/HRC) — deret terputus tanpa penanda (t_6d027516 r2, diperluas di
+  // t_11e74460 jadi semua rail, bukan hanya investing). Rail itu menyegarkan serinya sendiri
+  // setelah blok CUSTOM-EOD di daily-sync.sh.
+  // Baris yang MEMANG ditulis fetch-all diberi label 'yahoo' (per baris, bukan hanya di metadata):
+  // itu yang membuat pencampuran sumber berikutnya bisa dideteksi, bukan ditebak.
   router.post('/custom/fetch-all', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
     try {
