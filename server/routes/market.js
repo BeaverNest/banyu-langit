@@ -145,6 +145,8 @@ router.get('/idx-indices', (req, res) => {
 const OV_LABEL = {
   SPX: ['S&P 500', 'Wall Street'], VIX: ['VIX', 'Volatilitas'],
   DXY: ['DXY', 'Dolar index'], US10Y: ['US 10Y', 'Yield 10 tahun'],
+  ID10Y: ['SUN 10Y', 'Yield SBN 10 tahun (%)'],
+  BI_RATE: ['BI RATE', '7-day reverse repo (%)'],
   COAL: ['Coal', 'Newcastle, USD/t'], CPO: ['CPO', 'Malaysia, MYR/t'],
   NICKEL: ['Nikel', 'USD/t'], TIN: ['Timah', 'USD/t'],
   COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'COMEX, USD/t'],
@@ -206,6 +208,28 @@ router.get('/market/overview', (req, res) => {
     const globalItems = ['SPX', 'VIX', 'DXY', 'US10Y'].map(fromOhlc).filter(Boolean);
     const commodityItems = ['COAL', 'CPO', 'NICKEL', 'TIN', 'COPPER', 'ALUMINIUM', 'WTI', 'BRENT', 'NATGAS', 'GOLD'].map(fromOhlc).filter(Boolean);
     const fxItems = ['USDIDR', 'USDCNY'].map(fromOhlc).filter(Boolean);
+    // RATES: kurva belum tersedia dari rail gratis (TE hanya 10Y + level kebijakan),
+    // jadi yang ditampilkan level + spread, bukan kurva penuh.
+    const rateItems = ['ID10Y', 'BI_RATE', 'US10Y'].map(fromOhlc).filter(Boolean);
+    const close = (code) => {
+      const r = db.prepare('SELECT close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 1').get(code);
+      return r ? r.close : null;
+    };
+    const id10 = close('ID10Y'), ust10 = close('US10Y'), bi = close('BI_RATE');
+    if (id10 != null && ust10 != null) {
+      rateItems.push({
+        code: 'SPREAD_ID_UST', label: 'SPREAD ID−UST', desc: 'SUN 10Y − UST 10Y (pp)',
+        price: Math.round((id10 - ust10) * 1000) / 1000, date: null,
+        chg_1d: null, chg_5d: null, chg_20d: null, points: 1
+      });
+    }
+    if (bi != null && id10 != null) {
+      rateItems.push({
+        code: 'TERM_BI_ID10', label: 'BI → SUN 10Y', desc: 'SUN 10Y − BI rate (pp)',
+        price: Math.round((id10 - bi) * 1000) / 1000, date: null,
+        chg_1d: null, chg_5d: null, chg_20d: null, points: 1
+      });
+    }
 
     res.json({
       as_of: (idxItems[0] && idxItems[0].date) || null,
@@ -213,6 +237,7 @@ router.get('/market/overview', (req, res) => {
         { id: 'idx', title: 'IDX', icon: '📊', items: idxItems },
         { id: 'global', title: 'RISIKO GLOBAL', icon: '🌐', items: globalItems },
         { id: 'commodities', title: 'KOMODITAS → SEKTOR', icon: '🛢', items: commodityItems },
+        { id: 'rates', title: 'SUKU BUNGA & SPREAD', icon: '📉', items: rateItems },
         { id: 'fx', title: 'FX', icon: '💱', items: fxItems },
       ]
     });
