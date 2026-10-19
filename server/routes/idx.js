@@ -3704,13 +3704,33 @@ module.exports = function(upload) {
       const raw = db.prepare('SELECT trade_date,code,name,open_price,high,low,close,prev_close,volume,value,frequency,foreign_buy,foreign_sell,bid,bid_vol,offer,offer_vol,listed_shares,tradeable_shares FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date').all(code);
       if (!raw.length) return res.json({ error: 'No data for ' + code, code });
 
-      // Adjust for corporate actions
-      const data = raw.map(r => {
-        let f = 1;
+      // Adjust for corporate actions.
+      // Sumber 1: tabel corporate_actions (sering tidak lengkap).
+      // Sumber 2 (utama): prev_close IDX sudah disesuaikan pada hari ex-date,
+      // sementara baris sebelumnya belum -> rasionya langsung memberi faktor.
+      const splitAdj = new Array(raw.length).fill(1);
+      const detectedCA = [];
+      (function () {
+        let cum = 1;
+        for (let i = raw.length - 1; i >= 1; i--) {
+          const pRaw = raw[i - 1].close, pAdj = raw[i].prev_close;
+          if (pRaw > 0 && pAdj > 0) {
+            const f = pAdj / pRaw;
+            if (Math.abs(f - 1) > 0.01) {
+              cum *= f;
+              detectedCA.push({ ex_date: raw[i].trade_date, factor: Math.round(f * 10000) / 10000, basis: 'prev_close' });
+            }
+          }
+          splitAdj[i - 1] = cum;
+        }
+      })();
+      const data = raw.map((r, i) => {
+        let f = splitAdj[i];
         for (const ca of cas) { if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) f *= (1 / ca.ratio); }
         const ac = Math.round(r.close * f), ah = Math.round((r.high || r.close) * f), al = Math.round((r.low || r.close) * f), ao = Math.round((r.open_price || r.close) * f);
         return { ...r, ac, ah, al, ao, fnet: (r.foreign_buy - r.foreign_sell) * r.close, fnet_shares: r.foreign_buy - r.foreign_sell };
       });
+      splitAdj._detected = detectedCA;
 
       const closes = data.map(r => r.ac);
       const n = data.length;
@@ -4677,6 +4697,7 @@ module.exports = function(upload) {
           eps_roe_basis: 'TTM / annualized'
         },
         daily_valuation: dailyValuation,
+        corporate_adjustments: detectedCA,
         chart: chartData,
         ad_line: adChartData
       });
