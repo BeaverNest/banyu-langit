@@ -2,6 +2,8 @@ const express = require('express');
 const { yq } = require('../utils/yahoo');
 const { gNews } = require('../utils/news');
 const { db, latestIdxDate } = require('../db');
+const { registerSqlAdjust } = require('../utils/price-adjust');
+registerSqlAdjust(db); // ca_adj(close, code, trade_date) — lihat utils/price-adjust.js
 
 const router = express.Router();
 
@@ -350,7 +352,8 @@ router.get('/commodities', (req, res) => {
     if (allTickers.length) {
       const ph = allTickers.map(() => '?').join(',');
       db.prepare(`SELECT code, trade_date, close, prev_close, volume, value,
-                         foreign_buy, foreign_sell
+                         foreign_buy, foreign_sell,
+                         ca_adj(close, code, trade_date) AS ac
                   FROM idx_daily WHERE trade_date >= ? AND code IN (${ph})`)
         .all(dates[dates.length - 1], ...allTickers)
         .forEach(r => { (byCode[r.code] = byCode[r.code] || []).push(r); });
@@ -371,12 +374,16 @@ router.get('/commodities', (req, res) => {
       const n = a.length;
       const last = a[n - 1];
       const at = k => (n > k ? a[n - 1 - k] : null);
+      // chg_5d/chg_20d harus dari deret harga TERKOREKSI aksi korporasi (ca_adj):
+      // split di dalam jendela 20 sesi terbaca sebagai -80% kalau pakai close mentah.
+      // `close` mentah tetap dipakai untuk nilai level dan rupiah (value, fnet_val).
+      const px = r => (r && r.ac != null ? r.ac : (r ? r.close : null));
       return {
         code, name: last.name || code,
         close: last.close, prev_close: last.prev_close,
         chg_pct: pct(last.close, last.prev_close),
-        chg_5d: at(5) ? pct(last.close, at(5).close) : null,
-        chg_20d: at(20) ? pct(last.close, at(20).close) : null,
+        chg_5d: at(5) ? pct(px(last), px(at(5))) : null,
+        chg_20d: at(20) ? pct(px(last), px(at(20))) : null,
         value: last.value || 0, volume: last.volume || 0,
         fnet_val: ((last.foreign_buy || 0) - (last.foreign_sell || 0)) * (last.close || 0)
       };

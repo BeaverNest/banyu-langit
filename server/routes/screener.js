@@ -1,5 +1,6 @@
 const express = require('express');
 const { db, latestIdxDate } = require('../db');
+const { loadFactors, adjustRows, fallbackRatioActions } = require('../utils/price-adjust');
 
 const router = express.Router();
 
@@ -73,23 +74,35 @@ function loadConfirmedCAs() {
   return map;
 }
 
-function adjustRow(row, actions) {
-  if (!actions || !actions.length) return row;
-  let cumFactor = 1;
-  for (const ca of actions) {
-    if (row.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
-      cumFactor *= (1 / ca.ratio);
+// Faktor resmi = ca_factors (217 event / 173 kode, diturunkan dari prev_close IDX,
+// sudah diverifikasi terhadap /trading/price-adjustments). Tabel corporate_actions
+// hanya 5 baris, ex_date-nya bisa salah (MLPT), dan hanya dipakai sebagai FALLBACK
+// kalau kode itu belum ada di ca_factors — kalau dipakai bersamaan, event yang sama
+// dihitung dua kali (RAJA 1:5 jadi 0,04 bukan 0,2). Hasil: kolom ac/ah/al/avol di deret.
+// `close` mentah sengaja TIDAK diubah: nilai uang (fnet, value) memakai harga hari itu.
+function adjustSeries(hist, factors, actions) {
+  adjustRows(hist, factors, { volumeFields: { volume: 'avol' } });
+  const effActions = fallbackRatioActions(factors, actions);
+  if (effActions.length) {
+    for (const r of hist) {
+      let f = 1;
+      for (const ca of effActions) {
+        if (r.trade_date < ca.ex_date) f *= (1 / ca.ratio);
+      }
+      if (f !== 1) {
+        r.ac = Math.round(r.ac * f);
+        r.ah = Math.round(r.ah * f);
+        r.al = Math.round(r.al * f);
+        r.avol = Math.round(r.avol / f);
+      }
     }
   }
-  if (cumFactor === 1) return row;
-  return {
-    ...row,
-    close: Math.round(row.close * cumFactor),
-    high: Math.round(row.high * cumFactor),
-    low: Math.round(row.low * cumFactor),
-    volume: Math.round(row.volume / cumFactor)
-  };
+  return hist;
 }
+
+// high/low hasil penyesuaian; baris dengan high/low 0 (cacat upstream) jatuh ke ac.
+const adjHigh = r => (r.ah > 0 ? r.ah : r.ac);
+const adjLow = r => (r.al > 0 ? r.al : r.ac);
 
 router.post('/run', (req, res) => {
   try {
@@ -136,6 +149,7 @@ router.post('/run', (req, res) => {
     }
 
     const caMap = loadConfirmedCAs();
+    const caFactors = loadFactors(db);
     const results = [];
 
     for (const stock of stocks) {
@@ -143,16 +157,15 @@ router.post('/run', (req, res) => {
 
       const hist = db.prepare('SELECT trade_date,close,high,low,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE code=? ORDER BY trade_date').all(stock.code);
       if (hist.length >= 5) {
-        const actions = caMap[stock.code];
-        const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
-        const closes = adjusted.map(h => h.close), highs = adjusted.map(h => h.high || h.close), lows = adjusted.map(h => h.low || h.close), vols = adjusted.map(h => h.volume);
+        const adjusted = adjustSeries(hist, caFactors[stock.code], caMap[stock.code]);
+        const closes = adjusted.map(h => h.ac), highs = adjusted.map(adjHigh), lows = adjusted.map(adjLow), vols = adjusted.map(h => (h.avol != null ? h.avol : h.volume));
         tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10); tech.ma20 = calcMA(closes, 20);
         tech.ma50 = calcMA(closes, 50); tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
         if (closes.length >= 26) tech.macd = calcMACD(closes);
         if (closes.length >= 14) tech.stoch = calcStochastic(highs, lows, closes);
         const avgVol = vols.slice(-20, -1);
         if (avgVol.length) tech.vol_ratio = Math.round(stock.volume / (avgVol.reduce((s, v) => s + v, 0) / avgVol.length) * 10) / 10;
-        if (actions && actions.length) tech.adjusted = true;
+        if ((caMap[stock.code] && caMap[stock.code].length) || (caFactors[stock.code] && caFactors[stock.code].length)) tech.adjusted = true;
       }
 
       const avg = avgMap[stock.code];
@@ -305,6 +318,7 @@ router.post('/formula', (req, res) => {
 
     const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol || needs.freq) ? bulkLoadHistory(td) : {};
     const caMap = (needs.ma || needs.macd || needs.stoch) ? loadConfirmedCAs() : {};
+    const caFactors = (needs.ma || needs.macd || needs.stoch) ? loadFactors(db) : {};
 
     // ── Bulk-load dividend, ownership, CA data for new variables ──
     let divMap = {}, bpMap = {}, riMap = {};
@@ -344,13 +358,12 @@ router.post('/formula', (req, res) => {
       let extraCtx = {};
 
       if (hist.length >= 5) {
-        const actions = caMap[stock.code];
-        const adjusted = actions ? hist.map(h => adjustRow(h, actions)) : hist;
-        const closes = adjusted.map(h => h.close);
+        const adjusted = adjustSeries(hist, caFactors[stock.code], caMap[stock.code]);
+        const closes = adjusted.map(h => h.ac);
         
         if (needs.ma) {
-          const highs = adjusted.map(h => h.high || h.close);
-          const lows = adjusted.map(h => h.low || h.close);
+          const highs = adjusted.map(adjHigh);
+          const lows = adjusted.map(adjLow);
           tech.ma3 = calcMA(closes, 3); tech.ma5 = calcMA(closes, 5); tech.ma10 = calcMA(closes, 10);
           tech.ma20 = calcMA(closes, 20); tech.ma30 = calcMA(closes, 30); tech.ma50 = calcMA(closes, 50);
           tech.ma100 = calcMA(closes, 100); tech.ma200 = calcMA(closes, 200);
@@ -380,15 +393,15 @@ router.post('/formula', (req, res) => {
         }
         
         if (needs.stoch && closes.length >= 14) {
-          const highs = adjusted.map(h => h.high || h.close);
-          const lows = adjusted.map(h => h.low || h.close);
+          const highs = adjusted.map(adjHigh);
+          const lows = adjusted.map(adjLow);
           tech.stoch = calcStochastic(highs, lows, closes);
           extraCtx.StochCrossUp = (tech.stoch && tech.stoch.k > (tech.stoch.d || 50)) ? 1 : 0;
           extraCtx.StochTrend = (tech.stoch && tech.stoch.k > (tech.stoch.d || 50)) ? 1 : 0;
         }
         
         if (needs.relvol) {
-          const vols = adjusted.map(h => h.volume);
+          const vols = adjusted.map(h => (h.avol != null ? h.avol : h.volume));
           const volMa20 = vols.length >= 20 ? vols.slice(-20).reduce((s,v)=>s+v,0)/20 : 0;
           extraCtx.RelVol = volMa20 > 0 ? Math.round(stock.volume / volMa20 * 10) / 10 : 0;
           tech.vol_ratio = extraCtx.RelVol;
@@ -396,8 +409,8 @@ router.post('/formula', (req, res) => {
         
         if (needs.hhv) {
           const c20 = closes.slice(-20);
-          const highs20 = adjusted.slice(-20).map(h => h.high || h.close);
-          const lows20 = adjusted.slice(-20).map(h => h.low || h.close);
+          const highs20 = adjusted.slice(-20).map(adjHigh);
+          const lows20 = adjusted.slice(-20).map(adjLow);
           extraCtx.HHV20 = c20.length ? Math.max(...highs20) : 0;
           extraCtx.LLV20 = c20.length ? Math.min(...lows20) : 0;
           extraCtx.HHV_C20 = c20.length ? Math.max(...c20) : 0;

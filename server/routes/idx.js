@@ -2,12 +2,16 @@ const express = require('express');
 const { db, latestIdxDate } = require('../db');
 const { parseTradeDate } = require('../utils/normalize');
 const { getCodeVersion } = require('../utils/code-version');
-const { loadFactors, adjustRows } = require('../utils/price-adjust');
+const { loadFactors, adjustRows, factorAt, factorForRow, fallbackRatioActions, registerSqlAdjust } = require('../utils/price-adjust');
 
 // Provenance stamp written into every daily_scores row (agent rail contract):
 // names the variant of each derived indicator, so a stored number stays auditable
 // after the formula source is edited. Keep in sync with utils/indicators.js.
 const SCORE_VARIANT = 'rsi=cutler;ma=sma;macd=ema9_standard';
+
+// ca_adj(close, code, trade_date): satu-satunya jalur untuk query agregat (AVG/GROUP BY)
+// yang tidak bisa memakai adjustRows() di JS. Definisinya di utils/price-adjust.js.
+registerSqlAdjust(db);
 
 const router = express.Router();
 
@@ -662,6 +666,15 @@ module.exports = function(upload) {
         `SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`
       ).all(code);
 
+      // Sumber faktor resmi = ca_factors (diturunkan dari prev_close IDX, 217 event /
+      // 173 kode). corporate_actions hanya 5 baris dan MLPT ex_date-nya salah
+      // (2026-07-29 vs 2026-07-21 yang cocok dengan langkah harga), jadi tabel itu
+      // hanya FALLBACK untuk kode yang belum ada di ca_factors. Tanpa ca_factors,
+      // chart (chart-panel.js) menampilkan harga mentah: split tampak -80%.
+      const caF = loadFactors(db)[code] || [];
+      // Yang benar-benar dipakai (kosong kalau ca_factors sudah mengisi kode ini).
+      const effActions = fallbackRatioActions(caF, actions);
+
       const ohlc = db.prepare(
         `SELECT trade_date, code, name, open_price, high, low, close, volume, prev_close,
                 value, frequency, foreign_buy, foreign_sell, listed_shares, bid_vol, offer_vol
@@ -707,25 +720,23 @@ module.exports = function(upload) {
         return r;
       });
 
-      if (!actions.length) {
+      if (!actions.length && !caF.length) {
         const data = cleaned.map(r => ({
           ...r, adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close,
           adj_volume: r.volume, cum_factor: 1
         }));
-        return res.json({ code, data, actions: [] });
+        return res.json({ code, data, actions: [], ca_factors: [] });
       }
 
       // Backward: dates BEFORE ex_date get factor applied
       // factor = 1/ratio (ratio = new_shares/old_shares)
       // Split 1:5 → ratio=5, factor=0.2 → old prices shrink
       // Reverse 10:1 → ratio=0.1, factor=10 → old prices grow
+      // Faktor dihitung SEKALI per baris (factorForRow): ca_factors kalau kode itu
+      // punya entri, corporate_actions hanya kalau tidak ada. Menjumlahkan keduanya
+      // = satu event dihitung dua kali (RAJA 0,2×0,2=0,04; DSSA 0,004×0,04).
       const data = cleaned.map(r => {
-        let cumFactor = 1;
-        for (const ca of actions) {
-          if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
-            cumFactor *= (1 / ca.ratio);
-          }
-        }
+        let cumFactor = factorForRow(caF, actions, r.trade_date);
 
         if (cumFactor === 1) {
           return { ...r, adj_open: r.open_price, adj_high: r.high, adj_low: r.low, adj_close: r.close, adj_volume: r.volume, cum_factor: 1 };
@@ -742,7 +753,9 @@ module.exports = function(upload) {
         };
       });
 
-      res.json({ code, data, actions });
+      // `actions` = daftar yang BENAR-BENAR dipakai (kosong bila ca_factors menang),
+      // supaya klien melihat basis yang sama dengan angka adj_* di atas.
+      res.json({ code, data, actions: effActions, ca_factors: caF.map(f => ({ ex_date: f.ex_date, factor: f.factor, source: f.source || 'ca_factors' })) });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -798,9 +811,10 @@ module.exports = function(upload) {
 
         // Get daily data: avg close per date across tickers in this group
         // We normalize by computing average % change from first available date
+        // ca_adj: deret AVG(close) mentah patah di setiap ex-date CA.
         const rows = db.prepare(`
           SELECT trade_date,
-                 AVG(close) as avg_close,
+                 AVG(ca_adj(close, code, trade_date)) as avg_close,
                  COUNT(*) as count,
                  SUM((foreign_buy - foreign_sell) * close) as total_fnet_val,
                  SUM(value) as total_value
@@ -879,17 +893,19 @@ module.exports = function(upload) {
       }
 
       // Batch MA calculation — single query instead of per-stock queries
+      // ca_adj: MA20/MA200 di sini dipakai UI "IDX Daily"; AVG(close) mentah
+      // membuat MA nama pasca-CA melompat (mis. RAJA 5x terlalu tinggi).
       const maMap = {};
       const maDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 200').all().map(r => r.trade_date);
       if (maDates.length >= 20) {
         const ma20Dates = maDates.slice(0, 20);
         const ph20 = ma20Dates.map(() => '?').join(',');
-        db.prepare(`SELECT code, ROUND(AVG(close)) as ma20 FROM idx_daily WHERE trade_date IN (${ph20}) AND close>0 GROUP BY code`).all(...ma20Dates)
+        db.prepare(`SELECT code, ROUND(AVG(ca_adj(close, code, trade_date))) as ma20 FROM idx_daily WHERE trade_date IN (${ph20}) AND close>0 GROUP BY code`).all(...ma20Dates)
           .forEach(r => { maMap[r.code] = { ma20: r.ma20, ma200: 0 }; });
       }
       if (maDates.length >= 200) {
         const ph200 = maDates.map(() => '?').join(',');
-        db.prepare(`SELECT code, ROUND(AVG(close)) as ma200 FROM idx_daily WHERE trade_date IN (${ph200}) AND close>0 GROUP BY code`).all(...maDates)
+        db.prepare(`SELECT code, ROUND(AVG(ca_adj(close, code, trade_date))) as ma200 FROM idx_daily WHERE trade_date IN (${ph200}) AND close>0 GROUP BY code`).all(...maDates)
           .forEach(r => { if (maMap[r.code]) maMap[r.code].ma200 = r.ma200; else maMap[r.code] = { ma20: 0, ma200: r.ma200 }; });
       }
 
@@ -1309,6 +1325,14 @@ module.exports = function(upload) {
         });
       }
 
+      // Aksi korporasi (ca_factors): harga SEBELUM ex_date dikalikan faktor supaya
+      // MA/RSI/MACD/ret dihitung dari deret yang kontinu. Tanpa ini, split 1:5 di
+      // dalam jendela 200 hari merusak 5 dari 50 fitur (dan 25% bobot score_momentum).
+      // `close` mentah sengaja tetap dipakai untuk nilai UANG (fnet, div_yield,
+      // market_cap, bid/offer) — itu harga x lembar pada hari itu, bukan deret.
+      const caFactors = loadFactors(db);
+      Object.keys(histMap).forEach(c => adjustRows(histMap[c], caFactors[c], { volumeFields: { volume: 'avol' } }));
+
       function calcMA(closes, n) {
         if (closes.length < n) return 0;
         return closes.slice(-n).reduce((s, v) => s + v, 0) / n;
@@ -1401,7 +1425,10 @@ module.exports = function(upload) {
       liquid.forEach(s => {
         const fund = fundMap[s.code] || {};
         const hist = histMap[s.code] || [];
-        const closes = hist.map(r => r.close);
+        // closes = deret TERKOREKSI aksi korporasi (ac); baris terakhir = hari skoring
+        // sehingga ac == close mentah di situ dan ma*_pct tetap apple-to-apple.
+        const closes = hist.map(r => r.ac != null ? r.ac : r.close);
+        const lastPx = closes.length ? closes[closes.length - 1] : s.close;
         const fnets = hist.map(r => (r.foreign_buy - r.foreign_sell) * r.close);
 
         // MAs
@@ -1410,17 +1437,17 @@ module.exports = function(upload) {
         const ma20 = Math.round(calcMA(closes, 20));
         const ma50 = Math.round(calcMA(closes, 50));
         const ma200 = Math.round(calcMA(closes, 200));
-        const ma5_pct = ma5 > 0 ? Math.round((s.close - ma5) / ma5 * 10000) / 100 : 0;
-        const ma10_pct = ma10 > 0 ? Math.round((s.close - ma10) / ma10 * 10000) / 100 : 0;
-        const ma20_pct = ma20 > 0 ? Math.round((s.close - ma20) / ma20 * 10000) / 100 : 0;
-        const ma50_pct = ma50 > 0 ? Math.round((s.close - ma50) / ma50 * 10000) / 100 : 0;
-        const ma200_pct = ma200 > 0 ? Math.round((s.close - ma200) / ma200 * 10000) / 100 : 0;
+        const ma5_pct = ma5 > 0 ? Math.round((lastPx - ma5) / ma5 * 10000) / 100 : 0;
+        const ma10_pct = ma10 > 0 ? Math.round((lastPx - ma10) / ma10 * 10000) / 100 : 0;
+        const ma20_pct = ma20 > 0 ? Math.round((lastPx - ma20) / ma20 * 10000) / 100 : 0;
+        const ma50_pct = ma50 > 0 ? Math.round((lastPx - ma50) / ma50 * 10000) / 100 : 0;
+        const ma200_pct = ma200 > 0 ? Math.round((lastPx - ma200) / ma200 * 10000) / 100 : 0;
         const rsi14 = calcRSI(closes, 14);
         const macd = calcMACD(closes);
 
-        // Returns
-        const ret_5d = closes.length >= 6 ? Math.round((s.close - closes[closes.length - 6]) / closes[closes.length - 6] * 10000) / 100 : 0;
-        const ret_20d = closes.length >= 21 ? Math.round((s.close - closes[closes.length - 21]) / closes[closes.length - 21] * 10000) / 100 : 0;
+        // Returns (deret terkoreksi: split di dalam jendela tidak lagi dihitung sebagai -80%)
+        const ret_5d = closes.length >= 6 ? Math.round((lastPx - closes[closes.length - 6]) / closes[closes.length - 6] * 10000) / 100 : 0;
+        const ret_20d = closes.length >= 21 ? Math.round((lastPx - closes[closes.length - 21]) / closes[closes.length - 21] * 10000) / 100 : 0;
 
         // Foreign 5d net
         const fnet5 = fnets.slice(-5).reduce((a, b) => a + b, 0);
@@ -1764,6 +1791,14 @@ module.exports = function(upload) {
       const preHist = {};
       preRows.forEach(r => { if (!preHist[r.code]) preHist[r.code] = []; preHist[r.code].push(r); });
 
+      // Aksi korporasi (ca_factors): koreksi SEKALI di depan, bukan per tanggal hitung.
+      // Semua deret yang dipakai MA/RSI/MACD/ret harus lewat ac; `close` mentah tetap
+      // dipakai untuk uang (fnet, div_yield, market_cap) dan untuk change_pct, yang
+      // sudah aman karena prev_close dari ingest juga basis terkoreksi.
+      const caFactors = loadFactors(db);
+      Object.keys(allHist).forEach(c => adjustRows(allHist[c], caFactors[c], { volumeFields: { volume: 'avol' } }));
+      Object.keys(preHist).forEach(c => adjustRows(preHist[c], caFactors[c], { volumeFields: { volume: 'avol' } }));
+
       const insScore = db.prepare(`INSERT OR REPLACE INTO daily_scores(calc_date,code,name,close,change_pct,sector,industry,market_cap,
         score_fundamental,score_valuation,score_momentum,score_demand,score_foreign,score_composite,
         roe,roa,npm,der,per,pbv,per_vs_ind,pbv_vs_ind,div_yield,
@@ -1798,10 +1833,16 @@ module.exports = function(upload) {
             const mktCap = r.close * (r.listed_shares || 0);
             if (avgFreq < 10 || mktCap < 50e9) return;
 
-            // Build close array (pre + current up to this date)
+            // Build close array (pre + current up to this date).
+            // Faktor dihitung PER TANGGAL (factorAt) pada array gabungan: preHist dan
+            // series adalah dua array terpisah, jadi koreksi per-array (adjustRows)
+            // akan melewatkan event yang ex_date-nya di luar array itu — nyata:
+            // preHist berakhir 2026-08-03, CA PBSA 2026-10-14 tidak mengoreksinya,
+            // sementara cur terkoreksi -> deret melompat -50% di tengah.
             const pre = preHist[code] || [];
             const cur = series.slice(0, idx + 1);
-            const allCloses = [...pre.map(x => x.close), ...cur.map(x => x.close)];
+            const allCloses = [...pre, ...cur].map(x => x.close * factorAt(caFactors[code], x.trade_date));
+            const lastPx = allCloses.length ? allCloses[allCloses.length - 1] : r.close;
             const allFnets = [...pre.map(x => (x.foreign_buy - x.foreign_sell) * x.close), ...cur.map(x => (x.foreign_buy - x.foreign_sell) * x.close)];
             const allBidVols = [...pre.map(x => x.bid_vol || 0), ...cur.map(x => x.bid_vol || 0)];
             const allOfferVols = [...pre.map(x => x.offer_vol || 0), ...cur.map(x => x.offer_vol || 0)];
@@ -1822,8 +1863,8 @@ module.exports = function(upload) {
             const ma200 = Math.round(calcMA(allCloses, 200));
             const rsi14 = calcRSI(allCloses, 14);
             const macd = calcMACD(allCloses);
-            const ret5 = allCloses.length >= 6 ? Math.round((r.close - allCloses[allCloses.length - 6]) / allCloses[allCloses.length - 6] * 10000) / 100 : 0;
-            const ret20 = allCloses.length >= 21 ? Math.round((r.close - allCloses[allCloses.length - 21]) / allCloses[allCloses.length - 21] * 10000) / 100 : 0;
+            const ret5 = allCloses.length >= 6 ? Math.round((lastPx - allCloses[allCloses.length - 6]) / allCloses[allCloses.length - 6] * 10000) / 100 : 0;
+            const ret20 = allCloses.length >= 21 ? Math.round((lastPx - allCloses[allCloses.length - 21]) / allCloses[allCloses.length - 21] * 10000) / 100 : 0;
             const fnet5 = allFnets.slice(-5).reduce((a, b) => a + b, 0);
             const fnet5d = allFnets.slice(-5);
             const fnetBuyDays = fnet5d.filter(v => v > 0).length;
@@ -1865,11 +1906,11 @@ module.exports = function(upload) {
               roe: fund.roe || 0, roa: fund.roa || 0, npm: fund.npm || 0, der: fund.der || 0,
               per: fund.per || 0, pbv: fund.pbv || 0, per_vs_ind: perVs, pbv_vs_ind: pbvVs, div_yield: divYield,
               ma5, ma10, ma20, ma50, ma200,
-              ma5_pct: ma5 > 0 ? Math.round((r.close - ma5) / ma5 * 10000) / 100 : 0,
-              ma10_pct: ma10 > 0 ? Math.round((r.close - ma10) / ma10 * 10000) / 100 : 0,
-              ma20_pct: ma20 > 0 ? Math.round((r.close - ma20) / ma20 * 10000) / 100 : 0,
-              ma50_pct: ma50 > 0 ? Math.round((r.close - ma50) / ma50 * 10000) / 100 : 0,
-              ma200_pct: ma200 > 0 ? Math.round((r.close - ma200) / ma200 * 10000) / 100 : 0,
+              ma5_pct: ma5 > 0 ? Math.round((lastPx - ma5) / ma5 * 10000) / 100 : 0,
+              ma10_pct: ma10 > 0 ? Math.round((lastPx - ma10) / ma10 * 10000) / 100 : 0,
+              ma20_pct: ma20 > 0 ? Math.round((lastPx - ma20) / ma20 * 10000) / 100 : 0,
+              ma50_pct: ma50 > 0 ? Math.round((lastPx - ma50) / ma50 * 10000) / 100 : 0,
+              ma200_pct: ma200 > 0 ? Math.round((lastPx - ma200) / ma200 * 10000) / 100 : 0,
               rsi14, macd: macd.macd, macd_signal: macd.signal, macd_hist: macd.hist,
               ret_5d: ret5, ret_20d: ret20, fnet_5d: fnet5, fnet_dir: fnetDir,
               bid_offer_ratio: bidOfferRatio, bid_offer_5d: bidOffer5d,
@@ -1965,18 +2006,22 @@ module.exports = function(upload) {
         if (scores.length < 20) return;
 
         // Get forward prices
+        // ca_adj: return IC harus memakai harga terkoreksi — tanpa itu, satu split
+        // dalam jendela horizon tercatat sebagai "return" -80% dan merusak IC.
         const fwdPrices = {};
         const codes = scores.map(s => s.code);
         const ph = codes.map(() => '?').join(',');
-        db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
-          .forEach(r => { fwdPrices[r.code] = r.close; });
+        db.prepare(`SELECT code, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+          .forEach(r => { fwdPrices[r.code] = r.ac; });
 
         // Compute returns and rank correlation (Spearman)
+        const caF = loadFactors(db);
         const pairs = [];
         scores.forEach(s => {
           const fwdClose = fwdPrices[s.code];
-          if (!fwdClose || !s.close) return;
-          const ret = (fwdClose - s.close) / s.close * 100;
+          const base = s.close > 0 ? s.close * factorAt(caF[s.code], sd) : 0;
+          if (!fwdClose || !base) return;
+          const ret = (fwdClose - base) / base * 100;
           pairs.push({ code: s.code, score: s.score_composite, scoreFund: s.score_fundamental, scoreVal: s.score_valuation, scoreMom: s.score_momentum, scoreDem: s.score_demand || 0, scoreFor: s.score_foreign || 0, ret });
         });
 
@@ -2070,6 +2115,10 @@ module.exports = function(upload) {
       const tdIndex = {};
       allTradeDates.forEach((d, i) => { tdIndex[d] = i; });
 
+      // Faktor CA: `close` di daily_scores tersimpan MENTAH, jadi basis harga di
+      // tanggal skor harus dikoreksi manual sebelum dibandingkan harga forward.
+      const caF = loadFactors(db);
+
       // Spearman rank correlation
       function spearmanIC(pairs, scoreKey) {
         const n = pairs.length;
@@ -2098,14 +2147,15 @@ module.exports = function(upload) {
           const fwdPrices = {};
           const codes = scores.map(s => s.code);
           const ph = codes.map(() => '?').join(',');
-          db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
-            .forEach(r => { fwdPrices[r.code] = r.close; });
+          db.prepare(`SELECT code, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+            .forEach(r => { fwdPrices[r.code] = r.ac; });
 
           const pairs = [];
           scores.forEach(s => {
             const fp = fwdPrices[s.code];
-            if (!fp || !s.close) return;
-            pairs.push({ code: s.code, ret: (fp - s.close) / s.close * 100,
+            const base = s.close > 0 ? s.close * factorAt(caF[s.code], sd) : 0;
+            if (!fp || !base) return;
+            pairs.push({ code: s.code, ret: (fp - base) / base * 100,
               composite: s.score_composite, fundamental: s.score_fundamental,
               valuation: s.score_valuation, momentum: s.score_momentum,
               demand: s.score_demand || 0, foreign: s.score_foreign || 0 });
@@ -2259,13 +2309,15 @@ module.exports = function(upload) {
         const codes = scores.map(s => s.code);
         const ph = codes.map(() => '?').join(',');
         const fwdMap = {};
-        db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
-          .forEach(r => { fwdMap[r.code] = r.close; });
+        db.prepare(`SELECT code, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+          .forEach(r => { fwdMap[r.code] = r.ac; });
 
-        // Build return map
+        // Build return map (basis harga di daily_scores mentah -> dikoreksi faktor CA)
+        const caF = loadFactors(db);
         const retMap = {};
         scores.forEach(s => {
-          if (fwdMap[s.code] && s.close > 0) retMap[s.code] = (fwdMap[s.code] - s.close) / s.close * 100;
+          const base = s.close > 0 ? s.close * factorAt(caF[s.code], calcDate) : 0;
+          if (fwdMap[s.code] && base > 0) retMap[s.code] = (fwdMap[s.code] - base) / base * 100;
         });
         if (Object.keys(retMap).length < 15) continue;
 
@@ -2387,6 +2439,10 @@ module.exports = function(upload) {
       const tdIndex = {};
       allTradeDates.forEach((d, i) => { tdIndex[d] = i; });
 
+      // Faktor CA (harga di daily_scores mentah) — dipakai untuk mengoreksi basis
+      // harga di tanggal skor sebelum menghitung return forward.
+      const caF = loadFactors(db);
+
       // Pre-load all score data + forward returns per date
       const dateData = []; // [{scores: [{code, fund, val, mom, dem, for, fwdRet}], ...}]
       for (const sd of scoreDates) {
@@ -2400,13 +2456,15 @@ module.exports = function(upload) {
         const fwdPrices = {};
         const codes = scores.map(s => s.code);
         const ph = codes.map(() => '?').join(',');
-        db.prepare(`SELECT code, close FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
-          .forEach(r => { fwdPrices[r.code] = r.close; });
+        db.prepare(`SELECT code, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date=? AND code IN (${ph})`).all(fwdDate, ...codes)
+          .forEach(r => { fwdPrices[r.code] = r.ac; });
 
         const pairs = [];
         for (const s of scores) {
           const fp = fwdPrices[s.code];
-          if (!fp || !s.close || s.close <= 0) continue;
+          // basis di daily_scores mentah -> koreksi faktor CA sebelum dibanding forward
+          const base = s.close > 0 ? s.close * factorAt(caF[s.code], sd) : 0;
+          if (!fp || !base) continue;
           pairs.push({
             code: s.code,
             f: s.score_fundamental || 0,
@@ -2414,7 +2472,7 @@ module.exports = function(upload) {
             m: s.score_momentum || 0,
             d: s.score_demand || 0,
             r: s.score_foreign || 0,
-            ret: (fp - s.close) / s.close * 100
+            ret: (fp - base) / base * 100
           });
         }
         if (pairs.length >= 15) dateData.push(pairs);
@@ -3501,10 +3559,12 @@ module.exports = function(upload) {
           let aboveMA20 = 0, aboveMA50 = 0, aboveMA200 = 0, total = 0, newHigh = 0, newLow = 0;
 
           for (const s of stocks) {
-            const hist = db.prepare('SELECT close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 200').all(s.code);
+            // ca_adj: harga terkoreksi CA — breadth "di atas MA" tidak boleh berubah
+            // hanya karena split. Ahli: MA200 butuh deret kontinu.
+            const hist = db.prepare('SELECT ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 200').all(s.code);
             if (hist.length < 50) continue;
             total++;
-            const closes = hist.map(r => r.close).reverse();
+            const closes = hist.map(r => r.ac).reverse();
             const n = closes.length;
             const price = closes[n - 1];
             const ma20 = n >= 20 ? closes.slice(n - 20).reduce((a, b) => a + b, 0) / 20 : null;
@@ -3536,7 +3596,7 @@ module.exports = function(upload) {
         const dates230 = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 231').all().map(r => r.trade_date);
         if (dates230.length >= 60) {
           const from = dates230[dates230.length - 1];
-          const rows = db.prepare('SELECT code, trade_date, close FROM idx_daily WHERE trade_date >= ? AND close > 0 ORDER BY code, trade_date').all(from);
+          const rows = db.prepare('SELECT code, trade_date, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date >= ? AND close > 0 ORDER BY code, trade_date').all(from);
           const byCode = {};
           for (const r of rows) (byCode[r.code] = byCode[r.code] || []).push(r);
           const agg = {};
@@ -3544,14 +3604,14 @@ module.exports = function(upload) {
             const arr = byCode[code];
             let s20 = 0, s50 = 0;
             for (let i = 0; i < arr.length; i++) {
-              s20 += arr[i].close; if (i >= 20) s20 -= arr[i - 20].close;
-              s50 += arr[i].close; if (i >= 50) s50 -= arr[i - 50].close;
+              s20 += arr[i].ac; if (i >= 20) s20 -= arr[i - 20].ac;
+              s50 += arr[i].ac; if (i >= 50) s50 -= arr[i - 50].ac;
               if (i < 50) continue;                       // butuh MA50 lebih dulu
               const d = arr[i].trade_date;
               if (!agg[d]) agg[d] = { a20: 0, a50: 0, n: 0 };
               agg[d].n++;
-              if (arr[i].close > s20 / 20) agg[d].a20++;
-              if (arr[i].close > s50 / 50) agg[d].a50++;
+              if (arr[i].ac > s20 / 20) agg[d].a20++;
+              if (arr[i].ac > s50 / 50) agg[d].a50++;
             }
           }
           idx.breadth_history = Object.keys(agg).sort().slice(-30).map(d => ({
@@ -3594,6 +3654,8 @@ module.exports = function(upload) {
           const perfRows = db.prepare(`
             SELECT cp.sector AS sector, d.code, d.close, d.prev_close, d.value AS val,
                    p.close AS close20,
+                   ca_adj(d.close, d.code, d.trade_date) AS ac,
+                   ca_adj(p.close, p.code, p.trade_date) AS ac20,
                    ((d.foreign_buy - d.foreign_sell) * d.close) AS fnet_day
             FROM idx_daily d
             JOIN company_profiles cp ON d.code = cp.code
@@ -3617,7 +3679,7 @@ module.exports = function(upload) {
             const b = byS[r.sector] || (byS[r.sector] = { n: 0, d1: 0, d20: 0, n20: 0, top: [] });
             b.n++;
             if (r.prev_close > 0) b.d1 += (r.close - r.prev_close) * 1.0 / r.prev_close * 100;
-            if (r.close20 > 0) { b.d20 += (r.close - r.close20) * 1.0 / r.close20 * 100; b.n20++; }
+            if (r.ac20 > 0 && r.ac > 0) { b.d20 += (r.ac - r.ac20) * 1.0 / r.ac20 * 100; b.n20++; }
             b.top.push({ code: r.code, val: r.val || 0 });
           }
 
@@ -3775,10 +3837,12 @@ module.exports = function(upload) {
       const caFactors = loadFactors(db);
       const data = raw.map(r => ({ ...r, fnet: (r.foreign_buy - r.foreign_sell) * r.close, fnet_shares: r.foreign_buy - r.foreign_sell }));
       adjustRows(data, caFactors[code], { volumeFields: { volume: 'avol' } });
-      // Tabel corporate_actions (bila terisi) tetap diterapkan sebagai faktor tambahan.
+      // corporate_actions hanya fallback kalau kode ini belum ada di ca_factors —
+      // memakai keduanya = event yang sama dihitung dua kali (RAJA 0,2×0,2=0,04).
+      const effCas = fallbackRatioActions(caFactors[code], cas);
       for (const r of data) {
         let f = 1;
-        for (const ca of cas) { if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) f *= (1 / ca.ratio); }
+        for (const ca of effCas) { if (r.trade_date < ca.ex_date) f *= (1 / ca.ratio); }
         if (f !== 1) { r.ac = Math.round(r.ac * f); r.ao = Math.round(r.ao * f); r.ah = Math.round(r.ah * f); r.al = Math.round(r.al * f); }
       }
       const detectedCA = (caFactors[code] || []).map(f => ({ ex_date: f.ex_date, factor: f.factor, basis: 'ca_factors' }));
@@ -4195,12 +4259,14 @@ module.exports = function(upload) {
         if (fundamental && (fundamental.eps_trailing || fundamental.book_value)) {
           const epsT = fundamental.eps_trailing || 0;
           const bvS = fundamental.book_value || 0;
-          const dailyRows = db.prepare('SELECT trade_date, close FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 250').all(code).reverse();
+          // ca_adj: seri PER/PBV 250 sesi harus memakai harga terkoreksi, kalau tidak
+          // satu split membuat PER "turun 80%" padahal EPS-nya belum berubah.
+          const dailyRows = db.prepare('SELECT trade_date, close, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE code=? AND close>0 ORDER BY trade_date DESC LIMIT 250').all(code).reverse();
           dailyValuation = dailyRows.map(r => ({
             date: r.trade_date,
             close: r.close,
-            live_per: epsT !== 0 ? Math.round(r.close / epsT * 100) / 100 : null,
-            live_pbv: bvS !== 0 ? Math.round(r.close / bvS * 100) / 100 : null
+            live_per: epsT !== 0 ? Math.round(r.ac / epsT * 100) / 100 : null,
+            live_pbv: bvS !== 0 ? Math.round(r.ac / bvS * 100) / 100 : null
           }));
         }
       } catch (e) {}
