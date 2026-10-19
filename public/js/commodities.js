@@ -128,6 +128,19 @@ function cmdRender(el){
     }
     h+='<div style="font-size:10px;color:var(--am);padding:0 0 4px;line-height:1.4">⏸ '+parts.length+' seri komoditas tertinggal dari sesi '+shortDay(cf.ref_date)+': '+parts.join(' · ')+'</div>';
   }
+  // Sinyal sistem "pipeline data berhenti" (kanban t_c6c01360): saat state stopped/calendar_stale
+  // setiap seri sudah turun ke 'na' di server (lag null), jadi banner ⏸ di atas tidak akan menyala.
+  // Panel ini hanya perlu TIDAK berbohong: tulis sebabnya dengan teks netral yang sama seperti
+  // badge Market Regime (var(--t3)) — bukan alarm, karena angka lag-nya memang tidak diketahui.
+  var cp=cf&&cf.pipeline;
+  if(cp&&(cp.state==='lag1'||cp.state==='stopped'||cp.state==='calendar_stale')){
+    var cpTxt=cp.state==='lag1'
+      ? 'sesi terakhir belum masuk (data terakhir '+shortDay(cp.ref_date||'—')+')'
+      : cp.state==='stopped'
+        ? 'pipeline data berhenti '+(cp.elapsed_sessions==null?0:cp.elapsed_sessions)+' sesi — kesegaran per seri tidak diukur'
+        : 'kalender sesi kedaluwarsa (valid s/d '+((cp.calendar&&cp.calendar.valid_through)||'—')+')';
+    h+='<div id="cmd-pipeline-note" data-state="'+cp.state+'" style="font-size:10px;color:var(--t3);padding:0 0 4px;line-height:1.4">'+cpTxt+'</div>';
+  }
   h+='</div>';
 
   el.innerHTML=h;

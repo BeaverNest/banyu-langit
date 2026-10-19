@@ -45,6 +45,10 @@ function renderMR(el) {
   h += '<span style="font-weight:700;font-size:14px">🌐 Market Regime</span>';
   h += '<button class="bei-sort-btn" onclick="mrRefresh()" style="font-size:10px;padding:3px 8px">🔄 Refresh</button>';
   if (d.date) h += '<span style="font-size:10px;color:var(--t3)">' + d.date + '</span>';
+  // Sinyal sistem "pipeline data berhenti" (kanban t_c6c01360, keputusan t_243d21ae §D3).
+  // Baris-level, bukan panel baru: sumbernya ctx.pipeline yang diteruskan summarize(), jadi
+  // SEMUA panel kesegaran memakai sinyal yang sama — badge ini hanya rumah tampilannya di sini.
+  h += mrPipelineBadge(d.commodity_freshness && d.commodity_freshness.pipeline);
   h += '</div>';
 
   // ═══ Level 1: Global Sentiment ═══
@@ -82,6 +86,43 @@ function renderMR(el) {
   setTimeout(function() { mrLoadCurve(); }, 0);
   // Fetch news
   setTimeout(function() { mrRenderNews('mr-news'); }, 200);
+}
+
+// Badge baris-level sinyal "pipeline data berhenti" (kanban t_c6c01360).
+// Sumber: ctx.pipeline -> summarize().pipeline (server/utils/series-freshness.js). Ambang yang
+// SUDAH DIPUTUSKAN (§D3), jangan diubah di sini:
+//   elapsed 1 -> catatan netral var(--t3) "sesi terakhir belum masuk", TANPA badge
+//   elapsed >=2 -> badge amber var(--am) "⚠ pipeline data berhenti N sesi"
+//   elapsed >=5 -> badge merah var(--rd)  (outage > sepekan)
+//   calendar_stale -> catatan netral var(--t3), TANPA alarm (kalender kedaluwarsa bukan outage)
+// Saat state stopped/calendar_stale semua seri sudah 'na' di server; badge ini hanya menjelaskan
+// SEBABNYA. Angka lag sengaja tidak ditampilkan: kita tidak tahu lag-nya, jadi jangan mengarang.
+function mrPipelineBadge(p) {
+  if (!p || !p.state) return '';
+  var calTxt = (p.calendar && p.calendar.valid_through) ? p.calendar.valid_through : '—';
+  var title = 'sesi terdeklarasi terakhir yang cutoff-nya (21:00 WIB) sudah lewat: ' + (p.last_expected_session || '—')
+    + '; data terakhir di DB: ' + (p.ref_date || '—') + '; kalender sesi valid s/d ' + calTxt;
+  if (p.state === 'stopped') {
+    var n = p.elapsed_sessions == null ? 0 : p.elapsed_sessions;
+    var red = n >= 5;                       // >=5 sesi = outage lebih dari sepekan
+    return '<span id="mr-pipeline-badge" data-state="stopped" data-elapsed="' + n + '"'
+      + ' data-red="' + (red ? '1' : '0') + '" style="background:'
+      + (red ? 'rgba(239,68,68,.12)' : 'rgba(245,158,11,.12)') + ';border:1px solid '
+      + (red ? 'var(--rd)' : 'var(--am)') + ';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;color:'
+      + (red ? 'var(--rd)' : 'var(--am)') + '" title="' + esc(title) + '">'
+      + '⚠ pipeline data berhenti ' + n + ' sesi</span>';
+  }
+  if (p.state === 'lag1') {
+    return '<span id="mr-pipeline-note" data-state="lag1" data-elapsed="' + (p.elapsed_sessions == null ? 1 : p.elapsed_sessions) + '"'
+      + ' style="font-size:10px;color:var(--t3)" title="' + esc(title) + '">sesi terakhir belum masuk (data terakhir '
+      + esc(p.ref_date || '—') + ')</span>';
+  }
+  if (p.state === 'calendar_stale') {
+    return '<span id="mr-pipeline-note" data-state="calendar_stale" style="font-size:10px;color:var(--t3)"'
+      + ' title="kalender sesi perlu diperbarui dari SK libur bursa IDX; sinyal tidak dinyalakan supaya tidak jadi alarm palsu">'
+      + 'kalender sesi kedaluwarsa (valid s/d ' + esc(calTxt) + ')</span>';
+  }
+  return '';   // 'ok' / 'no_ref' -> tidak ada teks
 }
 
 function mrSection(num, title, content) {
@@ -170,6 +211,16 @@ function mrRenderCurve(box, d) {
     var naTxt = fr
       ? 'kesegaran kurva tidak diukur (tenor belum dideklarasikan)'
       : 'kesegaran kurva tidak diukur (konteks sesi tidak tersedia)';
+    // Sebab KETIGA (kanban t_c6c01360): pipeline data berhenti / kalender sesi kedaluwarsa.
+    // Di dua keadaan itu server sengaja menurunkan kurva ke 'na' (lag null) karena lag-nya tidak
+    // diketahui — menulis "tenor belum dideklarasikan" di sini akan menunjuk sebab yang salah.
+    if (fr && fr.lag_basis === 'pipeline_stopped') {
+      naCause = 'pipeline_stopped';
+      naTxt = 'kesegaran kurva tidak diukur (pipeline data berhenti)';
+    } else if (fr && fr.lag_basis === 'calendar_stale') {
+      naCause = 'calendar_stale';
+      naTxt = 'kesegaran kurva tidak diukur (kalender sesi kedaluwarsa)';
+    }
     h += '<span id="mr-curve-untracked" data-state="na" data-cause="' + naCause + '"'
       + ' style="color:var(--t3)">' + naTxt + '</span>';
   }

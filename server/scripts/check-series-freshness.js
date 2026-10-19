@@ -42,6 +42,14 @@
 //      sumbernya, stale false) WAJIB tetap tertahan, sedangkan seri 'na' yang barnya justru
 //      di sesi rujukan (KRAFT_PULP) WAJIB tetap menerbitkan angkanya. Nomor [8] dipakai
 //      karena [6]/[7] sudah terisi — jangan menimpa salah satunya.
+//  [10] kalender sesi TERDEKLARASI + sinyal "pipeline data berhenti" (kanban t_c6c01360,
+//      keputusan t_243d21ae §D2/§D3/§D5). Yang dikunci: (1) kalender ↔ 60 sesi terakhir
+//      idx_daily DUA ARAH, (2) jumlah libur per tahun 15-30, (3) valid_through >= hari ini+45
+//      (peringatan, bukan gagal), (4) lima kasus §D5 dengan `now` DISUNTIKKAN, (5) kontrak
+//      degradasi 'na' untuk stopped/calendar_stale — termasuk bukti bahwa seri yang sekarang
+//      'fresh' turun ke na/pipeline_stopped saat `now` disuntik, TANPA menulis DB.
+//      Catatan: saat pipeline degraded, asersi lag/stale per-seri di [3]-[8] otomatis dialihkan
+//      ke kontrak degradasi (bukan dilewati) — lihat `degraded`/`naOk` di awal blok live.
 //
 // Jalankan di dalam container (DB tidak ada di host):
 //   docker exec -w /app banyu-langit node server/scripts/check-series-freshness.js
@@ -72,6 +80,23 @@ async function getJson(path, tries = 4) {
       const r = await fetch(BL + path);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return await r.json();
+    } catch (e) {
+      lastErr = e;
+      await new Promise(res => setTimeout(res, 1500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// Berkas statis yang DISAJIKAN (bukan working tree): untuk membuktikan UI yang dilayani container
+// sudah memuat perubahan, bukan hanya berkas di host.
+async function getText(path, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(BL + path);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.text();
     } catch (e) {
       lastErr = e;
       await new Promise(res => setTimeout(res, 1500 * (i + 1)));
@@ -165,7 +190,19 @@ function main() {
     getJson('/api/market/overview'),
     getJson('/api/idx/stock-detail/TINS'),
     getJson('/api/idx/stock-detail/ANTM'),
-  ]).then(([cmd, mr, ov, sdTins, sdAntm]) => {
+  ]).then(async ([cmd, mr, ov, sdTins, sdAntm]) => {
+    // ── Keadaan pipeline (kanban t_c6c01360) ──────────────────────────────
+    // Saat pipeline 'stopped'/'calendar_stale' server SENGAJA berhenti mengukur lag (state 'na',
+    // lag null, stale false). Asersi di bawah yang membandingkan lag/stale dengan SQL — yang tetap
+    // mengukur terhadap `ref_date` BEKU — memang tidak berlaku saat itu, jadi dialihkan ke kontrak
+    // degradasi. Tidak ada asersi yang dilewati diam-diam: kondisinya diganti, bukan dimatikan.
+    const pipeNow = fresh.buildContext(db).pipeline;
+    const degraded = !!(pipeNow && (pipeNow.state === 'stopped' || pipeNow.state === 'calendar_stale'));
+    if (degraded) {
+      console.log('\n[i] CATATAN: pipeline DEGRADASI (' + pipeNow.state + ', elapsed=' + pipeNow.elapsed_sessions + ')');
+      console.log('    Asersi lag/stale per-seri dialihkan ke kontrak degradasi: state na, lag null, stale false.');
+    }
+    const naOk = (s) => !!s && s.state === 'na' && s.lag_sessions === null && s.stale === false;
     check('ref_date endpoint = max(frontier rail, idx_daily)', cmd.freshness && cmd.freshness.ref_date === ref,
       `endpoint=${cmd.freshness && cmd.freshness.ref_date} sql=${ref} rail=${railMax} idx=${idxMax}`);
 
@@ -179,6 +216,14 @@ function main() {
 
     let mismatched = [];
     for (const s of cmdSeries.concat(mrSeries)) {
+      if (degraded) {
+        // Kontrak degradasi: tidak ada angka lag, tidak ada tuduhan basi, sebabnya disebut.
+        if (!naOk(s)) mismatched.push(`${s.code}: degraded tapi state=${s.state} lag=${s.lag_sessions} stale=${s.stale}`);
+        else if (s.expected_lag_sessions != null && s.lag_basis !== 'pipeline_stopped' && s.lag_basis !== 'calendar_stale') {
+          mismatched.push(`${s.code}: degraded tapi lag_basis=${s.lag_basis}`);
+        }
+        continue;
+      }
       // 'na' (lag_basis='na', expected_lag_sessions NULL) = tidak pernah alarm: stale-nya
       // memang null walau bar-nya ada. Itu keadaan tersendiri, bukan "lupa menandai" —
       // memberi stale true/false pada seri na justru pelanggaran (kanban t_b234606a).
@@ -203,11 +248,11 @@ function main() {
     const tin = byCode['TIN'], nickel = byCode['NICKEL'], coal = byCode['COAL'];
     const lagOf = s => Number((lagSql.get(s.date, ref) || {}).c);
     check('TIN: stale == (lag DB > ekspektasi seri), tanpa tanggal yang di-hardcode',
-      !!tin && Boolean(tin.stale) === (lagOf(tin) > expectedOf('TIN')), JSON.stringify(tin || null));
+      degraded ? naOk(tin) : (!!tin && Boolean(tin.stale) === (lagOf(tin) > expectedOf('TIN'))), JSON.stringify(tin || null));
     check('NICKEL (rail & jam tarik sama) segar: lag 0, stale false',
       !!nickel && nickel.stale === false && lagOf(nickel) === 0, JSON.stringify(nickel || null));
     check('COAL: stale == (lag DB > ekspektasi seri)',
-      !!coal && Boolean(coal.stale) === (lagOf(coal) > expectedOf('COAL')), JSON.stringify(coal || null));
+      degraded ? naOk(coal) : (!!coal && Boolean(coal.stale) === (lagOf(coal) > expectedOf('COAL'))), JSON.stringify(coal || null));
     check('per seri, bukan ambang global: TIN dan NICKEL bisa berbeda hasil pada satu tarikan',
       !!tin && !!nickel && (Number(tin.lag_sessions) !== Number(nickel.lag_sessions)
         || (tin.stale === false && nickel.stale === false)),
@@ -243,7 +288,12 @@ function main() {
     for (const i of ovComm) {
       const expectLast = (lastSql.get(i.code) || {}).d || '';
       const expectLag = Number((lagSql.get(expectLast, ref) || {}).c);
+      // Tanggal bar tetap wajib jujur walau pipeline degraded; yang dialihkan hanya lag/stale.
       if (String(i.stale_date) !== String(expectLast)) ovMismatch.push(`${i.code}: stale_date ${i.stale_date} != DB ${expectLast}`);
+      if (degraded) {
+        if (!naOk(i)) ovMismatch.push(`${i.code}: degraded tapi lag=${i.lag_sessions} stale=${i.stale} state=${i.state}`);
+        continue;
+      }
       if (Number(i.lag_sessions) !== expectLag) ovMismatch.push(`${i.code}: lag ${i.lag_sessions} != SQL ${expectLag}`);
       if (Boolean(i.stale) !== (expectLag > expectedOf(i.code))) ovMismatch.push(`${i.code}: stale ${i.stale} vs lag ${expectLag} > expected ${expectedOf(i.code)}`);
     }
@@ -296,9 +346,9 @@ function main() {
       check('TINS: date & stale_date = MAX(custom_ohlc sesi reguler) dari DB, bukan tanggal karangan',
         String(tins.date) === String(expectLast) && String(tins.stale_date) === String(expectLast),
         `endpoint date=${tins.date} stale_date=${tins.stale_date} sql=${expectLast}`);
-      check('TINS: lag_sessions = COUNT(DISTINCT sesi) SQL independen', Number(tins.lag_sessions) === expectLag,
+      check('TINS: lag_sessions = COUNT(DISTINCT sesi) SQL independen', degraded ? naOk(tins) : Number(tins.lag_sessions) === expectLag,
         `endpoint=${tins.lag_sessions} sql=${expectLag}`);
-      check('TINS: stale == (lag DB > ekspektasi seri)', Boolean(tins.stale) === (expectLag > expectedOf(tins.code)),
+      check('TINS: stale == (lag DB > ekspektasi seri)', degraded ? (tins.stale === false && tins.lag_basis === 'pipeline_stopped') : Boolean(tins.stale) === (expectLag > expectedOf(tins.code)),
         `stale=${tins.stale} lag=${expectLag} expected=${expectedOf(tins.code)}`);
       check('TINS: level bar lama tetap dikirim (chart/hitungan lain memakainya)',
         typeof tins.price === 'number' && tins.price > 0, JSON.stringify(tins && tins.price));
@@ -368,7 +418,7 @@ function main() {
       const e = expectedOf(s.code);
       const got = s.expected_lag_sessions == null ? null : Number(s.expected_lag_sessions);
       if (got !== e) expBad.push(`${s.code}: expected ${got} != DB ${e}`);
-      if (!staleOk(s.code, s.lag_sessions, s.stale)) expBad.push(`${s.code}: stale ${s.stale} vs lag ${s.lag_sessions} & expected ${e}`);
+      if (degraded ? !naOk(s) : !staleOk(s.code, s.lag_sessions, s.stale)) expBad.push(`${s.code}: stale ${s.stale} vs lag ${s.lag_sessions} & expected ${e}`);
       if (e != null && s.lag_sessions != null && Number(s.excess_sessions) !== Number(s.lag_sessions) - e) expBad.push(`${s.code}: excess ${s.excess_sessions} != lag-expected`);
     }
     check('live: (expected, excess, stale) tiap seri = hitungan SQL independen terhadap custom_tickers', expBad.length === 0, expBad.join(' | '));
@@ -380,15 +430,21 @@ function main() {
       if (u.length) und.push(name + ': ' + u.join(','));
     }
     check('live: undeclared_codes kosong di tiga surface (tidak ada seri komoditas yang belum diputuskan)', und.length === 0, und.join(' | '));
-    const naBad = allComm.filter(s => s.state === 'na' && basisOf(s.code) !== 'na').map(s => s.code);
+    const naBad = allComm.filter(s => s.state === 'na' && !(degraded
+      ? (s.lag_basis === 'pipeline_stopped' || s.lag_basis === 'calendar_stale')
+      : basisOf(s.code) === 'na')).map(s => s.code);
     check('live: state na hanya untuk seri yang lag_basis-nya memang na (sisanya ' + 'fresh/by_source/excess)',
       naBad.length === 0, JSON.stringify(naBad));
 
     // (d) anti-perbaikan-palsu: asersi ini GAGAL kalau ada yang "menyelesaikan" kartu ini
     //     dengan menaikkan ambang global ke 2 (TIN lag 2 -> tidak menyala, CPO ikut menyala).
+    //     Saat pipeline degraded, kontraknya berbeda: TIDAK ada yang menyala, deklarasinya tetap.
     check('anti-perbaikan-palsu: TIN expected 0 & stale TRUE, CPO expected 2 & stale FALSE pada hari yang sama',
-      !!tin && Number(tin.expected_lag_sessions) === 0 && tin.stale === true
-        && !!byCode['CPO'] && Number(byCode['CPO'].expected_lag_sessions) === 2 && byCode['CPO'].stale === false,
+      degraded
+        ? (!!tin && tin.expected_lag_sessions === 0 && naOk(tin)
+            && !!byCode['CPO'] && Number(byCode['CPO'].expected_lag_sessions) === 2 && naOk(byCode['CPO']))
+        : (!!tin && Number(tin.expected_lag_sessions) === 0 && tin.stale === true
+            && !!byCode['CPO'] && Number(byCode['CPO'].expected_lag_sessions) === 2 && byCode['CPO'].stale === false),
       `TIN exp=${tin && tin.expected_lag_sessions} stale=${tin && tin.stale} | CPO exp=${byCode['CPO'] && byCode['CPO'].expected_lag_sessions} stale=${byCode['CPO'] && byCode['CPO'].stale}`);
 
     // (e) satu implementasi, bukan tiga salinan: kode di >=2 surface wajib sepakat.
@@ -458,9 +514,14 @@ function main() {
 
     // (c) dua sisi yang dikunci bersamaan
     const bySourceGroups = divGroups.filter(g => g.commodity.state === 'by_source');
+    const offSessionGroups = divGroups.filter(g => !fresh.isSameSessionBar(g.commodity));
     check('live: grup by_source (stale false sejak ambang per-seri) tetap tertahan -> divergence null + commodity_stale',
-      bySourceGroups.length > 0 && bySourceGroups.every(g => g.divergence == null && g.divergence_reason === 'commodity_stale'),
-      bySourceGroups.map(g => g.id + ':' + g.divergence + '/' + g.divergence_reason).join(','));
+      degraded
+        // Degradasi tidak menyisakan kelompok 'by_source' (semua 'na'); yang setara: grup yang barnya
+        // BUKAN dari sesi rujukan tetap tertahan, walau status kesegarannya 'na'.
+        ? (offSessionGroups.length > 0 && offSessionGroups.every(g => g.divergence == null && g.divergence_reason === 'commodity_stale'))
+        : (bySourceGroups.length > 0 && bySourceGroups.every(g => g.divergence == null && g.divergence_reason === 'commodity_stale')),
+      (degraded ? offSessionGroups : bySourceGroups).map(g => g.id + ':' + g.divergence + '/' + g.divergence_reason).join(','));
     const naSameGroups = divGroups.filter(g => g.commodity.state === 'na' && fresh.isSameSessionBar(g.commodity));
     check('live: seri na yang barnya di sesi rujukan tetap menerbitkan divergensi (kasus KRAFT_PULP)',
       naSameGroups.every(g => g.divergence != null && g.divergence_reason === null),
@@ -690,6 +751,209 @@ function main() {
         + ` frontier=${r.last_frontier_date} last_date=${r.last_date}`
         + (r.pull_behind ? ' PULL_BEHIND' : '') + (r.source_stalled ? ' SOURCE_STALLED' : ''));
     }
+
+    // ── [10] kalender sesi terdeklarasi + sinyal "pipeline data berhenti" (t_c6c01360) ──
+    // Yang dikunci: (1) kalender ↔ 60 sesi idx_daily DUA ARAH, (2) jumlah libur per tahun 15-30,
+    // (3) valid_through >= hari ini+45 (peringatan, bukan gagal), (4) lima kasus §D5 dengan `now`
+    // DISUNTIKKAN, (5) kontrak degradasi 'na' untuk stopped & calendar_stale TANPA menyentuh DB.
+    console.log('\n[10] kalender sesi terdeklarasi + ctx.pipeline (jam dinding WIB vs kalender)');
+    const ISO = /^\d{4}-\d{2}-\d{2}$/;
+    const cal = fresh.loadCalendar();
+    const wibToday = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+    const wibNowIso = new Date(Date.now() + 7 * 3600000).toISOString();
+    const wibMinute = Number(wibNowIso.slice(11, 13)) * 60 + Number(wibNowIso.slice(14, 16));
+    // Dipakai blok [1]/[2] DAN blok bukti (elapsed independen) di bawah.
+    const holSet = new Set(cal ? cal.holidays.map(String) : []);
+    const extrasSet = new Set(cal && Array.isArray(cal.extra_sessions) ? cal.extra_sessions.map(String) : []);
+    check('kalender: berkas terbaca', !!cal, fresh.CALENDAR_PATH);
+
+    if (cal) {
+      check('kalender: bentuk wajib (version, valid_through, source_url, fetched_at, holidays[], extra_sessions[])',
+        'version' in cal && 'valid_through' in cal && 'source_url' in cal && 'fetched_at' in cal
+          && Array.isArray(cal.holidays) && Array.isArray(cal.extra_sessions), Object.keys(cal).join(','));
+      check('kalender: valid_through + semua holidays berupa tanggal ISO',
+        ISO.test(String(cal.valid_through)) && cal.holidays.length > 0 && cal.holidays.every(h => ISO.test(String(h))),
+        JSON.stringify(cal.holidays.filter(h => !ISO.test(String(h)))));
+      check('kalender: source_url menunjuk berkas/SK resmi (bisa diaudit manusia)',
+        /^https?:\/\//.test(String(cal.source_url)), String(cal.source_url));
+
+      // (2) jumlah libur per tahun penuh 15-30 (IDX historis ~19-25/tahun)
+      const perYear = {};
+      for (const h of cal.holidays) { const y = String(h).slice(0, 4); perYear[y] = (perYear[y] || 0) + 1; }
+      const badYear = Object.keys(perYear).filter(y => perYear[y] < 15 || perYear[y] > 30);
+      check('kalender: jumlah libur per tahun dalam 15-30', badYear.length === 0,
+        badYear.map(y => y + '=' + perYear[y]).join(',') || JSON.stringify(perYear));
+
+      // (3) valid_through >= hari ini + 45 hari -> PERINGATAN, bukan FAIL (sinyal akan
+      // calendar_stale sendiri di UI, dan itu memang terlihat)
+      const plus45 = new Date(Date.now() + 7 * 3600000 + 45 * 86400000).toISOString().slice(0, 10);
+      if (String(cal.valid_through) < plus45) {
+        console.log('  note kalender: valid_through=' + cal.valid_through + ' < hari ini+45 (' + plus45
+          + ') — perbarui dari SK libur bursa; sinyal akan jadi calendar_stale (terlihat, bukan alarm)');
+      }
+
+      // (1) + (2) konsistensi DUA ARAH terhadap 60 sesi terakhir idx_daily. Turunan sesi di bawah
+      // DITULIS TANGAN (bukan memanggil modul) supaya kalau calendarSessions() salah, asersinya
+      // tidak ikut salah. Ini VALIDASI, bukan sumber kalender: libur tetap dari berkas.
+      const last60 = db.prepare('SELECT DISTINCT trade_date d FROM idx_daily ORDER BY trade_date DESC LIMIT 60')
+        .all().map(r => r.d).reverse();
+      const idxSet = new Set(last60);
+      const from = last60[0], to = last60[last60.length - 1];
+      const handSessions = [];
+      for (let t = Date.parse(from + 'T00:00:00Z'); t <= Date.parse(to + 'T00:00:00Z'); t += 86400000) {
+        const iso = new Date(t).toISOString().slice(0, 10);
+        const wd = new Date(t).getUTCDay();
+        if (holSet.has(iso)) continue;
+        if ((wd === 0 || wd === 6) && !extrasSet.has(iso)) continue;
+        handSessions.push(iso);
+      }
+      const missingRows = handSessions.filter(d => d <= wibToday && !idxSet.has(d));
+      check('[1] tiap sesi terdeklarasi (dalam cakupan 60 sesi idx_daily, <= hari ini) ADA barisnya di idx_daily',
+        handSessions.length > 0 && missingRows.length === 0,
+        'jendela ' + from + '..' + to + ' hilang: ' + (missingRows.join(',') || '-'));
+      const holidayWithData = last60.filter(d => holSet.has(d));
+      check('[2] tidak ada trade_date idx_daily (60 sesi terakhir) yang dideklarasikan libur',
+        holidayWithData.length === 0, holidayWithData.join(','));
+      const modSessions = (fresh.calendarSessions(cal) || []).filter(d => d >= from && d <= to);
+      check('kalender: calendarSessions() = turunan tangan untuk jendela yang sama (modul tidak menambah/mengurangi sesi)',
+        modSessions.join(',') === handSessions.join(','),
+        'modul=' + modSessions.length + ' tangan=' + handSessions.length);
+
+      // (4) LIMA kasus §D5 — fungsi murni, `now` disuntikkan
+      console.log('  -- unit test pipelineSignal (now disuntikkan, tanpa DB) --');
+      const sig = (o) => fresh.pipelineSignal(Object.assign({ calendar: cal }, o));
+      const uA = sig({ refDate: '2026-03-17', now: '2026-03-25T01:00:00Z' });   // 25 Mar 08:00 WIB
+      check('(a) klaster libur 18-24 Mar 2026 -> elapsed 0, state ok (tanpa kalender: 5 hari kerja = 5 alarm palsu)',
+        uA.elapsed_sessions === 0 && uA.state === 'ok', JSON.stringify(uA));
+      const uB = sig({ refDate: '2026-03-17', now: '2026-03-30T02:00:00Z' });   // 30 Mar 09:00 WIB
+      check('(b) outage sintetis 3 sesi (25,26,27 Mar) -> elapsed 3, state stopped, cause pipeline_stopped',
+        uB.elapsed_sessions === 3 && uB.state === 'stopped' && uB.cause === 'pipeline_stopped', JSON.stringify(uB));
+      const uC1 = sig({ refDate: '2026-10-19', now: '2026-10-20T13:59:00Z' });  // 20 Okt 20:59 WIB
+      const uC2 = sig({ refDate: '2026-10-19', now: '2026-10-20T14:00:00Z' });  // 20 Okt 21:00 WIB
+      check('(c) sebelum cutoff 21:00 WIB -> sesi hari itu TIDAK dihitung (elapsed 0)',
+        uC1.elapsed_sessions === 0 && uC1.state === 'ok', JSON.stringify(uC1));
+      check('(c) tepat 21:00 WIB -> sesi hari itu mulai dituntut (elapsed 1, lag1 netral)',
+        uC2.elapsed_sessions === 1 && uC2.state === 'lag1' && uC2.cause === null, JSON.stringify(uC2));
+      const uD = sig({ refDate: '2026-10-19', now: '2027-01-05T05:00:00Z' });
+      check('(d) hari ini > valid_through -> calendar_stale TANPA alarm (elapsed null, cause calendar_stale)',
+        uD.state === 'calendar_stale' && uD.cause === 'calendar_stale' && uD.elapsed_sessions === null, JSON.stringify(uD));
+      const uD2 = sig({ refDate: '2026-10-19', now: '2026-10-28T03:00:00Z' });  // kontrol: kalender masih valid
+      check('(d) kontrol: kalender valid + 6 sesi belum masuk -> stopped (bukan calendar_stale)',
+        uD2.state === 'stopped' && uD2.elapsed_sessions === 6, JSON.stringify(uD2));
+      const calW = { version: 99, valid_through: '2026-12-31', source_url: 'inline-test', holidays: ['2026-10-19'], extra_sessions: [] };
+      // 20 Okt 21:00 WIB. Sesi terdeklarasi di (16 Okt, 20 Okt] = 20 Okt saja (19 Okt libur, 17/18
+      // weekend) -> elapsed 1. Hitungan HARI KERJA akan memberi 2 (19 + 20) = alarm palsu.
+      const uE = fresh.pipelineSignal({ refDate: '2026-10-16', now: '2026-10-20T14:00:00Z', calendar: calW });
+      const uE0 = fresh.pipelineSignal({ refDate: '2026-10-16', now: '2026-10-20T13:59:00Z', calendar: calW });
+      check('(e) weekend panjang (Jum 16 -> Sen 19 libur): hanya sesi TERDEKLARASI dihitung -> elapsed 1, lag1',
+        uE.elapsed_sessions === 1 && uE.state === 'lag1', JSON.stringify(uE));
+      check('(e) kontrol sebelum cutoff: Sen 19 libur + 20 Okt belum cutoff -> elapsed 0 (bukan 2/3)',
+        uE0.elapsed_sessions === 0 && uE0.state === 'ok', JSON.stringify(uE0));
+      const calX = { version: 98, valid_through: '2026-12-31', source_url: 'inline-test', holidays: [], extra_sessions: ['2026-10-17'] };
+      const uX = fresh.pipelineSignal({ refDate: '2026-10-16', now: '2026-10-19T02:00:00Z', calendar: calX });
+      check('kalender: extra_sessions (sesi Sabtu khusus) ikut dituntut -> elapsed 1',
+        uX.elapsed_sessions === 1, JSON.stringify(uX));
+      check('pipelineSignal: tanpa ref_date -> no_ref (tidak mengarang keadaan)',
+        sig({ refDate: null, now: '2026-10-20T05:00:00Z' }).state === 'no_ref');
+      check('pipelineSignal: kalender tak terpakai -> calendar_stale (fail-visible), BUKAN ok',
+        fresh.pipelineSignal({ refDate: '2026-10-19', now: '2026-10-20T05:00:00Z', calendar: null }).state === 'calendar_stale');
+    } else {
+      check('kalender: berkas hilang -> ctx.pipeline calendar_stale (semua seri na), bukan diam-diam segar', false, 'berkas tidak terbaca');
+    }
+
+    // ── bukti LIVE: keadaan sekarang + degradasi tanpa menyentuh DB ──────
+    const livePipeCtx = fresh.buildContext(db);
+    const stopPipeCtx = fresh.buildContext(db, { now: '2026-10-28T03:00:00Z' });   // 28 Okt 2026 10:00 WIB
+    const stalePipeCtx = fresh.buildContext(db, { now: '2027-01-05T05:00:00Z' });  // kalender 2026 sudah lewat
+    check('live: buildContext().pipeline ada dan state sekarang = ok (ref 19 Okt, cutoff 20 Okt 21:00 belum lewat)',
+      !!livePipeCtx.pipeline && livePipeCtx.pipeline.state === 'ok', JSON.stringify(livePipeCtx.pipeline));
+    check('live: pipeline.calendar = berkas kalender (version, valid_through, source_url)',
+      !!livePipeCtx.pipeline.calendar && !!cal
+        && String(livePipeCtx.pipeline.calendar.valid_through) === String(cal.valid_through)
+        && livePipeCtx.pipeline.calendar.version === cal.version
+        && livePipeCtx.pipeline.calendar.source_url === cal.source_url,
+      JSON.stringify(livePipeCtx.pipeline.calendar));
+    check('live: cutoff_wib = 21:00 (jam yang diputuskan, bukan angka lokal di UI)',
+      livePipeCtx.pipeline.cutoff_wib === '21:00', String(livePipeCtx.pipeline.cutoff_wib));
+    check('live: last_pull hanya METADATA (hint manual, umur hari terjumlah) — bukan alarm',
+      !!livePipeCtx.pipeline.last_pull && livePipeCtx.pipeline.last_pull.hint === 'manual'
+        && (livePipeCtx.pipeline.last_pull.age_days === null || typeof livePipeCtx.pipeline.last_pull.age_days === 'number'),
+      JSON.stringify(livePipeCtx.pipeline.last_pull));
+
+    // Elapsed dihitung ULANG di sini (bukan dari modul) dari kalender + jam dinding WIB.
+    if (cal && wibToday <= String(cal.valid_through)) {
+      let elapsedLocal = 0;
+      const refMs = Date.parse((ref || '1970-01-01') + 'T00:00:00Z');
+      for (let t = refMs + 86400000; t <= Date.parse(wibToday + 'T00:00:00Z'); t += 86400000) {
+        const iso = new Date(t).toISOString().slice(0, 10);
+        const wd = new Date(t).getUTCDay();
+        if (holSet.has(iso)) continue;
+        if ((wd === 0 || wd === 6) && !extrasSet.has(iso)) continue;
+        const passed = iso < wibToday || (iso === wibToday && wibMinute >= 21 * 60);
+        if (passed) elapsedLocal++;
+      }
+      check('live: elapsed_sessions = turunan independen (kalender + jam dinding WIB), di-clamp >= 0',
+        livePipeCtx.pipeline.elapsed_sessions === elapsedLocal,
+        'modul=' + livePipeCtx.pipeline.elapsed_sessions + ' lokal=' + elapsedLocal + ' today=' + wibToday + ' ' + wibNowIso.slice(11, 16));
+    }
+
+    // DoD: seri yang SEKARANG 'fresh' harus turun ke 'na'/pipeline_stopped saat `now` disuntik.
+    // DB tidak disentuh: ref_date dibaca dari DB yang sama, hanya jam + kalender yang disuntikkan.
+    const freshSeriesNow = (cmdSeries.find(s => s.state === 'fresh') || null);
+    const proveCode = (freshSeriesNow && freshSeriesNow.code) || 'ID10Y';
+    const proveLast = (freshSeriesNow && (freshSeriesNow.stale_date || freshSeriesNow.date)) || ref;
+    const fLive = fresh.seriesFreshness(livePipeCtx, proveLast, proveCode);
+    const fStop = fresh.seriesFreshness(stopPipeCtx, proveLast, proveCode);
+    const fStale = fresh.seriesFreshness(stalePipeCtx, proveLast, proveCode);
+    check('bukti stopped: seri yang sekarang fresh (' + proveCode + ' @' + proveLast + ') -> na/pipeline_stopped, lag & excess NULL, stale false',
+      fLive.state === 'fresh' && fStop.state === 'na' && fStop.lag_basis === 'pipeline_stopped'
+        && fStop.lag_sessions === null && fStop.excess_sessions === null && fStop.stale === false,
+      JSON.stringify({ live: fLive, stopped: fStop }));
+    check('bukti stopped: ctx.pipeline.state = stopped + elapsed 6 pada suntikan 28 Okt 10:00 WIB',
+      stopPipeCtx.pipeline.state === 'stopped' && stopPipeCtx.pipeline.elapsed_sessions === 6,
+      JSON.stringify(stopPipeCtx.pipeline));
+    check('bukti calendar_stale: valid_through lewat -> na/calendar_stale, TANPA alarm (bukan excess, stale false)',
+      stalePipeCtx.pipeline.state === 'calendar_stale' && fStale.state === 'na'
+        && fStale.lag_basis === 'calendar_stale' && fStale.stale === false,
+      JSON.stringify({ pipe: stalePipeCtx.pipeline.state, f: fStale }));
+    check('bukti: menyuntik now TIDAK mengubah ref_date (jalur baca tetap, DB tidak ditulis)',
+      stopPipeCtx.ref_date === livePipeCtx.ref_date && stalePipeCtx.ref_date === livePipeCtx.ref_date,
+      `live=${livePipeCtx.ref_date} stopped=${stopPipeCtx.ref_date} stale=${stalePipeCtx.ref_date}`);
+    check('bukti: kurva SUN tidak lagi mengaku "tenor belum dideklarasikan" saat pipeline berhenti (lag_basis diteruskan)',
+      (function () {
+        const yc = require('/app/server/utils/yield-curve');
+        const f = yc.curveFreshness(stopPipeCtx, (typeof ref === 'string' ? ref : null), ['ID10Y']);
+        return f.state === 'na' && f.lag_basis === 'pipeline_stopped';
+      })(), 'curveFreshness(stopPipeCtx)');
+
+    // Ringkasan mewariskan sinyal (D1) + tidak ada panel yang bisa mencetak "basi" saat stopped.
+    check('ringkasan: summarize() meneruskan pipeline di KETIGA surface (satu sinyal, bukan tiga salinan)',
+      !!(cmd.freshness && cmd.freshness.pipeline && mr.commodity_freshness && mr.commodity_freshness.pipeline
+        && ov.freshness && ov.freshness.pipeline)
+        && cmd.freshness.pipeline.state === livePipeCtx.pipeline.state
+        && mr.commodity_freshness.pipeline.state === livePipeCtx.pipeline.state
+        && ov.freshness.pipeline.state === livePipeCtx.pipeline.state,
+      JSON.stringify([cmd.freshness && cmd.freshness.pipeline && cmd.freshness.pipeline.state,
+        mr.commodity_freshness && mr.commodity_freshness.pipeline && mr.commodity_freshness.pipeline.state,
+        ov.freshness && ov.freshness.pipeline && ov.freshness.pipeline.state]));
+    check('ringkasan: ctx lama tanpa pipeline -> pipeline null (pemanggil lain tidak pecah)',
+      fresh.summarize(ctx, []).pipeline === null);
+    const stopSumCtx = Object.assign({}, livePipeCtx, { pipeline: stopPipeCtx.pipeline });
+    const stopEnt = [{ code: 'TIN', freshness: fresh.seriesFreshness(stopSumCtx, '2026-10-15', 'TIN') }];
+    const stopSum = fresh.summarize(stopSumCtx, stopEnt);
+    check('ringkasan: saat stopped, stale_codes KOSONG dan seri masuk na_codes (tidak ada panel yang mencetak "basi")',
+      stopSum.stale_codes.length === 0 && stopSum.na_codes.indexOf('TIN') >= 0
+        && stopSum.pipeline.state === 'stopped', JSON.stringify({ stale: stopSum.stale_codes, na: stopSum.na_codes }));
+
+    // UI: berkas yang DISAJIKAN, bukan hanya working tree.
+    const servedMrJs = await getText('/js/market-regime.js');
+    check('UI: market-regime.js yang disajikan memuat badge pipeline (bukan hanya working tree)',
+      servedMrJs.indexOf('mr-pipeline-badge') !== -1 && servedMrJs.indexOf('mr-pipeline-note') !== -1
+        && servedMrJs.indexOf("fr.lag_basis === 'pipeline_stopped'") !== -1,
+      'panjang=' + servedMrJs.length);
+    const servedCmdJs = await getText('/js/commodities.js');
+    check('UI: commodities.js yang disajikan memuat catatan netral pipeline (teks yang sama)',
+      servedCmdJs.indexOf('cmd-pipeline-note') !== -1, 'panjang=' + servedCmdJs.length);
 
     console.log(`\n${pass} lulus, ${failures.length} gagal`);
     if (failures.length) { failures.forEach(f => console.log(' - ' + f)); process.exitCode = 1; }

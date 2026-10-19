@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "valid_through": "2026-12-31",
+  "source_url": "https://www.idx.co.id/StaticData/NewsAndAnnouncement/ANNOUNCEMENTSTOCK/Exchange/Peng-00171%20Libur%20Bursa%202026-No.%20Peng-00171BEI.POP09-2025.pdf",
+  "source_ref": "Peng-00171/BEI.POP/09-2025 — Kalender Libur Bursa Tahun 2026 (ditetapkan 23 Sep 2025)",
+  "fetched_at": "2026-10-20",
+  "holidays": [
+    "2026-01-01",
+    "2026-01-16",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-03-18",
+    "2026-03-19",
+    "2026-03-20",
+    "2026-03-23",
+    "2026-03-24",
+    "2026-04-03",
+    "2026-05-01",
+    "2026-05-14",
+    "2026-05-15",
+    "2026-05-27",
+    "2026-05-28",
+    "2026-06-01",
+    "2026-06-16",
+    "2026-08-17",
+    "2026-08-25",
+    "2026-12-24",
+    "2026-12-25",
+    "2026-12-31"
+  ],
+  "extra_sessions": [],
+  "notes": [
+    "Sesi terdeklarasi = Senin-Jumat minus `holidays`, plus `extra_sessions` (sesi Sabtu khusus).",
+    "Sumber: SK/Pengumuman IDX hari libur bursa. JANGAN menurunkan libur dari gap riwayat idx_daily —",
+    "outage beberapa hari akan dibekukan jadi 'libur' permanen dan alarm mati justru saat dibutuhkan (ratchet).",
+    "Jumlah hari bursa 2026 menurut SK: 239. Perbarui berkas ini sekali setahun saat SK tahun berikutnya rilis;",
+    "kalau lupa, ctx.pipeline menjadi 'calendar_stale' yang TERLIHAT di UI (bukan diam-diam salah).",
+    "Tidak masuk daftar karena jatuh pada Sabtu/Minggu: Idul Fitri 21-22 Mar 2026, Paskah 5 Apr 2026, Waisak 31 Mei 2026."
+  ]
+}

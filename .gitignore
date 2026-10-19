@@ -2,6 +2,11 @@ node_modules/
 .env
 .env.*
 data/
+# Pengecualian: `data/` di atas juga mengenai direktori mana pun bernama data, termasuk
+# `server/data/`. Kalender sesi terdeklarasi (server/data/idx-sessions.json) adalah artefak
+# MANUSIA yang wajib ikut commit — sumbernya SK libur bursa IDX, bukan hasil turunan DB
+# (kanban t_c6c01360). Jangan dihapus tanpa mengganti tempat kalender itu disimpan.
+!server/data/
 uploads/
 /tmp/
 IDX-API-main/
