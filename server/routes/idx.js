@@ -4,6 +4,7 @@ const { parseTradeDate } = require('../utils/normalize');
 const { toIsoDate } = require('../utils/iso-date');
 const { getCodeVersion } = require('../utils/code-version');
 const { loadFactors, adjustRows, factorAt, factorForRow, fallbackRatioActions, registerSqlAdjust } = require('../utils/price-adjust');
+const freshnessUtil = require('../utils/series-freshness');
 
 // Provenance stamp written into every daily_scores row (agent rail contract):
 // names the variant of each derived indicator, so a stored number stays auditable
@@ -3852,17 +3853,22 @@ module.exports = function(upload) {
 
       // ── Level 2: Commodity Cycle (custom_tickers with category=commodity) ──
       let commodities = [];
+      let commodityFreshCtx = null;
       try {
         const cmdTickers = db.prepare("SELECT code, name, category, linked_sector, ohlc_mode FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
+        // Kesegaran per seri (kanban t_61ccbdbe) — satu implementasi dengan /api/commodities.
+        const freshCtx = freshnessUtil.buildContext(db);
+        commodityFreshCtx = freshCtx;
         commodities = cmdTickers.map(t => {
           const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
           // no_series: tidak ada seri harga (≤1 observasi). Dipakai UI untuk menulis
           // "tanpa seri harga" alih-alih menampilkan level tunggal/0 seolah tren
           // (COKING_COAL & KRAFT_PULP: tidak ada kandidat di investing, t_6d027516 r5).
-          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null };
+          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null, stale: null, lag_sessions: null, ref_date: freshCtx.ref_date, stale_date: null };
           const now = rows[0].close;
           const d5 = rows[4] ? rows[4].close : now;
           const d20 = rows[19] ? rows[19].close : now;
+          const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
             no_series: rows.length < 2,
@@ -3871,6 +3877,14 @@ module.exports = function(upload) {
             // null = belum dinilai (baris lama) -> UI boleh jatuh ke aturan lamanya.
             ohlc_mode: t.ohlc_mode || null,
             date: rows[0].trade_date,
+            // stale=true: `close` di atas milik bar LAMA (TIN 15 Okt saat sesi terakhir 19 Okt).
+            // Nilainya TETAP dikirim (chart/rail memakainya), tapi UI wajib menampilkan "—"
+            // + tanggal, bukan level itu sebagai harga terkini.
+            stale: fresh.stale,
+            lag_sessions: fresh.lag_sessions,
+            lag_capped: fresh.lag_capped,
+            ref_date: fresh.ref_date,
+            stale_date: fresh.last_date,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
             linked_sector: t.linked_sector || ''
@@ -4178,7 +4192,11 @@ module.exports = function(upload) {
         }
       } catch (e) {}
 
-      res.json({ date: today, global, commodities, idx, sectors, macro_signals });
+      // Ringkasan kesegaran per seri (kanban t_61ccbdbe) — klien bisa membaca siapa yang
+      // tertinggal tanpa menebak dari tanggal. `commodities[].stale` tetap sumber detailnya.
+      const commodityFreshness = freshnessUtil.summarize(commodityFreshCtx, commodities.map(c => ({ code: c.code, freshness: c })));
+
+      res.json({ date: today, global, commodities, idx, sectors, macro_signals, commodity_freshness: commodityFreshness });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

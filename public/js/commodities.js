@@ -1,5 +1,6 @@
 // ═══ COMMODITY MAPPING ═══
 var cmdData=null,cmdExpanded=null,cmdSort='value',cmdDir='desc';
+// Tanggal bar singkat ('15 Okt') untuk penanda basi — helper bersama di utils.js: shortDay().
 
 async function loadCommodities(){
   var el=document.getElementById('cmd-content');
@@ -50,12 +51,18 @@ function cmdRender(el){
     if(hasDesc)h+='<div style="font-size:9px;color:var(--t2);line-height:1.35;margin-bottom:6px">'+c.desc+'</div>';
 
     // Row 2: harga komoditas
+    // Seri basi (t_61ccbdbe): bar terakhir tertinggal dari sesi rujukan — TIN 15 Okt sementara
+    // rail sudah 19 Okt. Level & chg 1D di response adalah milik bar LAMA, jadi yang ditulis
+    // hanya tanggalnya; menampilkan 50.127 di sini akan mengarang sesi yang tidak ada.
     var cm=c.commodity;
     h+='<div style="display:flex;align-items:baseline;gap:6px;font-size:11px;margin-bottom:3px">';
-    if(cm){
+    if(cm&&cm.stale){
+      h+='<b style="font-family:monospace;color:var(--t2)" title="bar terakhir '+shortDay(cm.stale_date||cm.date)+' (level '+px(cm.price)+') — bukan sesi '+shortDay(cm.ref_date)+'">—</b>';
+      h+='<span style="color:var(--am);font-weight:600;font-size:9px" title="sumber tidak menerbitkan bar untuk '+(cm.lag_sessions||0)+' sesi terakhir; retry tidak menolong, yang berhenti di hulu">⏸ basi · terakhir '+shortDay(cm.stale_date||cm.date)+' · '+(cm.lag_sessions||0)+' sesi</span>';
+    } else if(cm){
       h+='<b style="font-family:monospace">'+px(cm.price)+'</b>';
       h+='<span style="color:'+cl(cm.chg_1d)+';font-weight:600">'+pc(cm.chg_1d)+'</span>';
-      h+='<span style="color:var(--t3);font-size:9px">komoditas</span>';
+      h+='<span style="color:var(--t3);font-size:9px">komoditas · '+shortDay(cm.stale_date||cm.date)+'</span>';
     } else {
       h+='<span style="color:var(--t3);font-size:10px">tanpa seri harga</span>';
     }
@@ -101,6 +108,17 @@ function cmdRender(el){
   }
 
   if(cmdData.trade_date)h+='<div style="font-size:10px;color:var(--t2);padding:4px 0">IDX Data: '+cmdData.trade_date+'</div>';
+  // Penanda basi tidak boleh cuma menumpang di kartu: baris ini menyebut SESI RUJUKAN
+  // yang dipakai gerbang per-seri, jadi pembaca tahu "terakhir 15 Okt" diukur terhadap apa.
+  var cf=cmdData.freshness;
+  if(cf&&cf.stale_codes&&cf.stale_codes.length){
+    var parts=[];
+    for(var m=0;m<cmds.length;m++){
+      var cq=cmds[m].commodity;
+      if(cq&&cq.stale)parts.push(cq.code+' ('+shortDay(cq.stale_date||cq.date)+', '+cq.lag_sessions+' sesi)');
+    }
+    h+='<div style="font-size:10px;color:var(--am);padding:0 0 4px;line-height:1.4">⏸ '+parts.length+' seri komoditas tertinggal dari sesi '+shortDay(cf.ref_date)+': '+parts.join(' · ')+'</div>';
+  }
   h+='</div>';
 
   el.innerHTML=h;

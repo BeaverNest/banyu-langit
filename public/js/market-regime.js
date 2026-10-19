@@ -157,15 +157,28 @@ function mrRenderCommodity(cmds) {
   cmds.forEach(function(c) {
     var pts = c.points || 0;
     var thin = pts > 0 && pts < 6;                 // histori belum cukup untuk hitung 5D/20D
+    var stale = c.stale === true;                  // bar terakhir tertinggal dari sesi rujukan (t_61ccbdbe)
     var chg5v = thin ? null : (c.chg_5d || 0);
     var chg20v = thin ? null : (c.chg_20d || 0);
     var chg5 = chg5v === null ? 0 : chg5v, chg20 = chg20v === null ? 0 : chg20v;
     var trend = thin ? '⚪ histori ' + pts + ' titik' : (chg20 > 5 ? '🟢 ▲ Up' : chg20 < -5 ? '🔴 ▼ Down' : chg20 > 2 ? '🟡 ↗ Mild Up' : chg20 < -2 ? '🟡 ↘ Mild Down' : '⚪ → Flat');
-    h += '<tr style="border-bottom:1px solid var(--b1)">';
+    // Harga seri basi TIDAK ditulis sebagai level: TIN 15 Okt di bawah sesi 19 Okt akan
+    // terbaca "timah tidak bergerak 2 hari", padahal kita tidak punya bar-nya. Levelnya
+    // tetap tersedia di title supaya bisa diperiksa.
+    var priceCell = stale
+      ? '<span style="color:var(--t2)" title="bar terakhir ' + esc(c.date || '') + ' (level ' + (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + ') — bukan sesi ' + esc(c.ref_date || '') + '">—</span>'
+        + ' <span style="font-size:9px;color:var(--am);white-space:nowrap" title="sumber tidak menerbitkan bar untuk ' + (c.lag_sessions || 0) + ' sesi terakhir; retry tidak menolong">⏸ basi ' + esc(shortDay(c.stale_date || c.date)) + '</span>'
+      : (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
+    var dimStale = stale ? 'color:var(--t3);' : '';
+    // Baris basi: 5D/20D tetap dihitung dari bar terakhir seri itu, tapi diwarnai netral —
+    // warnanya tidak boleh mengklaim pergerakan "sampai hari ini".
+    var c5style = stale ? dimStale : (chg5 > 0 ? 'color:var(--gn);' : chg5 < 0 ? 'color:var(--rd);' : '');
+    var c20style = stale ? dimStale : (chg20 > 0 ? 'color:var(--gn);' : chg20 < 0 ? 'color:var(--rd);' : '');
+    h += '<tr style="border-bottom:1px solid var(--b1)' + (stale ? ';opacity:.85' : '') + '">';
     h += '<td style="padding:4px 8px;font-weight:600;color:var(--bl)">' + esc(c.name || c.code) + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm)">' + (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg5 > 0 ? 'color:var(--gn)' : chg5 < 0 ? 'color:var(--rd)' : '') + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(1) + '%') + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm)">' + priceCell + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c5style + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(1) + '%') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20style + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%') + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px">' + trend + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px;color:var(--t3)">' + esc(c.linked_sector || '-') + '</td>';
     h += '</tr>';

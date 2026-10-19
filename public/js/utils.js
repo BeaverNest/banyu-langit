@@ -5,6 +5,12 @@ let eId=null,eTag=null,eKeep=[],eNew=[];
 
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 
+// '2026-10-15' -> '15 Okt'. Dipakai penanda kesegaran seri (kanban t_61ccbdbe) di
+// panel komoditas & market-regime; satu implementasi supaya dua panel menulis tanggal
+// yang sama dengan cara yang sama.
+var SHORT_DAY_MONTHS=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+function shortDay(iso){if(!iso||iso.length<10)return iso||'?';var m=parseInt(iso.slice(5,7),10);return parseInt(iso.slice(8,10),10)+' '+(SHORT_DAY_MONTHS[m-1]||'');}
+
 function showT(t,b){$('ttt').textContent=t;$('ttb').textContent=b;$('toast').classList.add('v');setTimeout(()=>$('toast').classList.remove('v'),5000);}
 
 function fmtNum(n){if(!n)return'0';var a=Math.abs(n);var s=n<0?'-':'';if(a>=1e12)return s+(a/1e12).toFixed(1)+'T';if(a>=1e9)return s+(a/1e9).toFixed(1)+'B';if(a>=1e6)return s+(a/1e6).toFixed(1)+'M';if(a>=1e3)return s+(a/1e3).toFixed(1)+'K';return n.toLocaleString();}

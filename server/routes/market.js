@@ -3,6 +3,7 @@ const { yq } = require('../utils/yahoo');
 const { gNews } = require('../utils/news');
 const { db, latestIdxDate } = require('../db');
 const { registerSqlAdjust } = require('../utils/price-adjust');
+const freshnessUtil = require('../utils/series-freshness');
 registerSqlAdjust(db); // ca_adj(close, code, trade_date) — lihat utils/price-adjust.js
 
 const router = express.Router();
@@ -389,21 +390,37 @@ router.get('/commodities', (req, res) => {
       };
     }
 
+    // Kesegaran dihitung sekali per request (t_61ccbdbe): rujukannya sesi terakhir
+    // yang kita anggap "sekarang", bukan tanggal hari ini di jam server.
+    const freshCtx = freshnessUtil.buildContext(db);
+
     function cmdStats(code) {
       if (!code) return null;
       const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(code);
       if (!rows.length) return null;
       const asc = rows.map(r => r.close).reverse();
       const n = asc.length, last = asc[n - 1];
+      // Tanggal bar diambil dari helper (bar sesi terakhir), bukan rows[0]: bar Sabtu/Minggu
+      // bukan sesi bursa dan tidak boleh dipakai mengukur lag.
+      const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows));
       return {
         code, price: last, date: rows[0].trade_date,
         chg_1d: pct(last, n > 1 ? asc[n - 2] : null),
         chg_5d: pct(last, n > 5 ? asc[n - 6] : null),
         chg_20d: pct(last, n > 20 ? asc[n - 21] : null),
-        points: n
+        points: n,
+        // stale=true: bar terakhir seri ini tertinggal dari sesi terakhir. Level/chg_1d
+        // di atas adalah milik bar LAMA — UI wajib menulisnya sebagai "—" + tanggal,
+        // bukan sebagai harga terkini (kanban t_61ccbdbe, TIN 15 Okt vs NICKEL 19 Okt).
+        stale: fresh.stale,
+        lag_sessions: fresh.lag_sessions,
+        lag_capped: fresh.lag_capped,
+        ref_date: fresh.ref_date,
+        stale_date: fresh.last_date,
       };
     }
 
+    const freshEntries = [];
     const result = groups.map(g => {
       const stocks = g.tickers.map(stockStats).filter(Boolean)
         .sort((a, b) => (b.value || 0) - (a.value || 0));
@@ -412,6 +429,11 @@ router.get('/commodities', (req, res) => {
       const chgs20 = stocks.map(s => s.chg_20d).filter(v => v != null);
       const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
       const cmd = cmdStats(g.cmd_code);
+      if (cmd) freshEntries.push({ code: cmd.code, freshness: cmd });
+      // Divergensi = chg_1d komoditas − avg chg_1d saham pada SESI YANG SAMA. Kalau bar
+      // komoditas basi, pengurangnya berasal dari sesi lain -> angkanya bukan divergensi,
+      // jadi tidak diterbitkan (null) dan kartunya tidak diranking oleh angka palsu itu.
+      const divValid = cmd && !cmd.stale && cmd.chg_1d != null && avg(chgs1) != null;
       return {
         id: g.id, label: g.label, tv: g.tv, desc: g.desc, icon: g.icon, color: g.color,
         tickers: g.tickers, stocks,
@@ -423,8 +445,8 @@ router.get('/commodities', (req, res) => {
         total_fnet: stocks.reduce((s, r) => s + (r.fnet_val || 0), 0),
         commodity: cmd,
         // divergensi: komoditas naik tapi saham turun (atau sebaliknya)
-        divergence: (cmd && cmd.chg_1d != null && avg(chgs1) != null)
-          ? Math.round((cmd.chg_1d - avg(chgs1)) * 100) / 100 : null
+        divergence: divValid ? Math.round((cmd.chg_1d - avg(chgs1)) * 100) / 100 : null,
+        divergence_reason: divValid ? null : (cmd && cmd.stale ? 'commodity_stale' : 'insufficient')
       };
     }).sort((a, b) => {
       const da = a.divergence == null ? -999 : Math.abs(a.divergence);
@@ -432,7 +454,9 @@ router.get('/commodities', (req, res) => {
       return dbv - da;
     });
 
-    res.json({ commodities: result, trade_date: td });
+    // Ringkasan per-seri supaya klien (dan rail) bisa membaca siapa yang tertinggal
+    // tanpa menebak dari tanggal: TIN/COAL/CPO/… pada 19 Okt 2026.
+    res.json({ commodities: result, trade_date: td, freshness: freshnessUtil.summarize(freshCtx, freshEntries) });
   } catch (e) {
     console.error('Commodities error:', e.message);
     res.json({ commodities: [], error: e.message });
