@@ -2813,6 +2813,12 @@ module.exports = function(upload) {
       const category = String(req.body.category || 'custom').trim();
       const name = String(req.body.name || code);
       const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+      // fill_missing=false -> kolom yang TIDAK tersedia disimpan NULL, bukan diisi nilai lain.
+      // Default true = perilaku lama (pemanggil lama: fred_push_bl.py mengirim hanya date+close).
+      // Kenapa perlu: rail investing (kanban t_a10cc35c) tidak punya volume untuk beberapa seri;
+      // dulu nilai kosong diisi `close` sehingga volume tersimpan = harga (285/493 baris di TIN_LME)
+      // dan tidak bisa dibedakan dari volume asli. Lihat t_2bda3126 (review sena) R1/R2.
+      const fillMissing = req.body.fill_missing !== false;
       if (!code) return res.status(400).json({ error: 'code required' });
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
 
@@ -2824,7 +2830,12 @@ module.exports = function(upload) {
            open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`);
         for (const r of rows) {
           if (!r || !r.date || !(r.close > 0)) continue;
-          up.run(r.date, code, r.open ?? r.close, r.high ?? r.close, r.low ?? r.close, r.close, r.volume ?? 0);
+          up.run(r.date, code,
+            r.open ?? (fillMissing ? r.close : null),
+            r.high ?? (fillMissing ? r.close : null),
+            r.low ?? (fillMissing ? r.close : null),
+            r.close,
+            r.volume ?? (fillMissing ? 0 : null));
           written++;
         }
       })();
@@ -2840,7 +2851,8 @@ module.exports = function(upload) {
            category=excluded.category, source=excluded.source, updated_at=datetime('now')`
         ).run(code, name, category, String(req.body.source || 'external'), cnt, dr.f, dr.l);
       }
-      res.json({ ok: true, code, written, total_rows: cnt, date_range: { first: dr.f, last: dr.l } });
+      res.json({ ok: true, code, written, total_rows: cnt, fill_missing: fillMissing,
+                 date_range: { first: dr.f, last: dr.l } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
