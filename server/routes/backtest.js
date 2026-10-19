@@ -21,8 +21,9 @@ function pA(){const tk=pk();if(!tk)throw new Error('Unexpected end');if(tk.type=
 return!!tn(pE());}
 
 // ═══ CA ═══
-function loadCAs(){const r=db.prepare(`SELECT code,ex_date,ratio FROM corporate_actions WHERE status='confirmed' ORDER BY ex_date DESC`).all();const m={};for(const x of r){if(!m[x.code])m[x.code]=[];m[x.code].push(x);}return m;}
-function adjP(c,d,a){if(!a||!a.length)return c;let f=1;for(const x of a){if(d<x.ex_date&&x.ratio>0&&x.ratio!==1)f*=(1/x.ratio);}return Math.round(c*f);}
+// Penyesuaian aksi korporasi dipusatkan di utils/price-adjust.js (dipakai juga
+// oleh endpoint stock-detail) supaya tidak ada dua implementasi yang bisa berbeda.
+const { loadFactors, adjustRows } = require('../utils/price-adjust');
 
 // ═══ BUILD CONTEXT ═══
 function buildCtx(hist,di,fund){
@@ -132,6 +133,10 @@ router.post('/run', (req, res) => {
     const liqCapPct = req.body.liq_cap_pct != null ? parseFloat(req.body.liq_cap_pct) : 5;
     // Eksekusi T+1: sinyal dari close hari t diisi di OPEN hari t+1 (default).
     const execAtOpen = !(req.body.exec_at_open === false || req.body.exec_at_open === 'false');
+    // P0-3: dividen tunai dikreditkan ke kas (final tax ritel IDX default 10%).
+    const divTaxPct = req.body.dividend_tax_pct != null ? parseFloat(req.body.dividend_tax_pct) : 10;
+    // P1-4: posisi tanpa bar selama N sesi dianggap suspensi/delisting.
+    const suspendDays = Math.max(1, parseInt(req.body.suspend_days) || 10);
 
     // Risk state machine
     let rcMode = 'normal'; // normal | freeze | probe
@@ -153,7 +158,7 @@ router.post('/run', (req, res) => {
     // Pre-compute allDates index map
     const adMap = {}; allDates.forEach((d, i) => { adMap[d] = i; });
 
-    const caMap = loadCAs();
+    const caFactors = loadFactors(db);
     // (C) Point-in-time: tiap tanggal hanya melihat periode yang SUDAH terbit
     // (period + tenggat statutori + buffer <= tanggal transaksi), bukan snapshot terbaru.
     const fundLagBuffer = parseInt(req.body.fund_lag_buffer) || 0;
@@ -218,12 +223,11 @@ router.post('/run', (req, res) => {
     for (const r of rows) {
       if (scopeCodes && !scopeCodes.has(r.code)) continue;
       if (!hbc[r.code]) hbc[r.code] = [];
-      const a = caMap[r.code];
-      r.ac = a ? adjP(r.close, r.trade_date, a) : r.close;
-      r.ao = a ? adjP(r.open_price || r.close, r.trade_date, a) : (r.open_price || r.close);
-      r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close);
-      r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close);
       hbc[r.code].push(r);
+    }
+    // P0-1: penyesuaian harga dari ca_factors (217 faktor, 173 kode, 2020-2026)
+    for (const code of Object.keys(hbc)) {
+      adjustRows(hbc[code], caFactors[code], { volumeFields: { volume: 'avol' } });
     }
 
     const dIdx = {};
@@ -231,6 +235,15 @@ router.post('/run', (req, res) => {
       dIdx[code] = {};
       hbc[code].forEach((r, i) => { dIdx[code][r.trade_date] = i; });
     }
+
+    // P0-3: peta dividen tunai (nominal dari Proceed Ratio KSEI)
+    const divMap = {};
+    try {
+      for (const d of db.prepare('SELECT code, cum_date, dps FROM bei_dividends WHERE dps>0').all()) {
+        (divMap[d.code] = divMap[d.code] || []).push(d);
+      }
+    } catch (e) {}
+    let divIncome = 0;
 
     // ═══ SIMULATION ═══
     const trades = [];
@@ -249,11 +262,24 @@ router.post('/run', (req, res) => {
     const blocked = { ARA: 0, ARB: 0, no_open: 0 }; // order yang gagal dieksekusi
     let feePaid = 0;
 
-    // Benchmark: try idx_indices first, then idx_daily (for single stock benchmark)
-    let benchData = db.prepare('SELECT trade_date,close FROM idx_indices WHERE index_code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0]);
-    if (!benchData.length) {
-      // Try as stock code
-      benchData = db.prepare('SELECT trade_date,close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0]);
+    // Benchmark: IHSG resmi -> indeks pasar konstruksi (2020+) -> saham tunggal.
+    const isIndexBench = /COMPOSITE|IHSG|JKSE/.test(benchmark);
+    const benchLoad = (src) => src === 'idx_indices'
+      ? db.prepare('SELECT trade_date,close FROM idx_indices WHERE index_code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0])
+      : src === 'stock'
+        ? db.prepare('SELECT trade_date,close FROM idx_daily WHERE code=? AND trade_date>=? ORDER BY trade_date').all(benchmark, allDates[0])
+        : db.prepare('SELECT trade_date, close FROM market_index_constructed WHERE trade_date>=? ORDER BY trade_date').all(allDates[0]);
+    // Cakupan yang dinilai, bukan jumlah baris: sumber yang hanya mencakup
+    // beberapa sesi terakhir (mis. idx_indices 35 sesi 2026) tidak boleh dipakai
+    // untuk jendela 2021 — dulu itu membuat benchmark_return = 0 diam-diam.
+    const benchEnd = allDates[allDates.length - 1];
+    const benchCands = isIndexBench ? ['idx_indices', 'market_index_constructed'] : ['stock', 'market_index_constructed'];
+    let benchData = [], benchSource = 'none';
+    for (const src of benchCands) {
+      const d = benchLoad(src);
+      const mm = {};
+      d.forEach(r => { mm[r.trade_date] = r.close; });
+      if (mm[allDates[0]] && mm[benchEnd]) { benchData = d; benchSource = src; break; }
     }
     const bMap = {};
     benchData.forEach(r => { bMap[r.trade_date] = r.close; });
@@ -267,7 +293,46 @@ router.post('/run', (req, res) => {
         const pos = openPos[pi];
         const hist = hbc[pos.code];
         const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
-        if (idx < 0 || !hist[idx]) continue;
+        // P0-3: kreditkan dividen tunai pada sesi pertama setelah cum-date
+        if (divMap[pos.code]) {
+          for (const dv of divMap[pos.code]) {
+            if (!pos._div) pos._div = {};
+            if (pos._div[dv.cum_date]) continue;
+            if (dv.cum_date < td && pos.ed <= dv.cum_date) {
+              const netDiv = dv.dps * pos.shares * (1 - divTaxPct / 100);
+              cap += netDiv;
+              pos.div = (pos.div || 0) + netDiv;
+              divIncome += netDiv;
+              pos._div[dv.cum_date] = 1;
+            }
+          }
+        }
+        if (idx < 0 || !hist[idx]) {
+          // P1-4: tidak ada bar = suspensi/henti. Setelah N sesi, posisi ditutup
+          // di harga terakhir yang layak (bukan dibiarkan diam di harga masuk).
+          const lastDi = pos.lastBarDi != null ? pos.lastBarDi : pos.edi;
+          if (di - lastDi >= suspendDays && pos.lastClose > 0) {
+            const gross = pos.lastClose * pos.shares;
+            const sellFee = gross * (feeSellPct / 100);
+            const buyCost = pos.ep * pos.shares * (1 + feeBuyPct / 100);
+            const divPart = pos.div || 0;
+            const netPnl = (gross - sellFee) - buyCost + divPart;
+            cap += gross - sellFee;
+            feePaid += sellFee;
+            trades.push({
+              code: pos.code, type: 'Long', ed: pos.ed, ep: pos.ep, xd: td, xp: pos.lastClose,
+              shares: pos.shares, pv: Math.round(pos.ep * pos.shares),
+              pnl: Math.round(netPnl), pnlP: Math.round(netPnl / buyCost * 10000) / 100,
+              bars: di - pos.edi, ppb: 0, reason: 'suspend/delist',
+              mae: Math.round(pos.mae * 100) / 100, mfe: Math.round(pos.mfe * 100) / 100,
+              div: Math.round(divPart),
+            });
+            openPos.splice(pi, 1);
+          }
+          continue;
+        }
+        pos.lastBarDi = di;
+        pos.lastClose = hist[idx].ac;
         // (E) Bar SINYAL = sesi terakhir yang sudah selesai. Tanpa ini, sinyal dibaca dari
         // close hari ini lalu diisi di close hari ini juga — tidak dapat dieksekusi.
         const sIdx = execAtOpen ? idx - 1 : idx;
@@ -306,7 +371,8 @@ router.post('/run', (req, res) => {
           const gross = px * pos.shares;
           const sellFee = gross * (feeSellPct / 100);
           const buyCost = pos.ep * pos.shares * (1 + feeBuyPct / 100);
-          const netPnl = (gross - sellFee) - buyCost;
+          const divPart = pos.div || 0;
+          const netPnl = (gross - sellFee) - buyCost + divPart;
           const posVal = pos.ep * pos.shares;
           cap += gross - sellFee;
           feePaid += sellFee;
@@ -316,6 +382,7 @@ router.post('/run', (req, res) => {
             pnl: Math.round(netPnl), pnlP: Math.round(netPnl / buyCost * 10000) / 100,
             bars: days, ppb: days > 0 ? Math.round(pnlP / days * 100) / 100 : 0,
             reason, mae: Math.round(pos.mae * 100) / 100, mfe: Math.round(pos.mfe * 100) / 100,
+            div: Math.round(divPart),
           });
           openPos.splice(pi, 1);
 
@@ -395,7 +462,9 @@ router.post('/run', (req, res) => {
             fundMap.__set(hist[sIdx].trade_date);
             const ctx = buildCtx(hist, sIdx, fundMap[code]);
             const tk = tokenize(entryF);
-            if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[idx].value || 0 });
+            // P1-6: urutan & plafon likuiditas memakai nilai sesi SINYAL (t), bukan
+            // nilai hari eksekusi (t+1) yang belum diketahui saat order dibuat.
+            if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[sIdx].value || 0 });
           } catch (e) { /* skip */ }
         }
         cands.sort((a, b) => (b.value || 0) - (a.value || 0));
@@ -414,7 +483,7 @@ router.post('/run', (req, res) => {
           let sh = Math.floor(Math.floor(alloc / px) / 100) * 100;
           // (D) Plafon likuiditas: maks liqCapPct% dari nilai transaksi hari pengisian.
           if (bar.value > 0) {
-            const liqCapSh = Math.floor((bar.value * liqCapPct / 100) / px / 100) * 100;
+            const liqCapSh = Math.floor((((hist[c.sIdx] && hist[c.sIdx].value) || 0) * liqCapPct / 100) / px / 100) * 100;
             if (liqCapSh < sh) sh = liqCapSh;
           }
           const buyFee = sh * px * (feeBuyPct / 100);
@@ -422,7 +491,7 @@ router.post('/run', (req, res) => {
           if (sh < 100 || cost > cap) continue;
           cap -= cost;
           feePaid += buyFee;
-          openPos.push({ code: c.code, ed: td, ep: px, shares: sh, edi: di, mae: 0, mfe: 0 });
+          openPos.push({ code: c.code, ed: td, ep: px, shares: sh, edi: di, mae: 0, mfe: 0, lastBarDi: di, lastClose: px, div: 0 });
           slotsLeft--;
         }
       }
@@ -653,6 +722,7 @@ router.post('/run', (req, res) => {
       stats: { total_trades: trades.length, win_rate: wr, wins_count: W.length, losses_count: L.length,
         avg_win: aw, avg_loss: al, expectancy: exp, profit_factor: pf, sharpe,
         max_drawdown: Math.round(maxDD * 100) / 100, total_return: totRet, benchmark_return: bRet,
+        benchmark_source: benchSource, dividend_income: Math.round(divIncome),
         alpha: Math.round((totRet - bRet) * 100) / 100, avg_hold: avgH, initial_capital: initCap, final_equity: finalEq,
         exposure, annual_return: annRet, rar, car_maxdd: carDD,
         max_consec_wins: mcW, max_consec_losses: mcL, largest_win: lW, largest_loss: lL,
@@ -817,12 +887,22 @@ function fillBlocked(bar, prevClose, side) {
   return null;
 }
 
-function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct) {
+// Mekanika sengaja disamakan dengan engine /run: dividen, suspensi, dan plafon
+// likuiditas berbasis sesi sinyal. Perbedaan parameter yang tersisa hanya yang
+// memang disengaja (window, maxPos, cutloss).
+function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct, opts) {
+  const o = opts || {};
+  const feeBuy = o.feeBuyPct != null ? o.feeBuyPct : FEE_BUY_DEFAULT;
+  const feeSell = o.feeSellPct != null ? o.feeSellPct : FEE_SELL_DEFAULT;
+  const liqCap = o.liqCapPct != null ? o.liqCapPct : LIQ_CAP_DEFAULT;
+  const divMap = o.divMap || {};
+  const divTaxPct = o.divTaxPct != null ? o.divTaxPct : 10;
+  const suspendDays = o.suspendDays || 10;
   const dates = allDates.filter(d => d >= windowStart && d <= windowEnd);
   if (dates.length < 3) return null;
   const trades = [];
   const openPos = [];
-  let cap = initCap, peak = initCap, maxDD = 0;
+  let cap = initCap, peak = initCap, maxDD = 0, divIncome = 0;
 
   for (let di = 0; di < dates.length; di++) {
     const td = dates[di];
@@ -831,7 +911,30 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
       const pos = openPos[pi];
       const hist = hbc[pos.code]; if (!hist) continue;
       const idx = dIdx[pos.code] ? dIdx[pos.code][td] : -1;
-      if (idx < 0 || !hist[idx]) continue;
+      if (divMap[pos.code]) {
+        for (const dv of divMap[pos.code]) {
+          if (!pos._div) pos._div = {};
+          if (pos._div[dv.cum_date]) continue;
+          if (dv.cum_date < td && pos.ed <= dv.cum_date) {
+            const netDiv = dv.dps * pos.shares * (1 - divTaxPct / 100);
+            cap += netDiv; pos.div = (pos.div || 0) + netDiv; divIncome += netDiv;
+            pos._div[dv.cum_date] = 1;
+          }
+        }
+      }
+      if (idx < 0 || !hist[idx]) {
+        const lastDi = pos.lastBarDi != null ? pos.lastBarDi : pos.edi;
+        if (di - lastDi >= suspendDays && pos.lastClose > 0) {
+          const gross = pos.lastClose * pos.shares, sf = gross * (feeSell / 100);
+          const bc = pos.ep * pos.shares * (1 + feeBuy / 100);
+          const net = (gross - sf) - bc + (pos.div || 0);
+          cap += gross - sf;
+          trades.push({ pnl: net, pnlP: Math.round(net / bc * 10000) / 100, reason: 'suspend/delist' });
+          openPos.splice(pi, 1);
+        }
+        continue;
+      }
+      pos.lastBarDi = di; pos.lastClose = hist[idx].ac;
       const sIdx = idx - 1; if (sIdx < 0 || !hist[sIdx]) continue;   // (E) sinyal dari close sesi sebelumnya
       const sigClose = hist[sIdx].ac;
       const pnlP = (sigClose - pos.ep) / pos.ep * 100;
@@ -846,10 +949,11 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
         const prevB = sIdx > 0 ? hist[sIdx - 1] : null;
         if (fillBlocked(hist[idx], prevB ? prevB.ac : 0, 'sell')) continue;
         const px = hist[idx].ao;
-        const gross = px * pos.shares, sf = gross * (FEE_SELL_DEFAULT / 100);
-        const bc = pos.ep * pos.shares * (1 + FEE_BUY_DEFAULT / 100);
+        const gross = px * pos.shares, sf = gross * (feeSell / 100);
+        const bc = pos.ep * pos.shares * (1 + feeBuy / 100);
+        const net = (gross - sf) - bc + (pos.div || 0);
         cap += gross - sf;
-        trades.push({ pnl: (gross - sf) - bc, pnlP: Math.round(((gross - sf) - bc) / bc * 10000) / 100 });
+        trades.push({ pnl: net, pnlP: Math.round(net / bc * 10000) / 100, reason: reason });
         openPos.splice(pi, 1);
       }
     }
@@ -863,7 +967,7 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
         const idx = dIdx[code] ? dIdx[code][td] : -1;
         if (idx < 0 || !hist[idx] || hist[idx].trade_date !== td) continue;
         const sIdx = idx - 1; if (sIdx < 0 || !hist[sIdx]) continue;   // (E) sinyal dari close sesi sebelumnya
-        try { fundMap.__set(hist[sIdx].trade_date); const ctx = buildCtx(hist, sIdx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[idx].value || 0 }); } catch {}
+        try { fundMap.__set(hist[sIdx].trade_date); const ctx = buildCtx(hist, sIdx, fundMap[code]); const tk = tokenize(entryF); if (!tk.error && evalF(tk, ctx)) cands.push({ code, idx, sIdx, value: hist[sIdx].value || 0 }); } catch {}
       }
       cands.sort((a, b) => (b.value || 0) - (a.value || 0));
       let slotsLeft = slots;
@@ -874,14 +978,15 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
         const px = bar.ao; if (!px || px <= 0) continue;
         const alloc = cap / Math.max(1, slotsLeft);
         let sh = Math.floor(Math.floor(alloc / px) / 100) * 100;
-        if (bar.value > 0) {                                     // (D) plafon likuiditas
-          const lc = Math.floor((bar.value * LIQ_CAP_DEFAULT / 100) / px / 100) * 100;
+        const sigVal = (h2[c.sIdx] && h2[c.sIdx].value) || 0;    // (D) plafon likuiditas sesi sinyal
+        if (sigVal > 0) {
+          const lc = Math.floor((sigVal * liqCap / 100) / px / 100) * 100;
           if (lc < sh) sh = lc;
         }
-        const buyFee = sh * px * (FEE_BUY_DEFAULT / 100);
+        const buyFee = sh * px * (feeBuy / 100);
         if (sh < 100 || sh * px + buyFee > cap) continue;
         cap -= sh * px + buyFee;
-        openPos.push({ code: c.code, ep: px, shares: sh, edi: di });
+        openPos.push({ code: c.code, ed: td, ep: px, shares: sh, edi: di, lastBarDi: di, lastClose: px, div: 0 });
         slotsLeft--;
       }
     }
@@ -908,7 +1013,7 @@ function runSimWindow(hbc, dIdx, fundMap, allDates, windowStart, windowEnd, entr
   const pf = gl > 0 ? Math.round(gp / gl * 100) / 100 : gp > 0 ? 999 : 0;
   const years = dates.length / 252;
   const annRet = years > 0.1 ? Math.round((Math.pow(Math.max(0.01, finalEq / initCap), 1 / years) - 1) * 10000) / 100 : retPct;
-  return { return_pct: retPct, ann_return: annRet, trades: trades.length, win_rate: wr, profit_factor: pf, max_dd: Math.round(maxDD * 100) / 100, days: dates.length, start: dates[0], end: lastD };
+  return { return_pct: retPct, ann_return: annRet, trades: trades.length, win_rate: wr, profit_factor: pf, max_dd: Math.round(maxDD * 100) / 100, days: dates.length, start: dates[0], end: lastD, dividend_income: Math.round(divIncome) };
 }
 
 // ── Mode 1: Formula Walk Forward ──
@@ -937,7 +1042,7 @@ router.post('/walk-forward', (req, res) => {
     if (allDates.length < isWindow + oosWindow) return res.json({ error: 'Not enough data. Need ' + (isWindow + oosWindow) + ' days, have ' + allDates.length });
 
     // Load all history
-    const caMap = loadCAs();
+    const caFactors = loadFactors(db);
     // (C) Point-in-time: tiap tanggal hanya melihat periode yang SUDAH terbit
     // (period + tenggat statutori + buffer <= tanggal transaksi), bukan snapshot terbaru.
     const fundLagBuffer = parseInt(req.body.fund_lag_buffer) || 0;
@@ -949,9 +1054,23 @@ router.post('/walk-forward', (req, res) => {
     const minDate = fullDates[Math.max(0, fullDates.indexOf(allDates[0]) - lb)] || allDates[0];
     const hbc = {};
     db.prepare('SELECT code,trade_date,open_price,high,low,close,volume,value,frequency,foreign_buy,foreign_sell FROM idx_daily WHERE trade_date>=? AND close>0 ORDER BY code,trade_date').all(minDate)
-      .forEach(r => { if (!hbc[r.code]) hbc[r.code] = []; const a = caMap[r.code]; r.ac = a ? adjP(r.close, r.trade_date, a) : r.close; r.ao = a ? adjP(r.open_price || r.close, r.trade_date, a) : (r.open_price || r.close); r.ah = a ? adjP(r.high || r.close, r.trade_date, a) : (r.high || r.close); r.al = a ? adjP(r.low || r.close, r.trade_date, a) : (r.low || r.close); hbc[r.code].push(r); });
+      .forEach(r => { if (!hbc[r.code]) hbc[r.code] = []; hbc[r.code].push(r); });
+    // penyesuaian sama dengan engine /run (modul price-adjust)
+    for (const code of Object.keys(hbc)) adjustRows(hbc[code], caFactors[code], { volumeFields: { volume: 'avol' } });
     const dIdx = {};
     for (const code of Object.keys(hbc)) { dIdx[code] = {}; hbc[code].forEach((r, i) => { dIdx[code][r.trade_date] = i; }); }
+
+    // Mekanika sama dengan /run: peta dividen + opsi friksi dari request
+    const wfDivMap = {};
+    try { for (const d of db.prepare('SELECT code, cum_date, dps FROM bei_dividends WHERE dps>0').all()) (wfDivMap[d.code] = wfDivMap[d.code] || []).push(d); } catch (e) {}
+    const wfOpts = {
+      divMap: wfDivMap,
+      divTaxPct: req.body.dividend_tax_pct != null ? parseFloat(req.body.dividend_tax_pct) : 10,
+      suspendDays: Math.max(1, parseInt(req.body.suspend_days) || 10),
+      feeBuyPct: req.body.fee_buy_pct != null ? parseFloat(req.body.fee_buy_pct) : undefined,
+      feeSellPct: req.body.fee_sell_pct != null ? parseFloat(req.body.fee_sell_pct) : undefined,
+      liqCapPct: req.body.liq_cap_pct != null ? parseFloat(req.body.liq_cap_pct) : undefined,
+    };
 
     // Rolling windows
     const steps = [];
@@ -962,8 +1081,8 @@ router.post('/walk-forward', (req, res) => {
       const oosStart = allDates[pos + isWindow];
       const oosEnd = allDates[Math.min(pos + isWindow + oosWindow - 1, allDates.length - 1)];
 
-      const isResult = runSimWindow(hbc, dIdx, fundMap, allDates, isStart, isEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct);
-      const oosResult = runSimWindow(hbc, dIdx, fundMap, allDates, oosStart, oosEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct);
+      const isResult = runSimWindow(hbc, dIdx, fundMap, allDates, isStart, isEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct, wfOpts);
+      const oosResult = runSimWindow(hbc, dIdx, fundMap, allDates, oosStart, oosEnd, entryF, exitF, maxPos, initCap, forceCutloss, cutlossPct, wfOpts);
 
       steps.push({
         step: steps.length + 1,
