@@ -1,0 +1,13 @@
+const D = require('/app/node_modules/better-sqlite3');
+const db = new D('/app/data/trading.db', { readonly: true });
+const off = db.prepare("SELECT trade_date, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date").all();
+const con = db.prepare("SELECT trade_date, close FROM market_index_constructed WHERE trade_date>=? ORDER BY trade_date").all(off[0].trade_date);
+const cmap = {}; con.forEach(r => cmap[r.trade_date] = r.close);
+const o0 = off[0].close, o1 = off[off.length - 1].close;
+const c0 = cmap[off[0].trade_date], c1 = cmap[off[off.length - 1].trade_date];
+console.log('periode', off[0].trade_date, '->', off[off.length - 1].trade_date, '| sesi resmi', off.length, '| sesi konstruksi', con.length);
+console.log('IHSG resmi   :', ((o1 / o0 - 1) * 100).toFixed(2) + '%');
+console.log('Konstruksi   :', ((c1 / c0 - 1) * 100).toFixed(2) + '%');
+const dd = off.map(r => ({ d: r.trade_date, o: r.close / o0 - 1, c: (cmap[r.trade_date] || 0) / c0 - 1 }));
+console.log('contoh harian (resmi vs konstruksi, kumulatif %):');
+[0, 5, 12, 20, 34].forEach(i => { if (dd[i]) console.log(' ', dd[i].d, (dd[i].o * 100).toFixed(2), (dd[i].c * 100).toFixed(2)); });

@@ -155,6 +155,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_fund_code ON idx_fundamental(code);
   CREATE INDEX IF NOT EXISTS idx_fund_snap ON idx_fundamental(snapshot_month);
 
+  -- Faktor penyesuaian aksi korporasi (diturunkan dari prev_close bursa).
+  -- Sumber tunggal untuk chart (stock-detail) dan mesin backtest.
+  CREATE TABLE IF NOT EXISTS ca_factors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    factor REAL NOT NULL,
+    cum_close INTEGER DEFAULT 0,
+    ref_close INTEGER DEFAULT 0,
+    basis TEXT DEFAULT 'prev_close',
+    source TEXT DEFAULT 'derived',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(code, ex_date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ca_factors_code ON ca_factors(code);
+
+  -- Benchmark pasar (equal-weighted berantai) — dipakai bila IHSG resmi tidak
+  -- mencakup jendela backtest.
+  CREATE TABLE IF NOT EXISTS market_index_constructed (
+    trade_date TEXT PRIMARY KEY,
+    close REAL NOT NULL,
+    r_pct REAL,
+    n_stocks INTEGER,
+    basis TEXT DEFAULT 'equal_weighted_chainlinked',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS corporate_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -684,6 +711,9 @@ db.exec(`
     w_momentum REAL DEFAULT 30,
     w_demand REAL DEFAULT 0,
     w_foreign REAL DEFAULT 0,
+    -- Provenance (agent rail): which indicator variants + which build produced this row
+    variant TEXT DEFAULT '',
+    code_version TEXT DEFAULT '',
     UNIQUE(calc_date, code)
   );
   CREATE INDEX IF NOT EXISTS idx_ds_date ON daily_scores(calc_date);
@@ -723,7 +753,12 @@ try {
     ['fnet_10d','REAL DEFAULT 0'],['fnet_20d','REAL DEFAULT 0'],
     ['foreign_pct_val','REAL DEFAULT 0'],['foreign_accum_streak','INTEGER DEFAULT 0'],['fnet_vs_avg','REAL DEFAULT 0'],
     ['score_demand','REAL DEFAULT 0'],['score_foreign','REAL DEFAULT 0'],
-    ['w_demand','REAL DEFAULT 0'],['w_foreign','REAL DEFAULT 0']
+    ['w_demand','REAL DEFAULT 0'],['w_foreign','REAL DEFAULT 0'],
+    ['variant',"TEXT DEFAULT ''"],['code_version',"TEXT DEFAULT ''"],
+    // IC staleness provenance — deliberately NO DEFAULT so pre-existing rows stay NULL
+    // (the IC queries filter on `fund_snapshot_month IS NOT NULL`; a DEFAULT would
+    // silently promote old non-PIT rows into the staleness sample).
+    ['fund_snapshot_month','TEXT'],['data_age_months','INTEGER']
   ];
   newCols.forEach(([col, type]) => {
     if (!dsCols.includes(col)) {
