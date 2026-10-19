@@ -2782,6 +2782,33 @@ module.exports = function(upload) {
   // CUSTOM TICKERS — Add/Update/Delete external data
   // ═══════════════════════════════════════════════
 
+  // ─── Sumber baris: satu seri = satu sumber (aturan migrasi t_11e74460) ───
+  // custom_ohlc.source menyimpan asal tiap baris ('investing/8849', 'yahoo', 'fred/DFII10', …).
+  // Label ini yang membuat pencampuran sumber KETAHUAN, bukan tersembunyi di dalam satu deret.
+  // Rail non-Yahoo: nilainya tidak boleh ditimpa /custom/fetch-all (fetch-all memakai Yahoo),
+  // karena pada tanggal yang sama keduanya menulis baris yang sama.
+  const NON_YAHOO_RAIL = /^(investing|fred|tradingeconomics|te|rates|external|archive|csv)/i;
+  const isYahooOwned = (src) => !src || !NON_YAHOO_RAIL.test(String(src).trim());
+  // `name` diperbarui HANYA kalau pemanggil mengirim nama sungguhan (bukan sekadar mengulang kode) —
+  // aturan yang SAMA dengan /custom/upsert. Sebelum ini /custom/replace menulis seri baru tetapi
+  // label lama menempel (ON CONFLICT tidak memuat name), sehingga label bisa menyebut sumber/bursa
+  // yang sudah tidak benar: terukur pada migrasi 19 Okt 2026 (ALUMINIUM berlabel "COMEX" padahal
+  // serinya LME cash 49768; RUBBER berlabel "TE" padahal serinya investing TSR20 1013412).
+  function touchTicker(code, name, category, source) {
+    const dr = db.prepare('SELECT MIN(trade_date) f, MAX(trade_date) l FROM custom_ohlc WHERE code=?').get(code);
+    const cnt = db.prepare('SELECT COUNT(*) c FROM custom_ohlc WHERE code=?').get(code).c;
+    db.prepare(
+      `INSERT INTO custom_tickers(code, name, category, source, rows, first_date, last_date, updated_at)
+       VALUES(?,?,?,?,?,?,?,datetime('now'))
+       ON CONFLICT(code) DO UPDATE SET
+       rows=excluded.rows, first_date=excluded.first_date, last_date=excluded.last_date,
+       category=excluded.category, source=excluded.source,
+       name=CASE WHEN excluded.name IS NOT NULL AND excluded.name<>''
+                  AND excluded.name<>excluded.code THEN excluded.name ELSE name END,
+       updated_at=datetime('now')`
+    ).run(code, name, category, source, cnt, dr.f, dr.l);
+    return { total_rows: cnt, date_range: { first: dr.f, last: dr.l } };
+  }
   // List all custom tickers
   router.get('/custom/tickers', (req, res) => {
     try {
@@ -2812,6 +2839,7 @@ module.exports = function(upload) {
       const code = String(req.body.code || '').toUpperCase().trim();
       const category = String(req.body.category || 'custom').trim();
       const name = String(req.body.name || code);
+      const source = String(req.body.source || 'external').trim();
       const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
       // fill_missing=false -> kolom yang TIDAK tersedia disimpan NULL, bukan diisi nilai lain.
       // Default true = perilaku lama (pemanggil lama: fred_push_bl.py mengirim hanya date+close).
@@ -2848,8 +2876,14 @@ module.exports = function(upload) {
            VALUES(?,?,?,?,?,?,?,datetime('now'))
            ON CONFLICT(code) DO UPDATE SET
            rows=excluded.rows, first_date=excluded.first_date, last_date=excluded.last_date,
-           category=excluded.category, source=excluded.source, updated_at=datetime('now')`
-        ).run(code, name, category, String(req.body.source || 'external'), cnt, dr.f, dr.l);
+           category=excluded.category, source=excluded.source,
+           -- Nama tayang ikut diperbarui HANYA kalau pemanggil mengirim nama sungguhan
+           -- (bukan sekadar mengulang kode). Tanpa ini, rail investing tidak bisa memberi
+           -- label seri (mis. catatan rollover HRCc1) kecuali lewat UPDATE manual ke DB.
+           name=CASE WHEN excluded.name IS NOT NULL AND excluded.name<>''
+                      AND excluded.name<>excluded.code THEN excluded.name ELSE name END,
+           updated_at=datetime('now')`
+        ).run(code, name, category, source, cnt, dr.f, dr.l);
       }
       res.json({ ok: true, code, written, total_rows: cnt, fill_missing: fillMissing,
                  date_range: { first: dr.f, last: dr.l } });
@@ -2860,9 +2894,15 @@ module.exports = function(upload) {
   router.post('/custom/fetch-all', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
     try {
-      const tickers = db.prepare('SELECT code, name, category FROM custom_tickers ORDER BY code').all();
+      const tickers = db.prepare('SELECT code, name, category, source FROM custom_tickers ORDER BY code').all();
       const detail = [];
+      let skipped = 0;
       for (const t of tickers) {
+        if (!isYahooOwned(t.source)) {
+          skipped++;
+          detail.push({ code: t.code, ok: true, skipped: 'rail-owned', source: t.source });
+          continue;
+        }
         try {
           const r = await eodFetcher.fetchEOD(t.code, t.category, process.env.ALPHA_VANTAGE_KEY || '', false);
           let written = 0;
@@ -2888,8 +2928,9 @@ module.exports = function(upload) {
       }
       res.json({
         ok: true,
-        refreshed: detail.filter(x => x.ok).length,
+        refreshed: detail.filter(x => x.ok && !x.skipped).length,
         failed: detail.filter(x => !x.ok).length,
+        skipped,
         detail,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2948,8 +2989,10 @@ module.exports = function(upload) {
       const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
       const staleDays = parseInt(req.body.stale_days) || 7;
       const today = new Date().toISOString().split('T')[0];
-      const all = db.prepare('SELECT code, name, category, last_date FROM custom_tickers ORDER BY code').all();
+      const all = db.prepare('SELECT code, name, category, source, last_date FROM custom_tickers ORDER BY code').all();
+      // Sumber sama dengan fetch-all: jangan pernah menulis bar Yahoo ke seri rail (investing/fred/…).
       const stale = all.filter(r => {
+        if (!isYahooOwned(r.source)) return false;
         if (!r.last_date) return true;
         return Math.floor((new Date(today) - new Date(r.last_date)) / 86400000) > staleDays;
       });
@@ -3347,12 +3390,16 @@ module.exports = function(upload) {
         const cmdTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='commodity' ORDER BY code").all();
         commodities = cmdTickers.map(t => {
           const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
-          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0 };
+          // no_series: tidak ada seri harga (≤1 observasi). Dipakai UI untuk menulis
+          // "tanpa seri harga" alih-alih menampilkan level tunggal/0 seolah tren
+          // (COKING_COAL & KRAFT_PULP: tidak ada kandidat di investing, t_6d027516 r5).
+          if (!rows.length) return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null };
           const now = rows[0].close;
           const d5 = rows[4] ? rows[4].close : now;
           const d20 = rows[19] ? rows[19].close : now;
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
+            no_series: rows.length < 2,
             date: rows[0].trade_date,
             chg_5d: d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0,
             chg_20d: d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0,
