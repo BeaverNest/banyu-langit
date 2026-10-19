@@ -21,6 +21,10 @@ try {
 
 const { db, dataDir } = require('./db');
 const { yq } = require('./utils/yahoo');
+// Basis penyesuaian harga untuk mini-chart pencarian: ca_factors adalah satu-satunya
+// sumber untuk kode yang dikenalinya, corporate_actions hanya fallback (helper yang
+// sama dipakai chart panel, /stock-detail, screener, dan jalur skoring).
+const { loadFactors, factorForRow, fallbackRatioActions } = require('./utils/price-adjust');
 
 const app = express();
 const PORT = parseInt(process.env.PORT) || 3000;
@@ -120,41 +124,36 @@ app.get('/api/ticker/:code', async (req, res) => {
       if (fund) result.fundamental = fund;
     }
 
-    // Corporate actions
+    // Corporate actions (row mentah — tetap dikirim untuk badge/kompatibilitas UI)
     const cas = db.prepare(`SELECT * FROM corporate_actions WHERE code=? AND status='confirmed' ORDER BY ex_date DESC`).all(code);
-    if (cas.length) {
-      result.corporate_actions = cas;
-      // Enrich flow with adjusted close
-      if (result.flow && result.flow.length) {
-        result.flow = result.flow.map(r => {
-          let cumFactor = 1;
-          for (const ca of cas) {
-            if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
-              cumFactor *= (1 / ca.ratio);
-            }
-          }
-          r.adj_close = cumFactor !== 1 ? Math.round(r.close * cumFactor) : r.close;
-          r.adj_factor = Math.round(cumFactor * 1000000) / 1000000;
-          r.adjusted = cumFactor !== 1;
-          return r;
-        });
-      }
+    if (cas.length) result.corporate_actions = cas;
+
+    // Basis faktor untuk SEMUA baris (flow + adj_chart): ca_factors menang; ratio dari
+    // corporate_actions HANYA dipakai kalau kode itu tidak punya entri ca_factors.
+    // Menjumlahkan keduanya = double count (RAJA 0,2x0,2, DSSA 625x) — lihat price-adjust.js.
+    const factors = loadFactors(db)[code] || [];
+    const ratioCas = fallbackRatioActions(factors, cas);
+    const factorSource = factors.length ? 'ca_factors' : (ratioCas.length ? 'corporate_actions' : null);
+
+    // Enrich flow with adjusted close (basis yang sama dengan chart & tabel adj_chart)
+    if (result.flow && result.flow.length && factorSource) {
+      result.flow = result.flow.map(r => {
+        const cumFactor = factorForRow(factors, cas, r.trade_date);
+        r.adj_close = cumFactor !== 1 ? Math.round(r.close * cumFactor) : r.close;
+        r.adj_factor = Math.round(cumFactor * 1000000) / 1000000;
+        r.adjusted = cumFactor !== 1;
+        r.factor_source = factorSource;
+        return r;
+      });
     }
 
-    // Price chart — always provide (last 120 days), with adjustment if CA exists
+    // Price chart — always provide (last 120 days), with adjustment from the factor basis
     if (td) {
       const hist = db.prepare('SELECT trade_date,close,high,low,volume,foreign_buy,foreign_sell,bid_vol,offer_vol FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 500').all(code);
       hist.reverse();
       if (hist.length >= 2) {
         result.adj_chart = hist.map(r => {
-          let cumFactor = 1;
-          if (cas.length) {
-            for (const ca of cas) {
-              if (r.trade_date < ca.ex_date && ca.ratio > 0 && ca.ratio !== 1) {
-                cumFactor *= (1 / ca.ratio);
-              }
-            }
-          }
+          const cumFactor = factorForRow(factors, cas, r.trade_date);
           return {
             trade_date: r.trade_date,
             close: r.close,
@@ -165,7 +164,8 @@ app.get('/api/ticker/:code', async (req, res) => {
             bid_vol: r.bid_vol || 0,
             offer_vol: r.offer_vol || 0,
             volume: r.volume || 0,
-            adjusted: cumFactor !== 1
+            adjusted: cumFactor !== 1,
+            factor_source: factorSource
           };
         });
       }
