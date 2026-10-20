@@ -146,4 +146,46 @@ router.get('/cross-asset', (req, res) => {
   }
 });
 
+// ═══ /api/idx/suspensions — status suspensi dari pengumuman BEI ═══
+// Riwayat event: company_suspends (turunan company_announcements, skrip
+// server/scripts/parse-suspensions.js). PENTING: pengumuman TIDAK cukup untuk menyatakan
+// "masih tersuspend" — terukur 20 Okt 2026, 36 dari 39 kandidat punya bar harga SETELAH
+// tanggal suspend (aktif kembali tanpa pengumuman Pembukaan). Status akhir selalu disilang
+// ke idx_daily: ada bar setelah tanggal suspend => TIDAK dianggap tersuspend.
+router.get('/suspensions', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT s.code, s.type, s.suspend_date, s.title,
+             (SELECT MAX(d.trade_date) FROM idx_daily d WHERE d.code = s.code) AS last_bar
+        FROM company_suspends s
+       WHERE s.id IN (SELECT MAX(id) FROM company_suspends GROUP BY code)
+       ORDER BY s.suspend_date DESC`).all();
+
+    const active = [], resumedSilently = [], unknown = [];
+    for (const r of rows) {
+      if (r.type !== 'suspend') continue;
+      const days = Math.max(0, Math.round((Date.now() - new Date(r.suspend_date).getTime()) / 86400000));
+      const item = { code: r.code, since: r.suspend_date, days, last_bar: r.last_bar, reason: String(r.title || '').slice(0, 160) };
+      if (!r.last_bar) unknown.push(item);
+      else if (r.last_bar <= r.suspend_date) active.push(item);
+      else resumedSilently.push(item);
+    }
+    res.json({
+      ok: true,
+      active,
+      resumed_without_announcement: resumedSilently.slice(0, 50),
+      unknown,
+      counts: {
+        active: active.length,
+        resumed_without_announcement: resumedSilently.length,
+        unknown: unknown.length,
+        events: db.prepare('SELECT COUNT(*) c FROM company_suspends').get().c,
+      },
+      rule: 'event terakhir per emiten, dibatalkan bila ada bar harga setelah tanggal suspend',
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 module.exports = router;
