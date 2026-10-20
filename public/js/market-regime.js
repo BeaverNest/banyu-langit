@@ -355,7 +355,7 @@ var MR_ROW_TEXT = {
   stale:      ['basi — sumber tidak menerbitkan bar',  'var(--rd)'],
   aged:       ['umur lewat kadens',                    'var(--am)'],
   delayed:    ['terlambat (wajar untuk sumber ini)',    'var(--t3)'],
-  unmeasured: ['umur tak terukur',                     'var(--t3)'],
+  unmeasured: ['', 'var(--t3)'],
   missing:    ['tidak ada seri',                       'var(--rd)']
 };
 
@@ -551,7 +551,7 @@ function mrRenderLiquidity(liq) {
       stale: ['basi', 'var(--rd)'],
       delayed: ['terlambat (wajar)', 'var(--t3)'],
       aged: ['umur &gt; kadens', 'var(--am)'],
-      unmeasured: ['umur tak terukur', 'var(--t3)'],
+      unmeasured: ['', 'var(--t3)'],
       no_series: ['tanpa bar', 'var(--rd)']
     };
     var stPair = MR_LIQ_TEXT[st] || MR_LIQ_TEXT.unmeasured;
@@ -858,7 +858,7 @@ function mrRenderCoverage(cov) {
     + 'Rujukan sesi <b style="color:var(--t2)">' + esc(cov.ref_date || '—') + '</b> (' + esc(cov.ref_source || '—') + ') · '
     + (c.series || 0) + ' seri aktif: ' + (c.fresh || 0) + ' segar · ' + (c.stale || 0) + ' basi · '
     + (c.delayed || 0) + ' terlambat (wajar) · ' + (c.aged || 0) + ' umur lewat kadens · '
-    + (c.unmeasured || 0) + ' umur tak terukur · ' + (c.no_series || 0) + ' tanpa bar'
+    + (c.unmeasured || 0) + ' tanpa status umur · ' + (c.no_series || 0) + ' tanpa bar'
     + ' <span style="color:' + (sumOk ? 'var(--t3)' : 'var(--rd)') + '"'
     + ' title="enam bucket status saling eksklusif; jumlahnya harus sama dengan jumlah seri">'
     + '(bucket ' + bucketSum + '/' + (c.series || 0) + (sumOk ? '' : ' — TIDAK COCOK') + ')</span></div>';
