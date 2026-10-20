@@ -326,10 +326,11 @@ function pullContext(db) {
     const hasTicker = Object.prototype.hasOwnProperty.call(lastDate, code);
     const info = classifyCode(list, hasTicker ? lastDate[code] : null, hasTicker);
     info.frozen_scan_rows = list.length;
-    // Batas jendela diukur dalam HARI yang benar-benar dipindai (bukan baris): kalau semua
-    // hari di jendela sudah terkumpul, deret yang mentok di SCAN_PULL_DAYS = batas bawah.
-    info.frozen_scan_days = info.frozen_pull_days;
-    info.frozen_capped = info.frozen_pull_days >= SCAN_PULL_DAYS && info.frontier_frozen_pulls >= SCAN_PULL_DAYS;
+    // Jendela pindai diukur dalam HARI, bukan baris. `frozen_scan_days` = hari tarik `ok` yang
+    // benar-benar masuk jendela (pembagi deret), `frozen_scan_rows` = baris mentahnya.
+    // `frozen_capped` menandai deret yang mentok di batas jendela: angkanya BATAS BAWAH.
+    info.frozen_scan_days = info.pull_days_observed;
+    info.frozen_capped = info.pull_days_observed >= SCAN_PULL_DAYS && info.frontier_frozen_pulls >= SCAN_PULL_DAYS;
     out.by_code[code] = info;
   }
   return out;

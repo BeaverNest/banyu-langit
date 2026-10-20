@@ -885,9 +885,10 @@ function main() {
       if (flags.stall_evaluable !== (okDaysWindow >= thr)) liveBad.push(code + ': evaluable ' + flags.stall_evaluable + ' != ' + (okDaysWindow >= thr));
       // Invarian yang menutup silent false-negative: stalled HANYA boleh true bila bisa dinilai.
       if (flags.source_stalled === true && flags.stall_evaluable !== true) liveBad.push(code + ': stalled tanpa evaluable');
-      if (flags.frozen_capped !== (windowDays >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS)) {
-        liveBad.push(code + ': frozen_capped ' + flags.frozen_capped + ' != ' + (windowDays >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS));
+      if (flags.frozen_capped !== (okDaysWindow >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS)) {
+        liveBad.push(code + ': frozen_capped ' + flags.frozen_capped + ' != ' + (okDaysWindow >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS));
       }
+      if (flags.frozen_scan_days !== okDaysWindow) liveBad.push(code + ': frozen_scan_days ' + flags.frozen_scan_days + ' != ' + okDaysWindow);
       if (flags.source_stalled !== (streakFull >= thr)) liveBad.push(code + ': stalled ' + flags.source_stalled + ' != ' + (streakFull >= thr));
       if (flags.stall_threshold !== thr) liveBad.push(code + ': threshold ' + flags.stall_threshold + ' != ' + thr);
       // Laporan (seluruh riwayat) tidak boleh terpotong jendela request.
