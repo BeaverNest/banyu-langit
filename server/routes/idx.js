@@ -355,7 +355,10 @@ module.exports = function(upload) {
     }
     // Fallback: custom_ohlc (for custom tickers like XAUUSD, commodities, etc.)
     try {
-      const custom = db.prepare('SELECT trade_date, code, open as open_price, high, low, close, volume, 0 as prev_close, 0 as value, 0 as frequency, 0 as foreign_buy, 0 as foreign_sell, 0 as bid_vol, 0 as offer_vol, 0 as listed_shares, 0 as tradeable_shares FROM custom_ohlc WHERE code=? ORDER BY trade_date').all(code);
+      const custom = db.prepare(`SELECT trade_date, code, open as open_price, high, low, close, volume, session,
+              0 as prev_close, 0 as value, 0 as frequency, 0 as foreign_buy, 0 as foreign_sell,
+              0 as bid_vol, 0 as offer_vol, 0 as listed_shares, 0 as tradeable_shares
+        FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date`).all(code);
       if (custom.length) {
         custom.forEach((r, i) => {
           r.prev_close = i > 0 ? custom[i - 1].close : r.close;
@@ -688,10 +691,10 @@ module.exports = function(upload) {
         // Fallback: check custom_ohlc table
         try {
           const custom = db.prepare(
-            `SELECT trade_date, code, open as open_price, high, low, close, volume, 0 as prev_close,
+            `SELECT trade_date, code, open as open_price, high, low, close, volume, session, 0 as prev_close,
                     0 as value, 0 as frequency, 0 as foreign_buy, 0 as foreign_sell,
                     0 as listed_shares, 0 as bid_vol, 0 as offer_vol
-             FROM custom_ohlc WHERE code=? ORDER BY trade_date`
+             FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date`
           ).all(code);
           if (custom.length) {
             // ohlc_mode seri (t_565e76fd) ikut dikirim: 'price_only' = O/H/L NULL memang
@@ -1363,28 +1366,31 @@ module.exports = function(upload) {
         return Math.round((100 - 100 / (1 + rs)) * 10) / 10;
       }
 
+      // MACD 12/26/9 — signal = TRUE 9-period EMA of the full MACD line (SMA-9
+      // seed, then recursive). Same math as screener.js / backtest.js so one code
+      // gets one MACD answer everywhere. Replaces the old slice-based approximation
+      // whose signal only saw the last 10 windows (kanban t_3578a0b7, 2026-09-11).
       function calcMACD(closes) {
         if (closes.length < 26) return { macd: 0, signal: 0, hist: 0 };
-        function ema(data, period) {
-          const k = 2 / (period + 1);
-          let val = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
-          for (let i = period; i < data.length; i++) val = data[i] * k + val * (1 - k);
-          return val;
-        }
-        const ema12 = ema(closes, 12);
-        const ema26 = ema(closes, 26);
-        const macdVal = ema12 - ema26;
-        // Approximate signal (9-period EMA of MACD line)
-        // For simplicity, compute MACD for last 9 points
+        const k12 = 2 / 13, k26 = 2 / 27;
+        let e12 = closes.slice(0, 12).reduce((s, v) => s + v, 0) / 12;
+        let e26 = closes.slice(0, 26).reduce((s, v) => s + v, 0) / 26;
         const macdLine = [];
-        for (let i = Math.max(26, closes.length - 9); i <= closes.length; i++) {
-          const sub = closes.slice(0, i);
-          const e12 = ema(sub, 12);
-          const e26 = ema(sub, 26);
+        for (let i = 0; i < closes.length; i++) {
+          if (i < 12) e12 = closes.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else e12 = closes[i] * k12 + e12 * (1 - k12);
+          if (i < 26) e26 = closes.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else e26 = closes[i] * k26 + e26 * (1 - k26);
           macdLine.push(e12 - e26);
         }
-        const signal = macdLine.length >= 9 ? ema(macdLine, Math.min(9, macdLine.length)) : macdVal;
-        return { macd: Math.round(macdVal * 100) / 100, signal: Math.round(signal * 100) / 100, hist: Math.round((macdVal - signal) * 100) / 100 };
+        const k9 = 2 / 10;
+        let sig = macdLine.slice(0, 9).reduce((s, v) => s + v, 0) / 9;
+        for (let i = 0; i < macdLine.length; i++) {
+          if (i < 9) sig = macdLine.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else sig = macdLine[i] * k9 + sig * (1 - k9);
+        }
+        const macdVal = macdLine[macdLine.length - 1];
+        return { macd: Math.round(macdVal * 100) / 100, signal: Math.round(sig * 100) / 100, hist: Math.round((macdVal - sig) * 100) / 100 };
       }
 
       // ── 6b. Commodity momentum bonus ──
@@ -1416,7 +1422,7 @@ module.exports = function(upload) {
         [...new Set(Object.values(COMMODITY_TICKER_MAP))].forEach(cmdCode => {
           const ohlcCodes = COMMODITY_OHLC_MAP[cmdCode] || [cmdCode];
           for (const oc of ohlcCodes) {
-            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(oc);
+            const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 30`).all(oc);
             if (rows.length >= 6) {
               const now = rows[0].close, d5 = rows[5]?.close || now, d20 = rows[Math.min(20, rows.length-1)]?.close || now;
               commodityMomentum[cmdCode] = { code: oc, price: now,
@@ -1625,8 +1631,9 @@ module.exports = function(upload) {
         rsi14,macd,macd_signal,macd_hist,ret_5d,ret_20d,fnet_5d,fnet_dir,
         bid_offer_ratio,bid_offer_5d,rel_vol,freq_spike,val_spike,
         fnet_10d,fnet_20d,foreign_pct_val,foreign_accum_streak,fnet_vs_avg,
-        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign)
-        VALUES(${Array(56).fill('?').join(',')})`);
+        w_fundamental,w_valuation,w_momentum,w_demand,w_foreign,
+        variant,code_version)
+        VALUES(${Array(58).fill('?').join(',')})`);
       db.transaction(() => {
         top.forEach(r => {
           insScore.run(td, r.code, r.name, r.close, r.change_pct, r.sector, r.industry, r.market_cap,
@@ -1636,7 +1643,8 @@ module.exports = function(upload) {
             r.rsi14, r.macd, r.macd_signal, r.macd_hist, r.ret_5d, r.ret_20d, r.fnet_5d, r.fnet_dir,
             r.bid_offer_ratio, r.bid_offer_5d, r.rel_vol, r.freq_spike, r.val_spike,
             r.fnet_10d, r.fnet_20d, r.foreign_pct_val, r.foreign_accum_streak, r.fnet_vs_avg,
-            wF, wV, wM, wD, wFR);
+            wF, wV, wM, wD, wFR,
+            SCORE_VARIANT, getCodeVersion());
         });
       })();
 
@@ -1663,8 +1671,12 @@ module.exports = function(upload) {
   // ═══ BACKFILL SCORES — calculate for historical dates ═══
   router.post('/composite-score/backfill', (req, res) => {
     try {
-      const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign, point_in_time } = req.body || {};
+      const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign, point_in_time, fund_source, fund_lag_days } = req.body || {};
       if (!from || !to) return res.status(400).json({ error: 'from and to required (YYYY-MM-DD)' });
+      // Fundamental PIT source: 'idx_fundamental' (default, unchanged) or 'ratio_ttm'
+      // (= IDX-API financial_ratios, own TTM normalisation, availability = quarter end + lag).
+      const fundSource = (fund_source === 'ratio_ttm') ? 'ratio_ttm' : 'idx_fundamental';
+      const fundLagDays = Number.isFinite(parseFloat(fund_lag_days)) ? parseFloat(fund_lag_days) : RATIO_LAG_DAYS_DEFAULT;
       const wF = parseFloat(w_fundamental) || 25;
       const wV = parseFloat(w_valuation) || 20;
       const wM = parseFloat(w_momentum) || 20;
@@ -1707,15 +1719,37 @@ module.exports = function(upload) {
         }
         return { map: pitCache[snap], snapshot: snap };
       }
+      // Source switch — identical contract to getPITFundMap, so nothing downstream of the
+      // call site changes when ratio_ttm is selected.
+      function getPITFundMapSelected(tradeDate) {
+        if (fundSource === 'ratio_ttm') return getPITFundMapFromRatio(tradeDate, { lagDays: fundLagDays });
+        return getPITFundMap(tradeDate);
+      }
       // Industry medians — also per-snapshot for PIT mode
       const indMedianCache = {};
       function getIndMedian(snapshot) {
         if (!snapshot) return {};
         if (indMedianCache[snapshot]) return indMedianCache[snapshot];
         indMedianCache[snapshot] = {};
-        db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(snapshot)
-          .forEach(r => { indMedianCache[snapshot][r.industry] = r; });
+        try {
+          db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(snapshot)
+            .forEach(r => { indMedianCache[snapshot][r.industry] = r; });
+        } catch(e) {}
         return indMedianCache[snapshot];
+      }
+      // Ratio-source medians (same filter/aggregate as above, but from financial_ratios at
+      // the quarter end). NOTE: financial_ratios.per/pbv are as-of the quarter end, so this
+      // valuation side lags the score date — /ic-fund-source quantifies that separately.
+      const indMedianRatioCache = {};
+      function getIndMedianFromRatio(snapshot) {
+        if (!snapshot) return {};
+        if (indMedianRatioCache[snapshot]) return indMedianRatioCache[snapshot];
+        indMedianRatioCache[snapshot] = {};
+        try {
+          db.prepare('SELECT industry, AVG(per) as avg_per, AVG(pbv) as avg_pbv FROM financial_ratios WHERE period=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(snapshot)
+            .forEach(r => { indMedianRatioCache[snapshot][r.industry] = r; });
+        } catch(e) {}
+        return indMedianRatioCache[snapshot];
       }
       const divMap = {};
       try {
@@ -1751,7 +1785,7 @@ module.exports = function(upload) {
         [...new Set(Object.values(COMMODITY_TICKER_MAP_BF))].forEach(cmdCode => {
           const ohlcCodes = COMMODITY_OHLC_MAP_BF[cmdCode] || [cmdCode];
           for (const oc of ohlcCodes) {
-            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(oc);
+            const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 30`).all(oc);
             if (rows.length >= 6) {
               const now = rows[0].close, d5 = rows[5]?.close || now, d20 = rows[Math.min(20, rows.length-1)]?.close || now;
               commodityMomentum[cmdCode] = { code: oc, price: now,
@@ -1775,12 +1809,28 @@ module.exports = function(upload) {
         if (al === 0) return 100;
         return Math.round((100 - 100 / (1 + ag / al)) * 10) / 10;
       }
+      // MACD 12/26/9 — signal = true 9-period EMA of the full MACD line.
+      // Identical math to the calcMACD above / screener.js / backtest.js.
       function calcMACD(closes) {
         if (closes.length < 26) return { macd: 0, signal: 0, hist: 0 };
-        function ema(data, p) { const k = 2 / (p + 1); let v = data.slice(0, p).reduce((s, x) => s + x, 0) / p; for (let i = p; i < data.length; i++) v = data[i] * k + v * (1 - k); return v; }
-        const m = ema(closes, 12) - ema(closes, 26);
-        const ml = []; for (let i = Math.max(26, closes.length - 9); i <= closes.length; i++) { const sub = closes.slice(0, i); ml.push(ema(sub, 12) - ema(sub, 26)); }
-        const sig = ml.length >= 9 ? ema(ml, Math.min(9, ml.length)) : m;
+        const k12 = 2 / 13, k26 = 2 / 27;
+        let e12 = closes.slice(0, 12).reduce((s, v) => s + v, 0) / 12;
+        let e26 = closes.slice(0, 26).reduce((s, v) => s + v, 0) / 26;
+        const ml = [];
+        for (let i = 0; i < closes.length; i++) {
+          if (i < 12) e12 = closes.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else e12 = closes[i] * k12 + e12 * (1 - k12);
+          if (i < 26) e26 = closes.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else e26 = closes[i] * k26 + e26 * (1 - k26);
+          ml.push(e12 - e26);
+        }
+        const k9 = 2 / 10;
+        let sig = ml.slice(0, 9).reduce((s, v) => s + v, 0) / 9;
+        for (let i = 0; i < ml.length; i++) {
+          if (i < 9) sig = ml.slice(0, i + 1).reduce((s, v) => s + v, 0) / (i + 1);
+          else sig = ml[i] * k9 + sig * (1 - k9);
+        }
+        const m = ml[ml.length - 1];
         return { macd: Math.round(m * 100) / 100, signal: Math.round(sig * 100) / 100, hist: Math.round((m - sig) * 100) / 100 };
       }
       function rankPercentile(arr, key, higherIsBetter) {
@@ -1818,16 +1868,17 @@ module.exports = function(upload) {
         bid_offer_ratio,bid_offer_5d,rel_vol,freq_spike,val_spike,
         fnet_10d,fnet_20d,foreign_pct_val,foreign_accum_streak,fnet_vs_avg,
         w_fundamental,w_valuation,w_momentum,w_demand,w_foreign,
-        fund_snapshot_month,data_age_months)
-        VALUES(${Array(58).fill('?').join(',')})`);
+        fund_snapshot_month,data_age_months,
+        variant,code_version)
+        VALUES(${Array(60).fill('?').join(',')})`);
 
       let totalScored = 0;
 
       db.transaction(() => {
         tradeDates.forEach(td => {
           // Get PIT or global fundamental data for this trade date
-          const { map: fundMap, snapshot: usedSnap } = getPITFundMap(td);
-          const indMedian = getIndMedian(usedSnap);
+          const { map: fundMap, snapshot: usedSnap } = getPITFundMapSelected(td);
+          const indMedian = (fundSource === 'ratio_ttm') ? getIndMedianFromRatio(usedSnap) : getIndMedian(usedSnap);
           // dataAge computed per-stock below using fs_date
 
           // Get stocks for this date
@@ -1864,6 +1915,11 @@ module.exports = function(upload) {
             const allFSells = [...pre.map(x => (x.foreign_sell || 0) * x.close), ...cur.map(x => (x.foreign_sell || 0) * x.close)];
 
             const fund = fundMap[code] || {};
+            // ratio_ttm source: a code whose 4-quarter window is incomplete is NOT in the
+            // map. Scoring it with zeroed fundamentals would hand it the neutral rank 50,
+            // i.e. it would be approximated rather than excluded. Drop it from the day.
+            // Guarded by the source flag so the legacy idx_fundamental path is untouched.
+            if (fundSource === 'ratio_ttm' && !fundMap[code]) return;
             // Per-stock data age: scoring_date vs fiscal period end (fs_date)
             const stockFsAge = calcFsAge(td, fund.fs_date);
             const chgPct = r.prev_close > 0 ? Math.round((r.close - r.prev_close) / r.prev_close * 10000) / 100 : 0;
@@ -1979,13 +2035,25 @@ module.exports = function(upload) {
               r.bid_offer_ratio, r.bid_offer_5d, r.rel_vol, r.freq_spike, r.val_spike,
               r.fnet_10d, r.fnet_20d, r.foreign_pct_val, r.foreign_accum_streak, r.fnet_vs_avg,
               wF, wV, wM, wD, wFR,
-              usedSnap, r._fs_age);
+              usedSnap, r._fs_age,
+              SCORE_VARIANT, getCodeVersion());
           });
           totalScored += top.length;
         });
       })();
 
-      res.json({ ok: true, dates_processed: tradeDates.length, total_scored: totalScored, from: tradeDates[0], to: tradeDates[tradeDates.length - 1] });
+      res.json({
+        ok: true, dates_processed: tradeDates.length, total_scored: totalScored,
+        from: tradeDates[0], to: tradeDates[tradeDates.length - 1],
+        fund_source: fundSource, fund_lag_days: fundSource === 'ratio_ttm' ? fundLagDays : null,
+        // ratio_ttm stores the QUARTER-END date (e.g. 2026-06-30) in fund_snapshot_month,
+        // not a publication month. Existing rows for a (calc_date, code) are replaced because
+        // daily_scores is UNIQUE(calc_date, code) — do not mix sources over the same dates
+        // without snapshotting fund_snapshot_month first.
+        note: fundSource === 'ratio_ttm'
+          ? 'fund_snapshot_month holds the quarter end; availability = quarter end + ' + fundLagDays + ' days'
+          : 'unchanged legacy path (idx_fundamental publication month)'
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -2431,6 +2499,385 @@ module.exports = function(upload) {
     } catch (e) { console.error('IC Staleness error:', e); res.json({ error: e.message }); }
   });
 
+  // ═══ IC BY FUNDAMENTAL SOURCE — idx_fundamental vs financial_ratios (own TTM) ═══
+  // READ-ONLY study. It never writes: daily_scores is UNIQUE(calc_date, code), so a
+  // ratio-sourced backfill would overwrite the idx_fundamental-sourced rows instead of
+  // sitting next to them. Comparing in memory is the only way to see both at once.
+  //
+  // Method (each choice is load-bearing):
+  //  • Universe = the gate the scorer itself uses — close > 0, listed_shares > 0,
+  //    close*listed_shares >= 50e9, average 20-session frequency >= 10 — rebuilt from
+  //    idx_daily, NOT taken from daily_scores. daily_scores keeps only the top 100 by
+  //    composite, and composite CONTAINS the fundamental score, so using it would truncate
+  //    the sample on the variable under test.
+  //  • Both sources are scored by the SAME function on the SAME names for each date
+  //    (percentile ranks, 0.3 roe / 0.2 roa / 0.3 npm / 0.2 der inverted — literally the
+  //    production score_fundamental weights). No source gets a different universe or formula.
+  //  • IC = Spearman rank correlation of score vs forward return over `horizon` sessions.
+  //  • naive      = mean IC per staleness offset, pooled across dates.
+  //  • controlled = the same offsets compared WITHIN each score date (paired on the same
+  //    names), then averaged. With quarterly snapshots "older" also means "a different
+  //    quarter/market regime"; pairing per date is what removes that.
+  //  • availability follows each source's own rule. financial_ratios:
+  //    quarter_end + lag_days (never the quarter end itself — that is look-ahead).
+  //    idx_fundamental: its publication month, because it has no fiscal date at all
+  //    (`fs_date` is '' on every row) — the two rules are NOT the same and the freshness
+  //    they yield is reported per date.
+  //  • a per-offset sample requires the codes to exist at offset 0 AND offset k, so the
+  //    staleness curve is always anchored on one fixed sample per date; the offset-0 IC is
+  //    recomputed on that same sample. Otherwise the curve would measure sample changes.
+  router.get('/ic-fund-source', (req, res) => {
+    try {
+      const horizon = Math.max(1, Math.min(60, parseInt(req.query.horizon) || 5));
+      const lagDays = Number.isFinite(parseFloat(req.query.lag_days)) ? parseFloat(req.query.lag_days) : RATIO_LAG_DAYS_DEFAULT;
+      const offsets = [...new Set(String(req.query.offsets || '0,1,2,3').split(',').map(s => parseInt(s.trim())).filter(n => Number.isFinite(n) && n >= 0 && n <= 8))].sort((a, b) => a - b);
+      if (!offsets.length) offsets.push(0);
+
+      const allDates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date').all().map(r => r.trade_date);
+      if (allDates.length < horizon + 2) return res.json({ error: 'Not enough trade dates in idx_daily' });
+      const tdIndex = {}; allDates.forEach((d, i) => { tdIndex[d] = i; });
+      const lastDate = allDates[allDates.length - 1];
+      const to = req.query.to || lastDate;
+      const from = req.query.from || isoAddDays(to, -120);
+
+      const usable = allDates.filter(d => d >= from && d <= to && (tdIndex[d] + horizon) < allDates.length);
+      const maxDates = Math.min(parseInt(req.query.max_dates) || 120, 400);
+      const scoreDates = usable.slice(-maxDates);
+      if (!scoreDates.length) return res.json({ error: 'No score date with a forward observation between ' + from + ' and ' + to });
+
+      // ── snapshot dictionaries ──
+      const series = loadRatioSeries();
+      const monthsA = db.prepare('SELECT DISTINCT snapshot_month FROM idx_fundamental ORDER BY snapshot_month').all().map(r => r.snapshot_month);
+      const calendar = [];
+      series.quarters.forEach((q, qi) => {
+        if (qi < 3) return;
+        let complete = 0, withRow = 0;
+        series.codes.forEach(code => {
+          if (series.byCode[code][q]) withRow++;
+          if (ratioTTMBlock(series, code, q)) complete++;
+        });
+        calendar.push({
+          quarter_end: q, available_from: isoAddDays(q, lagDays),
+          codes_with_row: withRow, codes_ttm_complete: complete, codes_excluded: series.codes.length - complete
+        });
+      });
+
+      // ── preload prices once ──
+      // ac = harga terkoreksi CA (untuk return / PBV-PER point-in-time), close mentah
+      // tetap dipakai untuk gerbang market cap (harga x lembar pada hari itu).
+      const priceRows = db.prepare('SELECT code, trade_date, close, listed_shares, frequency, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date>=? AND trade_date<=? ORDER BY code, trade_date')
+        .all(isoAddDays(from, -60), isoAddDays(to, 30));
+      const pxByCode = {};
+      priceRows.forEach(r => { (pxByCode[r.code] = pxByCode[r.code] || []).push(r); });
+      const fwdCloseCache = {};
+      const closesOn = d => {
+        if (!fwdCloseCache[d]) { const m = {}; db.prepare('SELECT code, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE trade_date=?').all(d).forEach(r => { m[r.code] = r.ac; }); fwdCloseCache[d] = m; }
+        return fwdCloseCache[d];
+      };
+      function universeAt(d) {
+        const out = [];
+        Object.keys(pxByCode).forEach(code => {
+          const s = pxByCode[code];
+          const i = s.findIndex(r => r.trade_date === d);
+          if (i < 0) return;
+          const r = s[i];
+          if (!(r.close > 0) || !(r.listed_shares > 0)) return;
+          if (r.close * r.listed_shares < 50e9) return;
+          const recent = s.slice(Math.max(0, i - 20), i);
+          if (!recent.length) return;
+          if (recent.reduce((a, x) => a + (x.frequency || 0), 0) / recent.length < 10) return;
+          out.push({ code, close: r.close, ac: r.ac });
+        });
+        return out;
+      }
+
+      // ── scoring primitives, copied verbatim from the production scorer ──
+      function rankPct(arr, key, higherIsBetter) {
+        const valid = arr.filter(r => r[key] !== 0 && !isNaN(r[key]));
+        const sorted = valid.slice().sort((a, b) => higherIsBetter ? a[key] - b[key] : b[key] - a[key]);
+        const rm = {}; sorted.forEach((r, i) => { rm[r.code] = Math.round(i / (sorted.length - 1 || 1) * 100); });
+        arr.forEach(r => { r['_r_' + key] = rm[r.code] || 50; });
+      }
+      function spearman(pairs) {
+        const n = pairs.length; if (n < 10) return null;
+        const byA = pairs.slice().sort((a, b) => a.s - b.s);
+        const byB = pairs.slice().sort((a, b) => a.r - b.r);
+        const ra = {}, rb = {};
+        byA.forEach((p, i) => { ra[p.code] = i + 1; });
+        byB.forEach((p, i) => { rb[p.code] = i + 1; });
+        let d2 = 0; pairs.forEach(p => { const d = (ra[p.code] || 0) - (rb[p.code] || 0); d2 += d * d; });
+        return Math.round((1 - 6 * d2 / (n * (n * n - 1))) * 10000) / 10000;
+      }
+
+      // ── per-snapshot loaders ──
+      const fundAcache = {};
+      function fundAMap(month) {
+        if (month in fundAcache) return fundAcache[month];
+        const m = {};
+        try { db.prepare('SELECT code, roe, roa, npm, der, per, pbv, industry FROM idx_fundamental WHERE snapshot_month=?').all(month).forEach(r => { m[r.code] = r; }); } catch (e) {}
+        fundAcache[month] = m; return m;
+      }
+      const indAcache = {};
+      function indAMap(month) {
+        if (month in indAcache) return indAcache[month];
+        const m = {};
+        try { db.prepare('SELECT industry, AVG(per) avg_per, AVG(pbv) avg_pbv FROM idx_fundamental WHERE snapshot_month=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(month).forEach(r => { m[r.industry] = r; }); } catch (e) {}
+        indAcache[month] = m; return m;
+      }
+      const indRcache = {};
+      function indRMap(quarter) {
+        if (quarter in indRcache) return indRcache[quarter];
+        const m = {};
+        try { db.prepare('SELECT industry, AVG(per) avg_per, AVG(pbv) avg_pbv FROM financial_ratios WHERE period=? AND per>0 AND per<200 AND pbv>0 AND pbv<50 GROUP BY industry').all(quarter).forEach(r => { m[r.industry] = r; }); } catch (e) {}
+        indRcache[quarter] = m; return m;
+      }
+      // freshest legal snapshot per source at a score date, then k snapshots further back
+      function snapA(d, offset) {
+        const sm = d.substring(0, 7);
+        let idx = -1;
+        for (let i = monthsA.length - 1; i >= 0; i--) { if (monthsA[i] <= sm) { idx = i; break; } }
+        if (idx < 0) return null;
+        return monthsA[idx - offset] || null;
+      }
+      function snapB(d, offset) {
+        const q = ratioPITSnapshot(series, d, lagDays);
+        if (!q) return null;
+        const qi = series.quarters.indexOf(q);
+        return qi - offset >= 0 ? series.quarters[qi - offset] : null;
+      }
+
+      const AGE_BUCKETS = [[0, 91, '0-3mo'], [91, 183, '3-6mo'], [183, 274, '6-9mo'], [274, 366, '9-12mo'], [366, 99999, '12mo+']];
+      const ageBucketOf = days => (AGE_BUCKETS.find(b => days >= b[0] && days < b[1]) || [0, 0, '?'])[2];
+      const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+
+      const perDate = [];
+      const ageHist = {};
+      const naive = {};   // source → offset → [ic...]
+      const anchor = {};  // source → offset → [offset0 ic on that sample]
+      const paired = {};  // source → offset → [icK - ic0]
+      const sideBySide = { A: [], B: [] }; // offset-0 IC per date, matched sample
+      ['A', 'B'].forEach(s => {
+        naive[s] = {}; anchor[s] = {}; paired[s] = {};
+        offsets.forEach(o => { naive[s][o] = []; anchor[s][o] = []; paired[s][o] = []; });
+      });
+      const valIcs = { A_stored: [], B_stored: [], B_pit: [] };
+
+      for (const d of scoreDates) {
+        const fwdDate = allDates[tdIndex[d] + horizon];
+        const uni = universeAt(d);
+        if (uni.length < 30) continue;
+        const fwd = closesOn(fwdDate);
+        const snapA0 = snapA(d, 0), snapB0 = snapB(d, 0);
+        if (!snapA0 || !snapB0) continue;
+        const A0 = fundAMap(snapA0), B0 = ratioFactorMap(snapB0);
+        // base sample: gate universe ∩ forward price ∩ present in both sources at offset 0
+        const base = uni.filter(u => {
+          const fc = fwd[u.code];
+          return fc > 0 && u.ac > 0 && A0[u.code] && B0[u.code];
+        });
+        if (base.length < 30) continue;
+        const ret = {};
+        base.forEach(u => { ret[u.code] = (fwd[u.code] - u.ac) / u.ac * 100; });
+
+        // offset-0 fundamental scores, by source, on the base sample
+        const rowsA0 = base.map(u => { const f = A0[u.code]; return { code: u.code, roe: f.roe || 0, roa: f.roa || 0, npm: f.npm || 0, der: f.der || 0, per: f.per || 0, pbv: f.pbv || 0, industry: f.industry || '' }; });
+        const rowsB0 = base.map(u => { const f = B0[u.code]; return { code: u.code, roe: f.roe || 0, roa: f.roa || 0, npm: f.npm || 0, der: f.der || 0, per: f.per || 0, pbv: f.pbv || 0, industry: f.industry || '', book_value: f.book_value || 0, eps_ttm: f.eps_ttm || 0, close: u.ac }; });
+        const fundScoreOn = arr => {
+          rankPct(arr, 'roe', true); rankPct(arr, 'roa', true); rankPct(arr, 'npm', true); rankPct(arr, 'der', false);
+          arr.forEach(r => { r.sf = Math.round((r._r_roe * 0.3 + r._r_roa * 0.2 + r._r_npm * 0.3 + r._r_der * 0.2) * 10) / 10; });
+        };
+        fundScoreOn(rowsA0); fundScoreOn(rowsB0);
+        const sfA0 = {}, sfB0 = {};
+        rowsA0.forEach(r => { sfA0[r.code] = r.sf; });
+        rowsB0.forEach(r => { sfB0[r.code] = r.sf; });
+        const icA0 = spearman(base.map(u => ({ code: u.code, s: sfA0[u.code], r: ret[u.code] })));
+        const icB0 = spearman(base.map(u => ({ code: u.code, s: sfB0[u.code], r: ret[u.code] })));
+        if (icA0 != null) sideBySide.A.push(icA0);
+        if (icB0 != null) sideBySide.B.push(icB0);
+
+        // valuation, offset 0 — industry-median-relative; div_yield deliberately excluded
+        const indA = indAMap(snapA0), indB = indRMap(snapB0);
+        const rowsAV = rowsA0.map(r => { const m = indA[r.industry] || {}; return Object.assign({}, r, { per_vs_ind: (r.per > 0 && m.avg_per > 0) ? (r.per / m.avg_per - 1) * 100 : 0, pbv_vs_ind: (r.pbv > 0 && m.avg_pbv > 0) ? (r.pbv / m.avg_pbv - 1) * 100 : 0 }); });
+        const rowsBV = rowsB0.map(r => { const m = indB[r.industry] || {}; return Object.assign({}, r, { per_vs_ind: (r.per > 0 && m.avg_per > 0) ? (r.per / m.avg_per - 1) * 100 : 0, pbv_vs_ind: (r.pbv > 0 && m.avg_pbv > 0) ? (r.pbv / m.avg_pbv - 1) * 100 : 0 }); });
+        const valScoreOn = arr => { rankPct(arr, 'per_vs_ind', false); rankPct(arr, 'pbv_vs_ind', false); arr.forEach(r => { r.sv = Math.round((r._r_per_vs_ind * 0.5 + r._r_pbv_vs_ind * 0.5) * 10) / 10; }); };
+        valScoreOn(rowsAV); valScoreOn(rowsBV);
+        const vA = {}, vB = {};
+        rowsAV.forEach(r => { vA[r.code] = r.sv; }); rowsBV.forEach(r => { vB[r.code] = r.sv; });
+        const icVA = spearman(base.map(u => ({ code: u.code, s: vA[u.code], r: ret[u.code] })));
+        const icVB = spearman(base.map(u => ({ code: u.code, s: vB[u.code], r: ret[u.code] })));
+        if (icVA != null) valIcs.A_stored.push(icVA);
+        if (icVB != null) valIcs.B_stored.push(icVB);
+        // PIT-price valuation from the ratio source: pbv = close/book_value, per = close/eps_ttm
+        const rowsBP = rowsB0.filter(r => r.book_value > 0 && r.eps_ttm > 0).map(r => ({ code: r.code, pbv: r.close / r.book_value, per: r.close / r.eps_ttm }));
+        let icVBP = null;
+        if (rowsBP.length >= 30) { rankPct(rowsBP, 'pbv', false); rankPct(rowsBP, 'per', false); const vp = {}; rowsBP.forEach(r => { vp[r.code] = Math.round((r._r_pbv * 0.5 + r._r_per * 0.5) * 10) / 10; }); icVBP = spearman(rowsBP.map(r => ({ code: r.code, s: vp[r.code], r: ret[r.code] }))); }
+        if (icVBP != null) valIcs.B_pit.push(icVBP);
+
+        // ── staleness sweep, anchored per date and per offset ──
+        const offRows = {};
+        for (const k of offsets) {
+          if (k === 0) { offRows[0] = { n: base.length, icA: icA0, icB: icB0 }; continue; }
+          const sA = snapA(d, k), sB = snapB(d, k);
+          if (!sA && !sB) continue;
+          const Ak = sA ? fundAMap(sA) : null, Bk = sB ? ratioFactorMap(sB) : null;
+          // a source that has no snapshot this far back is skipped, not silently zero-filled
+          const sub = base.filter(u => (!Ak || Ak[u.code]) && (!Bk || Bk[u.code]));
+          if (sub.length < 30) continue;
+          let icAk = null, icBk = null, icA0s = null, icB0s = null;
+          if (Ak) {
+            const rA = sub.map(u => { const f = Ak[u.code]; return { code: u.code, roe: (f.roe || 0), roa: (f.roa || 0), npm: (f.npm || 0), der: (f.der || 0) }; });
+            const rA0 = sub.map(u => { const f = A0[u.code]; return { code: u.code, roe: (f.roe || 0), roa: (f.roa || 0), npm: (f.npm || 0), der: (f.der || 0) }; });
+            fundScoreOn(rA); fundScoreOn(rA0);
+            const fsA = {}, a0 = {};
+            rA.forEach(r => { fsA[r.code] = r.sf; }); rA0.forEach(r => { a0[r.code] = r.sf; });
+            icAk = spearman(sub.map(u => ({ code: u.code, s: fsA[u.code], r: ret[u.code] })));
+            icA0s = spearman(sub.map(u => ({ code: u.code, s: a0[u.code], r: ret[u.code] })));
+          }
+          if (Bk) {
+            const rB = sub.map(u => { const f = Bk[u.code]; return { code: u.code, roe: (f.roe || 0), roa: (f.roa || 0), npm: (f.npm || 0), der: (f.der || 0) }; });
+            const rB0 = sub.map(u => { const f = B0[u.code]; return { code: u.code, roe: (f.roe || 0), roa: (f.roa || 0), npm: (f.npm || 0), der: (f.der || 0) }; });
+            fundScoreOn(rB); fundScoreOn(rB0);
+            const fsB = {}, b0 = {};
+            rB.forEach(r => { fsB[r.code] = r.sf; }); rB0.forEach(r => { b0[r.code] = r.sf; });
+            icBk = spearman(sub.map(u => ({ code: u.code, s: fsB[u.code], r: ret[u.code] })));
+            icB0s = spearman(sub.map(u => ({ code: u.code, s: b0[u.code], r: ret[u.code] })));
+          }
+          offRows[k] = { n: sub.length, snapA: sA, snapB: sB, icA: icAk, icB: icBk, icA0_same_sample: icA0s, icB0_same_sample: icB0s };
+          if (icAk != null && icA0s != null) { naive.A[k].push(icAk); anchor.A[k].push(icA0s); paired.A[k].push(icAk - icA0s); }
+          if (icBk != null && icB0s != null) { naive.B[k].push(icBk); anchor.B[k].push(icB0s); paired.B[k].push(icBk - icB0s); }
+        }
+        if (icA0 != null) { naive.A[0].push(icA0); }
+        if (icB0 != null) { naive.B[0].push(icB0); }
+
+        const ageA = daysBetween(snapA0 + '-01', d);
+        const ageB = daysBetween(snapB0, d);
+        const ab = ageBucketOf(ageB);
+        ageHist[ab] = (ageHist[ab] || 0) + 1;
+        perDate.push({
+          calc_date: d, fwd_date: fwdDate, universe: uni.length, sample: base.length,
+          snap_idx_fundamental: snapA0, age_days_idx_fundamental: ageA,
+          snap_ratio: snapB0, age_days_ratio: ageB, age_bucket_ratio: ab,
+          ic_fundamental_idx_fundamental: icA0, ic_fundamental_ratio_ttm: icB0,
+          ic_val_idx_fundamental: icVA, ic_val_ratio_stored: icVB, ic_val_ratio_pit_price: icVBP,
+          offsets: offRows
+        });
+      }
+
+      if (perDate.length < 2) return res.json({ error: 'Only ' + perDate.length + ' usable score dates — nothing to compare yet', from: from, to: to });
+
+      const mean = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10000) / 10000 : null;
+      const sd = a => a.length > 1 ? Math.sqrt(a.reduce((x, y) => x + (y - a.reduce((p, q) => p + q, 0) / a.length) ** 2, 0) / (a.length - 1)) : 0;
+      const stat = a => {
+        if (!a.length) return { n_dates: 0 };
+        const m = a.reduce((x, y) => x + y, 0) / a.length, s = sd(a);
+        return {
+          n_dates: a.length, mean: Math.round(m * 10000) / 10000,
+          sd: Math.round(s * 10000) / 10000,
+          t: s > 0 ? Math.round(m / (s / Math.sqrt(a.length)) * 100) / 100 : null,
+          win_rate: Math.round(a.filter(v => v > 0).length / a.length * 1000) / 10
+        };
+      };
+      const sweep = {};
+      ['A', 'B'].forEach(s => {
+        sweep[s === 'A' ? 'idx_fundamental' : 'ratio_ttm'] = offsets.map(k => ({
+          offset_snapshots_back: k,
+          label: k === 0 ? 'freshest legally available snapshot' : k + ' snapshot(s) older',
+          naive_ic_at_offset: mean(naive[s][k]),
+          n_dates_naive: naive[s][k].length,
+          anchor_ic_offset0_same_sample: k === 0 ? mean(naive[s][0]) : mean(anchor[s][k]),
+          controlled_paired_delta: k === 0 ? null : mean(paired[s][k]),
+          controlled: k === 0 ? null : stat(paired[s][k])
+        }));
+      });
+
+      // Optional per-code audit of the TTM normalisation, so nobody has to trust the code path.
+      let debugCode = null;
+      if (req.query.code) {
+        const code = String(req.query.code).toUpperCase();
+        const asOf = req.query.as_of || to;
+        const snap = ratioPITSnapshot(series, asOf, lagDays);
+        if (snap) {
+          const qi = series.quarters.indexOf(snap);
+          const win = [series.quarters[qi - 3], series.quarters[qi - 2], series.quarters[qi - 1], snap];
+          const quarters = win.map((q, i) => {
+            const row = series.byCode[code] ? series.byCode[code][q] : null;
+            const sq = ratioSingleQuarter(series, code, q, qi - 3 + i);
+            const head = i === 0 ? series.quarters[qi - 4] : win[i - 1];
+            const hrow = (head && series.byCode[code]) ? series.byCode[code][head] : null;
+            return {
+              period: q, has_row: !!row,
+              ytd_sales: row ? _ratioNum(row.sales) : null, ytd_profit: row ? _ratioNum(row.profit) : null,
+              decumulation_base: q.substring(5, 7) === '03' ? 'Q1 (YTD as-is)' : (head + ' YTD'),
+              base_sales: hrow ? _ratioNum(hrow.sales) : null, base_profit: hrow ? _ratioNum(hrow.profit) : null,
+              single_sales: sq ? sq.sales : null, single_profit: sq ? sq.profit : null
+            };
+          });
+          const t = ratioTTMBlock(series, code, snap);
+          debugCode = {
+            code, as_of: asOf, lag_days: lagDays, snapshot_used: snap, available_from: isoAddDays(snap, lagDays),
+            window: win, quarters,
+            ttm_sales: t ? t.ttm_sales : null, ttm_profit: t ? t.ttm_profit : null,
+            engine_profit_ttm: t ? t.ttm_profit : null, engine_sales_ttm: t ? t.ttm_sales : null,
+            equity_at_snapshot: t ? t.equity : null, assets_at_snapshot: t ? t.assets : null,
+            roe_ttm_pct: t && t.equity > 0 ? Math.round(t.ttm_profit / t.equity * 10000) / 100 : null,
+            roa_ttm_pct: t && t.assets > 0 ? Math.round(t.ttm_profit / t.assets * 10000) / 100 : null,
+            npm_ttm_pct: t && t.ttm_sales > 0 ? Math.round(t.ttm_profit / t.ttm_sales * 10000) / 100 : null,
+            der_stored: t ? t.der : null,
+            excluded: !t, excluded_reason: t ? null : 'incomplete 4-quarter window — code is dropped, not approximated',
+            stored_columns_not_used: (() => { try { const r = db.prepare('SELECT roe, roa, npm, per, pbv FROM financial_ratios WHERE code=? AND period=?').get(code, snap); return r ? { note: 'upstream quarter-annualised, deliberately NOT used', stored_roe: r.roe, stored_roa: r.roa, stored_npm: r.npm, stored_per: r.per, stored_pbv: r.pbv } : null; } catch (e) { return null; } })()
+          };
+        }
+      }
+
+      res.json({
+        ok: true,
+        method: {
+          horizon_sessions: horizon, lag_days_ratio: lagDays, offsets,
+          date_range: [scoreDates[0], scoreDates[scoreDates.length - 1]],
+          universe: 'gate: close>0 & listed_shares>0 & close*listed_shares>=50e9 & avg20d frequency>=10 (rebuilt from idx_daily, not read from daily_scores)',
+          scoring: 'production score_fundamental weights 0.3 roe / 0.2 roa / 0.3 npm / 0.2 der(inverted); percentile ranks; zero treated as missing -> rank 50',
+          valuation: 'per_vs_ind & pbv_vs_ind vs source snapshot industry mean, 0.5/0.5; div_yield EXCLUDED here (identical input to both sources)',
+          availability_idx_fundamental: 'publication month (snapshot_month); table has no fiscal date (fs_date is empty on every row)',
+          availability_ratio: 'quarter_end + ' + lagDays + ' days',
+          this_route_writes: 'nothing'
+        },
+        snapshot_dictionary: {
+          idx_fundamental_months: monthsA.map(m => ({ snapshot_month: m, codes: Object.keys(fundAMap(m)).length })),
+          financial_ratios_calendar: calendar
+        },
+        ttm_window_check: {
+          note: 'a code is excluded, never approximated, when any of the 4 consecutive quarters is missing',
+          latest_window: calendar.length ? calendar[calendar.length - 1] : null,
+          codes_total_in_table_for_ratio_source: series.codes.length
+        },
+        age_distribution_over_score_dates: {
+          basis: 'days between the ratio snapshot quarter end and the score date, realisable dates only (no simulation)',
+          buckets: Object.keys(ageHist).sort().map(k => ({ bucket: k, dates: ageHist[k] })),
+          score_dates_measured: perDate.length
+        },
+        ic_side_by_side_offset0: {
+          note: 'both sources scored by the same function on the same names, same date, freshest legally available snapshot each',
+          ic_fundamental_idx_fundamental: stat(sideBySide.A),
+          ic_fundamental_ratio_ttm: stat(sideBySide.B),
+          paired_delta_ratio_minus_idxfund: stat(sideBySide.B.map((v, i) => (sideBySide.A[i] == null ? null : v - sideBySide.A[i])).filter(v => v != null)),
+          ic_val_idx_fundamental: stat(valIcs.A_stored),
+          ic_val_ratio_stored_price: stat(valIcs.B_stored),
+          ic_val_ratio_pit_price: stat(valIcs.B_pit)
+        },
+        ic_staleness_naive_vs_controlled: sweep,
+        debug_code: debugCode,
+        per_date: perDate,
+        limitations: [
+          'Window is short: ' + perDate.length + ' score dates inside ' + scoreDates[0] + '..' + scoreDates[scoreDates.length - 1] + ', one market regime, overlapping ' + horizon + '-session forward windows — the paired t-stats are optimistic, treat them as descriptive.',
+          'The gate (close*listed_shares) only exists for the last ~51 sessions (idx_daily.listed_shares comes from stock_summary); earlier dates produce an empty universe, so this study cannot reach back to the 2021-2025 snapshots that financial_ratios does contain.',
+          'idx_fundamental has only ' + monthsA.length + ' snapshots (' + monthsA.join(', ') + '), so its staleness sweep has at most ' + (monthsA.length - 1) + ' usable offsets.',
+          'Realised staleness across the score dates is only ' + Object.keys(ageHist).sort().join('/') + '; the deeper offsets in the sweep are SIMULATED (older snapshot shown to a date that did not have it).',
+          'financial_ratios contains out-of-calendar dates (46 rows) that are ignored by the quarter-end filter, and 191 distinct period dates of which only 39 are quarter ends.'
+        ]
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
   // ═══ OPTIMIZE WEIGHTS — Grid Search ═══
   // Exhaustive search over all weight combinations (step=5, sum=100)
   // For each combo, compute weighted composite score → Spearman IC vs forward return → IR
@@ -2665,11 +3112,23 @@ module.exports = function(upload) {
     }
   });
 
-  // --- Import Financial Ratios ---
+  // --- Import Financial Ratios (quarterly → financial_ratios, keyed (code, period)) ---
+  // This endpoint used to call idxBridge.importFinancialRatios(), which wrote to
+  // idx_fundamental keyed (snapshot_month, code) and read r.year/r.month — columns that do
+  // not exist in IDX-API's financial_ratio table. Every row therefore got the CURRENT month,
+  // so 19,373 quarterly rows collapsed onto ~1,000 (snapshot_month, code) keys and clobbered
+  // the stock_screener snapshot for that month. Its `rows` counted rows PROCESSED, so
+  // {"ok":true,"rows":19373} was a false success signal.
+  // importFinancialRatiosFull() is the correct path: target financial_ratios, keyed
+  // (code, period), period = epochToDate(r.period). The response separates the three
+  // numbers that used to be conflated: rows processed / persisted (rows written) / inserted
+  // (rows actually added), plus `total` (target table size after the run).
+  // A healthy idempotent re-run: rows≈19373, persisted≈19373, inserted=0, total=19373.
   router.post('/sync/financial-ratios', (req, res) => {
     try {
-      const result = idxBridge.importFinancialRatios(db);
-      logSync('financial_ratios', '', result.rows, 'ok', 'bridge');
+      const result = idxBridge.importFinancialRatiosFull(db);
+      logSync('financial_ratios', '', result.rows, 'ok',
+        `bridge: rows=${result.rows} persisted=${result.persisted} inserted=${result.inserted} total=${result.total}`);
       res.json({ ok: true, ...result });
     } catch (e) {
       logSync('financial_ratios', '', 0, 'error', e.message);
@@ -2741,8 +3200,78 @@ module.exports = function(upload) {
     }
   });
 
+  // --- Import Stock Price History (daily OHLCV series → idx_daily) ---
+  // Why this route exists: importStockPriceHistory() had exactly ONE caller, in
+  // deno-proxy's runBridgeImport — which sits behind the dead Deno path (:3456
+  // refuses connections). So the 2020→2026 series was importable only by a manual
+  // `docker exec node -e`, and idx_daily silently stopped at 2025-01-02 while
+  // IDX-API held data back to 2020-01-02. scripts/check-bridge-parity.py caught it.
+  //
+  // Default is a BOUNDED incremental window (target frontier − overlap), NOT the
+  // full series: {full:true} re-upserts all 1,382,240 rows (~18s) and, because
+  // better-sqlite3 is synchronous, blocks every other request for that time.
+  // Body: { from, to } | { date } | { overlap_days } | { full: true }
+  router.post('/sync/price-history', (req, res) => {
+    const { from, to, date, full, overlap_days } = req.body || {};
+    const isDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (from && !isDay(from)) return res.status(400).json({ ok: false, error: 'from must be YYYY-MM-DD' });
+    if (to && !isDay(to)) return res.status(400).json({ ok: false, error: 'to must be YYYY-MM-DD' });
+    if (date && !isDay(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+    if (from && to && from > to) return res.status(400).json({ ok: false, error: 'from must not be after to' });
+    if (full && (from || to || date)) return res.status(400).json({ ok: false, error: 'full cannot be combined with from/to/date' });
+    if (overlap_days !== undefined && (!Number.isFinite(Number(overlap_days)) || Number(overlap_days) < 0)) {
+      return res.status(400).json({ ok: false, error: 'overlap_days must be a number >= 0' });
+    }
+    try {
+      const result = idxBridge.importStockPriceHistory(db, {
+        from, to, date, full: full === true || full === 'true', overlapDays: overlap_days
+      });
+      logSync('price_history', `${result.from || ''}..${result.to || ''}`, result.rows, 'ok',
+        `mode=${result.mode} rows=${result.rows} inserted=${result.inserted} total=${result.total}`);
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      logSync('price_history', date || `${from || ''}..${to || ''}`, 0, 'error', e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // --- Import All (one-click) ---
-  router.post('/sync/import-all', (req, res) => {
+  // ── Post-sync score refresh ─────────────────────────────────────────────
+  // A sync that fills idx_daily but leaves daily_scores empty makes the agent
+  // rail's /scores endpoint useless ("nothing is stored" was the original gap).
+  // The scoring handler already exists and is idempotent (INSERT OR REPLACE on
+  // (calc_date, code)), so drive it over HTTP instead of duplicating its logic.
+  // Failures are reported back in the caller's payload, never swallowed.
+  async function refreshScores(afterDate) {
+    const port = parseInt(process.env.PORT) || 3000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180000);
+    const out = { attempted: true };
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/idx/composite-score`, {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' },
+          process.env.API_KEY ? { 'x-api-key': process.env.API_KEY } : {}),
+        body: JSON.stringify({}),
+        signal: ctrl.signal,
+      });
+      const j = await r.json().catch(() => ({}));
+      out.http = r.status;
+      out.trade_date = j.trade_date || null;
+      out.scored = typeof j.total_scored === 'number' ? j.total_scored : null;
+      if (!r.ok) out.error = j.error || ('HTTP ' + r.status);
+      logSync('score_refresh', afterDate || '', out.scored || 0, r.ok ? 'ok' : 'error', JSON.stringify(out));
+    } catch (e) {
+      out.error = e.name === 'AbortError' ? 'timeout after 180s' : e.message;
+      out.scored = null;
+      logSync('score_refresh', afterDate || '', 0, 'error', JSON.stringify(out));
+    } finally {
+      clearTimeout(timer);
+    }
+    return out;
+  }
+
+  router.post('/sync/import-all', async (req, res) => {
     try {
       const results = {};
       // Original 8
@@ -2770,14 +3299,24 @@ module.exports = function(upload) {
         ['delisting', 'importCompanyDelistings'], ['relisting', 'importCompanyRelistings'],
         ['prof_ann', 'importProfileAnnouncements'], ['dealers', 'importParticipantDealers'],
         ['prof_part', 'importParticipantProfiles'], ['trade_sum', 'importTradeSummary'],
-        ['fin_ratios', 'importFinancialRatiosFull']
+        ['fin_ratios', 'importFinancialRatiosFull'],
+        // Bounded incremental top-up (the default mode of importStockPriceHistory),
+        // NOT the 1.38M-row 2020→2026 backfill. Without this step idx_daily drifts
+        // away from IDX-API again — which is exactly the drift the parity guard
+        // caught on 2026-10-14, because the only caller lived in the dead Deno path.
+        // Runs last on purpose: stock_summary already wrote the same (trade_date, code)
+        // rows for the last ~51 sessions, and both sources were verified identical
+        // there (49,113 pairs, 0 close/volume mismatches), so the order cannot make a
+        // daily close flap between the two writers.
+        ['price_hist', 'importStockPriceHistory']
       ];
       for (const [key, fn] of extras) {
         try { if (typeof idxBridge[fn] === 'function') results[key] = idxBridge[fn](db); } catch (e) { results[key] = { rows: 0, error: e.message }; }
       }
       const totalRows = Object.values(results).reduce((s, r) => s + (r?.rows || 0), 0);
       logSync('import_all', '', totalRows, 'ok', JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v?.rows || 0]))));
-      res.json({ ok: true, total_rows: totalRows, detail: results });
+      const scores = await refreshScores('');
+      res.json({ ok: true, total_rows: totalRows, scores, detail: results });
     } catch (e) {
       logSync('import_all', '', 0, 'error', e.message);
       res.status(500).json({ error: e.message });
@@ -2805,13 +3344,35 @@ module.exports = function(upload) {
       const indexCount = db.prepare('SELECT COUNT(DISTINCT trade_date) as c FROM idx_indices').get()?.c || 0;
       const tickerCount = db.prepare('SELECT COUNT(DISTINCT code) as c FROM idx_daily').get()?.c || 0;
       const recentLogs = db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT 20').all();
+      // ── Data availability boundary (0 ≠ zero, but "tidak tersedia") ──
+      // idx_daily.bid/bid_vol/offer/offer_vol/listed_shares/tradeable_shares are filled
+      // only as far as IDX-API `stock_summary` carries them (51 sessions on 2026-10-14).
+      // Outside that window they hold the column DEFAULT 0, which means NOT AVAILABLE —
+      // it is not a real zero. Verified 2026-10-14: 977,749/977,749 rows before 2025 and
+      // 355,378/404,491 rows of 2025+ carried listed_shares=0 BEFORE the price backfill
+      // too, so this is a pre-existing table-wide condition, not a backfill artefact.
+      // Not recoverable either: IDX-API `issued_history` is empty (0 rows) and
+      // `additional_listing` holds 165 rows, so there is no historical share-count series.
+      // Ramification: (close*listed_shares) is a FAKE market cap of 0 there, and the
+      // liquidity gate `market_cap > 50e9` in /composite-score/backfill therefore
+      // excludes 100% of stocks on any date before that window (counted and reported).
+      const sharesWindow = db.prepare('SELECT MIN(trade_date) as f, MAX(trade_date) as t, COUNT(*) as r FROM idx_daily WHERE listed_shares > 0').get() || {};
+      const priceWindow = db.prepare('SELECT MIN(trade_date) as f, MAX(trade_date) as t, COUNT(*) as r FROM idx_daily WHERE close > 0').get() || {};
       let bridgeStatus = { ok: false };
       try { bridgeStatus = idxBridge.getIdxApiStatus(); } catch (e) { bridgeStatus = { ok: false, error: e.message }; }
       res.json({
         latest: { stock: latestStock, index: latestIndex, fundamental: latestFund },
         counts: { stock_dates: stockCount, index_dates: indexCount, tickers: tickerCount },
         recent_syncs: recentLogs,
-        bridge: bridgeStatus
+        bridge: bridgeStatus,
+        data_availability: {
+          price_history: { from: priceWindow.f || '', to: priceWindow.t || '', rows: priceWindow.r || 0, zero_means: 'no_session' },
+          shares_bid_offer: {
+            from: sharesWindow.f || '', to: sharesWindow.t || '', rows: sharesWindow.r || 0,
+            zero_means: 'not_available',
+            note: 'listed_shares/tradeable_shares/bid/offer: 0 = tidak tersedia outside this window; market_cap derived from them is not a real value there'
+          }
+        }
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -2819,14 +3380,15 @@ module.exports = function(upload) {
   });
 
   // --- Sync Status ---
-  router.post('/sync/today', (req, res) => {
+  router.post('/sync/today', async (req, res) => {
     const today = new Date();
     const dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
     try {
       const stockResult = idxBridge.importStockSummary(db, { date: dateStr });
       const indexResult = idxBridge.importIndexSummary(db, { date: dateStr });
       logSync('today', dateStr, stockResult.rows + indexResult.rows, 'ok', 'stock=' + stockResult.rows + ' index=' + indexResult.rows);
-      res.json({ ok: true, date: dateStr, stock_rows: stockResult.rows, index_rows: indexResult.rows });
+      const scores = await refreshScores(dateStr);
+      res.json({ ok: true, date: dateStr, stock_rows: stockResult.rows, index_rows: indexResult.rows, scores });
     } catch (e) {
       logSync('today', dateStr, 0, 'error', e.message);
       res.status(500).json({ error: e.message });
@@ -2842,7 +3404,9 @@ module.exports = function(upload) {
   try {
     const setupDenoProxy = require('../utils/deno-proxy');
     setupDenoProxy(router, db, idxBridge, logSync);
-    console.log('[IDX] Deno proxy routes registered');
+    console.log('[IDX] Deno proxy routes registered' + (process.env.DENO_SYNC_URL
+      ? ` (live -> ${process.env.DENO_SYNC_URL})`
+      : ' (DISABLED - 501 shims; upstream fetch is owned by IDX-API daily-sync.sh)'));
   } catch (e) {
     console.warn('[IDX] Deno proxy not loaded:', e.message);
   }
@@ -2859,6 +3423,15 @@ module.exports = function(upload) {
   const NON_YAHOO_RAIL = /^(investing|fred|tradingeconomics|te|rates|external|archive|csv)/i;
   const SOURCE_RE = /^[A-Za-z0-9_.:\/-]{1,64}$/;
   const isYahooOwned = (src) => !src || !NON_YAHOO_RAIL.test(String(src).trim());
+
+  // ─── Sesi bursa: bar Sabtu/Minggu (kanban t_4acc7bf7) ───
+  // Kolom `session` (generated di db.js dari trade_date) menandai bar 'weekend'. Jendela harga —
+  // ret_5d/ret_20d, chg_5d/chg_20d, MA, seri untuk chart — memakai predikat ini supaya
+  // "5 hari"/"20 hari" berarti 5/20 SESI bursa, bukan 5/20 baris. Tanpa ini, satu-dua bar Minggu
+  // (sesi elektronik futures / artefak agregasi sumber) memendekkan jendela secara diam-diam.
+  // Bar-nya TIDAK dihapus: itu tetap kutipan sumber (mis. CL/HG/NG sungguh diperdagangkan Minggu
+  // malam), jadi tetap tersimpan + tetap bisa dibaca utuh lewat `?sessions=all`.
+  const REGULAR_SESSION = "COALESCE(session,'regular')<>'weekend'";
 
   function existingSources(code) {
     return db.prepare(
@@ -2941,6 +3514,13 @@ module.exports = function(upload) {
   const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
 
   /** Gerbang per-bar: nilai yang boleh disimpan + alasannya. */
+  // Seri non-harga (makro/fundamental) boleh bernilai ≤ 0: deflasi, defisit, kontraksi.
+  // Seri harga tetap wajib > 0 (t_0e4e2cba).
+  function isNonPriceSeries(code, category) {
+    const c = String(category || '').toLowerCase();
+    return c === 'macro' || c === 'fundamental' || /^MACRO_/.test(String(code || ''));
+  }
+
   function gateBar(r, fillMissing) {
     const c = numOrNull(r.close);
     const o = numOrNull(r.open), h = numOrNull(r.high), l = numOrNull(r.low);
@@ -3219,7 +3799,8 @@ module.exports = function(upload) {
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
       if (!SOURCE_RE.test(source)) return res.status(400).json({ error: 'source tidak valid (maks 64 karakter, [A-Za-z0-9_.:/-])' });
 
-      const gated = rows.filter(r => r && r.date && r.close > 0).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const isNonPrice = isNonPriceSeries(code, category);
+      const gated = rows.filter(r => r && r.date && (isNonPrice ? Number.isFinite(Number(r.close)) : r.close > 0)).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
       const verdict = explicitMode || seriesVerdict(gated);
       const priceOnly = verdict === 'price_only';
       // Pemanggil menyatakan sendiri serinya price_only -> ketiadaan O/H/L di payload berarti
@@ -3317,6 +3898,206 @@ module.exports = function(upload) {
   // permintaan dijawab 409, supaya pencampuran dua basis tidak pernah terjadi "kecelakaan".
   // fill_missing default FALSE di sini: jalur baru, jadi jangan warisi kebiasaan mengisi nilai
   // hilang dengan close (itu mengarang angka — temuan review t_2bda3126).
+  // ═══ /api/idx/internals-extra — sektor & konsentrasi kepemilikan (t_19f4f0d4) ═══
+  router.get('/internals-extra', (req, res) => {
+    try {
+      // 1) Rotasi sektor: rata-rata ret_20d per sektor pada hari skor terakhir
+      const day = db.prepare('SELECT MAX(calc_date) d FROM daily_scores').get().d;
+      const sectors = day ? db.prepare(
+        `SELECT sector, COUNT(*) n, ROUND(AVG(ret_20d), 2) avg20, ROUND(AVG(change_pct), 2) avg1
+           FROM daily_scores WHERE calc_date=? AND sector IS NOT NULL AND sector<>''
+           GROUP BY sector HAVING n >= 5 ORDER BY avg20 DESC`).all(day) : [];
+
+      // 2) Konsentrasi kepemilikan >=1% pada periode terbaru
+      const per = db.prepare('SELECT MAX(period_date) p FROM ownership_1pct WHERE is_current=1').get().p;
+      let own = null;
+      if (per) {
+        const agg = db.prepare(
+          `SELECT code, COUNT(*) holders, ROUND(SUM(pct), 2) sum_pct,
+                  ROUND(SUM(CASE WHEN local_foreign='F' THEN pct ELSE 0 END), 2) foreign_pct,
+                  ROUND(MAX(pct), 2) top_pct
+             FROM ownership_1pct WHERE is_current=1 AND period_date=? GROUP BY code`).all(per);
+        const hhi = agg.map(r => ({ ...r, hhi: Math.round(r.sum_pct * r.top_pct) }));
+        const totalForeign = agg.reduce((a, r) => a + (r.foreign_pct || 0), 0);
+        const totalPct = agg.reduce((a, r) => a + (r.sum_pct || 0), 0);
+        own = {
+          period: per, issuers: agg.length,
+          foreign_share_of_tracked: totalPct ? Math.round(totalForeign / totalPct * 1000) / 10 : null,
+          most_concentrated: agg.slice().sort((a, b) => b.top_pct - a.top_pct).slice(0, 5),
+          biggest_foreign: agg.slice().sort((a, b) => (b.foreign_pct || 0) - (a.foreign_pct || 0)).slice(0, 5),
+        };
+      }
+      res.json({ ok: true, as_of: day, sectors: { top: sectors.slice(0, 3), bottom: sectors.slice(-3).reverse() }, ownership: own });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
+  // ═══ /api/idx/regime-score — 4 skor regime (Market Regime redesign, t_19f4f0d4) ═══
+  // Aturan eksplisit, bukan kotak hitam: setiap skor 0-100 dan komponennya ikut dikirim
+  // supaya bisa diperiksa. Label: >=65 positif, 45-65 netral, <45 negatif.
+  router.get('/regime-score', (req, res) => {
+    try {
+      const pctBack = (code, k) => {
+        const rows = db.prepare('SELECT close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(code, k + 1);
+        if (rows.length < k + 1) return null;
+        const last = rows[0].close, base = rows[k].close;
+        if (!base) return null;
+        return (last / base - 1) * 100;
+      };
+      const deltaBack = (code, k) => {
+        const rows = db.prepare('SELECT close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT ?').all(code, k + 1);
+        if (rows.length < k + 1) return null;
+        return Math.round((rows[0].close - rows[k].close) * 100) / 100;
+      };
+      const sign100 = (v, th) => (v === null ? 50 : v < -th ? 100 : v > th ? 0 : 50);
+      const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
+
+      // 1) Risk appetite: porsi aset risiko yang naik 20 periode
+      const riskCodes = db.prepare(
+        `SELECT code FROM custom_tickers WHERE category IN ('global_index','commodity','commodity_unverified')`).all().map(r => r.code);
+      let up = 0, seen = 0;
+      for (const c of riskCodes) {
+        const v = pctBack(c, 20);
+        if (v === null) continue;
+        seen++; if (v > 0) up++;
+      }
+      const risk = seen ? clamp(up / seen * 100) : null;
+
+      // 2) Eksternal: rupiah, dolar, UST10Y — semuanya "turun = baik" untuk Indonesia
+      const idr = pctBack('USDIDR', 20), dxy = pctBack('DXY', 20), ust = deltaBack('US10Y', 20);
+      // UST dalam poin persen; ambang 5 bp (0,05 pp) lebih masuk akal daripada 0,5 pp.
+      const extParts = [sign100(idr, 0.5), sign100(dxy, 0.5), sign100(ust === null ? null : ust * 100, 5)];
+      const external = clamp(extParts.reduce((a, b) => a + b, 0) / 3);
+
+      // 3) Likuiditas domestik: SRBI mengecil = absorpsi turun (longgar), BI rate turun = longgar
+      // BI_RATE hanya menyimpan satu baris (job menimpa tanggal yang sama), jadi arah
+      // kebijakan diambil dari seri bulanan MACRO_BI_RATE.
+      const srbi = pctBack('SRBI_TOTAL', 1), biD = deltaBack('MACRO_BI_RATE', 3);
+      const liqParts = [sign100(srbi, 1.0), biD === null ? 50 : biD < 0 ? 100 : biD > 0 ? 0 : 50];
+      const liquidity = clamp(liqParts.reduce((a, b) => a + b, 0) / 2);
+
+      // 4) Equity: breadth (close > MA50) + IHSG 20 hari
+      const lastDay = db.prepare('SELECT MAX(calc_date) d FROM daily_scores').get().d;
+      const br = lastDay ? db.prepare(
+        `SELECT COUNT(*) n, SUM(CASE WHEN close > ma50 AND ma50 > 0 THEN 1 ELSE 0 END) u
+           FROM daily_scores WHERE calc_date=?`).get(lastDay) : { n: 0, u: 0 };
+      const breadth = br.n ? (br.u / br.n) * 100 : null;
+      const ihsgRows = db.prepare(
+        `SELECT value FROM index_chart WHERE index_code='COMPOSITE' ORDER BY chart_date DESC LIMIT 21`).all();
+      const ihsg20 = ihsgRows.length === 21 && ihsgRows[20].value
+        ? (ihsgRows[0].value / ihsgRows[20].value - 1) * 100 : null;
+      const ihsgScore = ihsg20 === null ? 50 : clamp(50 + ihsg20 * 12.5);
+      const equity = breadth === null ? null : clamp((breadth + ihsgScore) / 2);
+
+      const parts = [risk, external, liquidity, equity].filter(v => v !== null);
+      const composite = parts.length ? clamp(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+      const label = (v) => (v === null ? 'n/a' : v >= 65 ? 'positif' : v >= 45 ? 'netral' : 'negatif');
+
+      res.json({
+        ok: true,
+        as_of: lastDay || new Date().toISOString().slice(0, 10),
+        scores: { risk, external, liquidity, equity, composite },
+        labels: { risk: label(risk), external: label(external), liquidity: label(liquidity), equity: label(equity), composite: label(composite) },
+        components: {
+          risk_up_share: seen ? Math.round(up / seen * 100) : null, risk_seen: seen,
+          usdidr_20d: idr === null ? null : Math.round(idr * 100) / 100,
+          dxy_20d: dxy === null ? null : Math.round(dxy * 100) / 100,
+          us10y_delta_20d: ust,
+          srbi_total_1m: srbi === null ? null : Math.round(srbi * 100) / 100,
+          bi_rate_delta_3m: biD,
+          breadth_ma50: breadth === null ? null : Math.round(breadth * 10) / 10,
+          ihsg_20d: ihsg20 === null ? null : Math.round(ihsg20 * 100) / 100,
+          breadth_day: lastDay,
+        },
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
+  // ═══ /api/idx/monitor — monitor lintas aset (Market Regime redesign) ═══
+  // Satu payload untuk semua seri aktif: level, perubahan per horizon, persentil,
+  // tanggal acuan, sumber, dan status basi. Menambah seri baru TIDAK perlu ubah UI.
+  router.get('/monitor', (req, res) => {
+    try {
+      const YEAR = String(new Date().getFullYear());
+      const tickers = db.prepare(
+        `SELECT code, name, category, source, last_date, first_date FROM custom_tickers ORDER BY category, name`).all();
+      const q = db.prepare(
+        `SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 400`);
+      const groups = {};
+      const coverage = { stale: [], thin: [] };
+
+      for (const t of tickers) {
+        const rowsDesc = q.all(t.code);
+        if (!rowsDesc.length) { coverage.thin.push({ code: t.code, name: t.name, reason: 'tanpa baris' }); continue; }
+        const rows = rowsDesc.slice().reverse();               // ascending
+        const n = rows.length;
+        const last = rows[n - 1];
+        // kadensi dari median jarak hari
+        const gaps = [];
+        for (let i = 1; i < n; i++) {
+          const d = (new Date(rows[i].trade_date) - new Date(rows[i - 1].trade_date)) / 86400000;
+          if (d > 0) gaps.push(d);
+        }
+        gaps.sort((a, b) => a - b);
+        const med = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1;
+        const freq = med <= 4 ? 'D' : med <= 10 ? 'W' : med <= 35 ? 'M' : 'Q';
+        const back = (k) => (n - 1 - k >= 0 ? rows[n - 1 - k].close : null);
+        const pct = (a, b) => (a != null && b != null && b !== 0 ? Math.round((a / b - 1) * 10000) / 100 : null);
+        // jarak horizon disesuaikan kadensi: 5 periode untuk data harian tidak sama artinya
+        // dengan 5 periode untuk data bulanan (5 bulan). Lags dipakai UI untuk label kolom.
+        const lags = freq === 'D' ? { a: 1, b: 5, c: 20 }
+          : freq === 'W' ? { a: 1, b: 4, c: 12 }
+          : freq === 'M' ? { a: 1, b: 3, c: 12 }
+          : { a: 1, b: 4, c: 12 };
+        // Persen perubahan hanya bermakna untuk seri harga yang selalu positif.
+        // Untuk suku bunga, neraca, dan seri yang bisa melewati nol, pakai SELISIH:
+        // BI Rate 5,75 vs 4,75 adalah +100 bp, bukan +21,05%.
+        const priceLike = ['commodity', 'commodity_unverified', 'global_index', 'currency'].includes(t.category || 'other')
+          && rows.every(r => r.close > 0);
+        const mode = priceLike ? 'pct' : 'delta';
+        const ch = (k) => {
+          const b = back(k);
+          if (b == null || last.close == null) return null;
+          return mode === 'pct' ? pct(last.close, b) : Math.round((last.close - b) * 100) / 100;
+        };
+        // YTD: baris pertama tahun berjalan
+        const ytdBase = rows.find(r => String(r.trade_date).slice(0, 4) === YEAR);
+        // persentil 1 tahun (365 hari terakhir)
+        const cut = new Date(last.trade_date); cut.setDate(cut.getDate() - 365);
+        const win = rows.filter(r => new Date(r.trade_date) >= cut).map(r => r.close);
+        const pctile = win.length >= 8
+          ? Math.round(win.filter(v => v <= last.close).length / win.length * 100) : null;
+        const staleDays = Math.round((Date.now() - new Date(last.trade_date).getTime()) / 86400000);
+        const isoDate = String(last.trade_date).replace(/\//g, '-');
+        const item = {
+          code: t.code, name: t.name, unit: null, freq, lags, mode,
+          last: last.close, as_of: isoDate, source: t.source,
+          chg_1: ch(lags.a), chg_5: ch(lags.b), chg_20: ch(lags.c),
+          chg_ytd: (mode === 'pct'
+            ? pct(last.close, ytdBase ? ytdBase.close : null)
+            : (ytdBase ? Math.round((last.close - ytdBase.close) * 100) / 100 : null)),
+          pctile_1y: pctile, n, stale_days: staleDays,
+        };
+        const g = t.category || 'other';
+        (groups[g] = groups[g] || []).push(item);
+        // Ambang basi per sifat seri: suku bunga hanya berubah saat RDG (bulanan),
+        // makro terbit bulanan — jangan ditandai basi hanya karena nilainya tidak berubah.
+        const staleLimit = (t.category === 'rates') ? 45
+          : (t.category === 'macro') ? (freq === 'Q' ? 130 : 60)
+          : (freq === 'D' ? 5 : freq === 'W' ? 12 : freq === 'M' ? 45 : 130);
+        if (staleDays > staleLimit) {
+          coverage.stale.push({ code: t.code, name: t.name, as_of: last.trade_date, days: staleDays, freq });
+        }
+      }
+      res.json({ ok: true, as_of: new Date().toISOString().slice(0, 10), groups, coverage });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
   router.post('/custom/replace', (req, res) => {
     try {
       const code = String(req.body.code || '').toUpperCase().trim();
@@ -3334,7 +4115,8 @@ module.exports = function(upload) {
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
 
       // Gerbang OHLC yang sama seperti /custom/upsert — jalur tulis tidak boleh berbeda aturan.
-      const gated = rows.filter(r => r && r.date && r.close > 0).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const isNonPrice = isNonPriceSeries(code, category);
+      const gated = rows.filter(r => r && r.date && (isNonPrice ? Number.isFinite(Number(r.close)) : r.close > 0)).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
       const verdict = explicitMode || seriesVerdict(gated);
       const priceOnly = verdict === 'price_only';
       const declaredPriceOnly = explicitMode === 'price_only';
@@ -3794,11 +4576,17 @@ module.exports = function(upload) {
   });
 
   // Get custom ticker OHLC data (for preview)
+  // `?sessions=regular` = sesi bursa saja (bar Sabtu/Minggu dibuang — kolom `session` generated).
+  // Default `all` disengaja: pembaca lama (rail yang memverifikasi jumlah bar hasil tulis)
+  // harus tetap melihat SELURUH baris tersimpan, bukan subset.
   router.get('/custom/ohlc/:code', (req, res) => {
     try {
       const code = req.params.code.toUpperCase().trim();
       const limit = parseInt(req.query.limit) || 0;
-      let sql = 'SELECT * FROM custom_ohlc WHERE code=? ORDER BY trade_date';
+      const sessions = String(req.query.sessions || 'all').toLowerCase();
+      let sql = 'SELECT * FROM custom_ohlc WHERE code=?';
+      if (sessions === 'regular') sql += ` AND ${REGULAR_SESSION}`;
+      sql += ' ORDER BY trade_date';
       if (limit) sql += ' LIMIT ' + limit;
       const rows = db.prepare(sql).all(code);
       res.json(rows);
@@ -3935,12 +4723,15 @@ module.exports = function(upload) {
       try {
         const globalTickers = db.prepare("SELECT code, name, category, linked_sector FROM custom_tickers WHERE category='global_index' ORDER BY code").all();
         global = globalTickers.map(t => {
-          const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
+          const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 60`).all(t.code);
           if (!rows.length) return { code: t.code, name: t.name || t.code };
           const now = rows[0].close;
           const d1 = rows[1] ? rows[1].close : now;
-          const d5 = rows[4] ? rows[4].close : now;
-          const d20 = rows[19] ? rows[19].close : now;
+          // rows[0] = bar terbaru, jadi "N sesi lalu" = rows[N]. Sebelumnya rows[4]/rows[19]
+          // = 4/19 sesi tapi dilabeli "5D"/"20D" (off-by-one, temuan review t_c3d94014).
+          // Konvensi mayoritas berkas ini + market.js (back(5)=asc[n-6]) = 5/20 sesi.
+          const d5 = rows[5] ? rows[5].close : now;
+          const d20 = rows[20] ? rows[20].close : now;
           return {
             code: t.code, name: t.name || t.code, close: now, date: rows[0].trade_date,
             chg_pct: d1 > 0 ? Math.round((now - d1) / d1 * 10000) / 100 : 0,
@@ -3959,7 +4750,7 @@ module.exports = function(upload) {
         const freshCtx = freshnessUtil.buildContext(db);
         commodityFreshCtx = freshCtx;
         commodities = cmdTickers.map(t => {
-          const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(t.code);
+          const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 60`).all(t.code);
           // no_series: tidak ada seri harga (≤1 observasi). Dipakai UI untuk menulis
           // "tanpa seri harga" alih-alih menampilkan level tunggal/0 seolah tren
           // (COKING_COAL & KRAFT_PULP: tidak ada kandidat di investing, t_6d027516 r5).
@@ -3969,8 +4760,9 @@ module.exports = function(upload) {
             return { code: t.code, name: t.name || t.code, linked_sector: t.linked_sector || '', points: 0, no_series: true, ohlc_mode: t.ohlc_mode || null, stale: nf.stale, lag_sessions: nf.lag_sessions, lag_capped: nf.lag_capped, ref_date: nf.ref_date, stale_date: nf.last_date, expected_lag_sessions: nf.expected_lag_sessions, excess_sessions: nf.excess_sessions, state: nf.state };
           }
           const now = rows[0].close;
-          const d5 = rows[4] ? rows[4].close : now;
-          const d20 = rows[19] ? rows[19].close : now;
+          // rows[0] = bar terbaru -> "5/20 sesi lalu" = rows[5]/rows[20] (off-by-one t_c3d94014).
+          const d5 = rows[5] ? rows[5].close : now;
+          const d20 = rows[20] ? rows[20].close : now;
           const fresh = freshnessUtil.seriesFreshness(freshCtx, freshnessUtil.lastRegularBarDate(rows), t.code);
           return {
             code: t.code, name: t.name || t.code, close: now, points: rows.length,
@@ -4005,12 +4797,13 @@ module.exports = function(upload) {
 
       // IHSG
       try {
-        const ihsgRows = db.prepare("SELECT trade_date, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 60").all();
-        if (ihsgRows.length >= 20) {
+        const ihsgRows = db.prepare("SELECT trade_date, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 61").all();
+        if (ihsgRows.length >= 21) {
           const now = ihsgRows[0].close;
           const d1 = ihsgRows[1] ? ihsgRows[1].close : now;
-          const d5 = ihsgRows[4] ? ihsgRows[4].close : now;
-          const d20 = ihsgRows[19] ? ihsgRows[19].close : now;
+          // rows[0] = bar terbaru -> "N sesi lalu" = rows[N] (off-by-one t_c3d94014).
+          const d5 = ihsgRows[5] ? ihsgRows[5].close : now;
+          const d20 = ihsgRows[20] ? ihsgRows[20].close : now;
           const chg1d = d1 > 0 ? Math.round((now - d1) / d1 * 10000) / 100 : 0;
           const chg20 = d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0;
           let regime = 'sideways';
@@ -4263,30 +5056,36 @@ module.exports = function(upload) {
           };
 
           macroTickers.forEach(t => {
-            const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(t.code);
+            // Blok ini dulu membaca custom_ohlc TANPA filter sesi, jadi USDIDR/USDCNY
+            // (31 bar Minggu masing-masing) menggeser jendela 5D/20D. Disamakan dengan
+            // jalur lain: sesi reguler saja. Indeks juga rows[5]/rows[20], bukan rows[4]/rows[19].
+            const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 30`).all(t.code);
             if (!rows.length) return;
             const now = rows[0].close;
-            const d5 = rows[4] ? rows[4].close : now;
-            const d20 = rows[19] ? rows[19].close : now;
+            const d5 = rows[5] ? rows[5].close : now;
+            const d20 = rows[20] ? rows[20].close : now;
             const chg5 = d5 > 0 ? Math.round((now - d5) / d5 * 10000) / 100 : 0;
             const chg20 = d20 > 0 ? Math.round((now - d20) / d20 * 10000) / 100 : 0;
             const rule = MACRO_RULES[t.code] || { emoji: '📊', high: now * 1.1, low: now * 0.9, label: t.name || t.code, highBear: false };
+            // Semua angka di teks sinyal ditulis 2 desimal (jangan biarkan float mentah
+            // seperti 556.887465-680.6402350000001 bocor ke UI).
+            const f2 = (v) => Number(v).toFixed(2);
 
             let bull = 0, bear = 0, detail = '';
             if (rule.highBear) {
               // High = bearish (VIX, DXY, US10Y, USDIDR)
-              if (now > rule.high) { bear = 1; detail = 'Above ' + rule.high + ' — bearish'; }
-              else if (now < rule.low) { bull = 1; detail = 'Below ' + rule.low + ' — bullish'; }
-              else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
+              if (now > rule.high) { bear = 1; detail = 'Above ' + f2(rule.high) + ' — bearish'; }
+              else if (now < rule.low) { bull = 1; detail = 'Below ' + f2(rule.low) + ' — bullish'; }
+              else { detail = 'Neutral range (' + f2(rule.low) + '-' + f2(rule.high) + ')'; }
               // Momentum hanya MENENTUKAN arah bila level netral; tidak boleh menambah
               // arah berlawanan (dulu HYOAS bisa bull=1 DAN bear=1 sekaligus).
               if (chg5 > 3) { if (!bull && !bear) bear = 1; detail += ', rising fast'; }
               else if (chg5 < -3) { if (!bull && !bear) bull = 1; detail += ', falling fast'; }
             } else {
               // High = bullish (BDI)
-              if (now > rule.high) { bull = 1; detail = 'Above ' + rule.high + ' — bullish'; }
-              else if (now < rule.low) { bear = 1; detail = 'Below ' + rule.low + ' — bearish'; }
-              else { detail = 'Neutral range (' + rule.low + '-' + rule.high + ')'; }
+              if (now > rule.high) { bull = 1; detail = 'Above ' + f2(rule.high) + ' — bullish'; }
+              else if (now < rule.low) { bear = 1; detail = 'Below ' + f2(rule.low) + ' — bearish'; }
+              else { detail = 'Neutral range (' + f2(rule.low) + '-' + f2(rule.high) + ')'; }
               if (chg5 > 3) { if (!bull && !bear) bull = 1; detail += ', rising'; }
               else if (chg5 < -3) { if (!bull && !bear) bear = 1; detail += ', falling'; }
             }
@@ -4341,7 +5140,7 @@ module.exports = function(upload) {
       // Macro shift: check VIX/DXY for additional context
       let macroShift = 0;
       try {
-        const vixRows = db.prepare("SELECT close FROM custom_ohlc WHERE code='VIX' ORDER BY trade_date DESC LIMIT 1").all();
+        const vixRows = db.prepare(`SELECT close FROM custom_ohlc WHERE code='VIX' AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 1`).all();
         if (vixRows.length && vixRows[0].close > 25) macroShift -= 1; // high fear
         if (vixRows.length && vixRows[0].close < 15) macroShift += 1; // low fear
       } catch (e) {}
@@ -4598,7 +5397,7 @@ module.exports = function(upload) {
       // eps-nya 0 untuk banyak emiten, sehingga Financials & Fundachart kosong.
       let fundamental = null;
       try {
-        const fr = db.prepare(`SELECT period, sales, ebt, profit, assets, liabilities, equity,
+        const fr = db.prepare(`SELECT period, sector, sales, ebt, profit, assets, liabilities, equity,
              eps, book_value, per, pbv, der, roa, roe, npm
              FROM financial_ratios WHERE code=? ORDER BY period DESC LIMIT 1`).get(code);
         if (fr) {
@@ -4781,9 +5580,12 @@ module.exports = function(upload) {
           return fd;
         }
 
-        const rows = db.prepare(`SELECT period, sales, ebt, profit, assets, liabilities, equity,
+        const rows = db.prepare(`SELECT period, sector, sales, ebt, profit, assets, liabilities, equity,
              eps, book_value, per, pbv, der, roa, roe, npm
-             FROM financial_ratios WHERE code=? ORDER BY period`).all(code);
+             FROM financial_ratios WHERE code=?
+               AND (period LIKE '%-03-31' OR period LIKE '%-06-30'
+                    OR period LIKE '%-09-30' OR period LIKE '%-12-31')
+             ORDER BY period`).all(code);
         fundHistory = rows.map(r => {
           const m = parseInt(String(r.period).slice(5, 7) || '0');
           const ql = m <= 3 ? 'Q1' : m <= 6 ? 'Q2' : m <= 9 ? 'Q3' : 'FY';
@@ -4960,11 +5762,12 @@ module.exports = function(upload) {
       // ── 9b. Market Regime (IHSG trend) ──
       let marketRegime = null;
       try {
-        const ihsgRows = db.prepare('SELECT trade_date, close FROM idx_indices WHERE index_code=? ORDER BY trade_date DESC LIMIT 60').all('COMPOSITE');
-        if (ihsgRows.length >= 20) {
+        const ihsgRows = db.prepare('SELECT trade_date, close FROM idx_indices WHERE index_code=? ORDER BY trade_date DESC LIMIT 61').all('COMPOSITE');
+        if (ihsgRows.length >= 21) {
           const ihsgNow = ihsgRows[0].close;
-          const ihsg5d = ihsgRows[4] ? ihsgRows[4].close : ihsgNow;
-          const ihsg20d = ihsgRows[19] ? ihsgRows[19].close : ihsgNow;
+          // rows[0] = bar terbaru -> "N sesi lalu" = rows[N] (off-by-one t_c3d94014).
+          const ihsg5d = ihsgRows[5] ? ihsgRows[5].close : ihsgNow;
+          const ihsg20d = ihsgRows[20] ? ihsgRows[20].close : ihsgNow;
           const ihsg60d = ihsgRows[ihsgRows.length - 1] ? ihsgRows[ihsgRows.length - 1].close : ihsgNow;
           const chg5d = ihsg5d > 0 ? Math.round((ihsgNow - ihsg5d) / ihsg5d * 10000) / 100 : 0;
           const chg20d = ihsg20d > 0 ? Math.round((ihsgNow - ihsg20d) / ihsg20d * 10000) / 100 : 0;
@@ -5009,11 +5812,11 @@ module.exports = function(upload) {
 
         if (commodityCode) {
           // Try custom_ohlc first, then commodities table
-          const cmdRows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 30').all(commodityCode);
+          const cmdRows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 30`).all(commodityCode);
           if (cmdRows.length >= 5) {
             const now = cmdRows[0].close;
-            const d5 = cmdRows[4] ? cmdRows[4].close : now;
-            const d20 = cmdRows[Math.min(19, cmdRows.length - 1)] ? cmdRows[Math.min(19, cmdRows.length - 1)].close : now;
+            const d5 = cmdRows[5] ? cmdRows[5].close : now;
+            const d20 = cmdRows[Math.min(20, cmdRows.length - 1)] ? cmdRows[Math.min(20, cmdRows.length - 1)].close : now;
             // Kesegaran seri di tab Analysis (kanban t_61ccbdbe, rework ronde 3): TIN beku di
             // 15 Okt sementara sesi sudah jalan. Tanpa field ini, `price` di bawah terbaca
             // sebagai harga hari ini. Level + persen TETAP dikirim (dipakai hitungan lain),

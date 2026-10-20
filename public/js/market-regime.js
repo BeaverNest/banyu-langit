@@ -27,14 +27,6 @@ async function mrFetch(el) {
   mrLoading = false;
 }
 
-function mrRefresh() {
-  mrData = null;
-  mrCurve = null;   // kurva ikut disegarkan, bukan HTML 60 detik yang lama
-  var el = $('mr-content'); if (!el) return;
-  el.innerHTML = '<div class="ne" style="padding:40px">Refreshing...</div>';
-  mrFetch(el);
-}
-
 function renderMR(el) {
   if (!mrData) return;
   var d = mrData;
@@ -43,13 +35,19 @@ function renderMR(el) {
   // Header
   h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
   h += '<span style="font-weight:700;font-size:14px">🌐 Market Regime</span>';
-  h += '<button class="bei-sort-btn" onclick="mrRefresh()" style="font-size:10px;padding:3px 8px">🔄 Refresh</button>';
   if (d.date) h += '<span style="font-size:10px;color:var(--t3)">' + d.date + '</span>';
   // Sinyal sistem "pipeline data berhenti" (kanban t_c6c01360, keputusan t_243d21ae §D3).
   // Baris-level, bukan panel baru: sumbernya ctx.pipeline yang diteruskan summarize(), jadi
   // SEMUA panel kesegaran memakai sinyal yang sama — badge ini hanya rumah tampilannya di sini.
   h += mrPipelineBadge(d.commodity_freshness && d.commodity_freshness.pipeline);
   h += '</div>';
+
+  // ═══ Regime bar (t_19f4f0d4) ═══
+  h += mrSection('-', '🎛 Regime', '<div id="mr-regimebar"><div style="color:var(--t3);font-size:11px">Menghitung skor...</div></div>');
+
+  // ═══ Level 0: Monitor lintas aset (kanban t_19f4f0d4) ═══
+  // Satu tabel untuk semua seri; data baru = baris baru, bukan blok UI baru.
+  h += mrSection('0', '📋 Monitor Lintas Aset', '<div id="mr-monitor-box"><div style="color:var(--t3);font-size:11px">Memuat monitor...</div></div>');
 
   // ═══ Level 1: Global Sentiment ═══
   h += mrSection('1', '🌍 Global Sentiment', mrRenderGlobal(d.global));
@@ -68,6 +66,9 @@ function renderMR(el) {
   // ═══ Level 3: IDX Market Regime ═══
   h += mrSection('3', '🇮🇩 IDX Market', mrRenderIDX(d.idx));
 
+  // ═══ Level 3.5: Internals (sektor + konsentrasi kepemilikan) ═══
+  h += mrSection('3.5', '🔎 Internals', '<div id="mr-internals-box"><div style="color:var(--t3);font-size:11px">Memuat internals...</div></div>');
+
   // ═══ Level 4: Sector Ranking ═══
   h += mrSection('4', '🏢 Sector Ranking', mrRenderSectors(d.sectors));
 
@@ -84,6 +85,9 @@ function renderMR(el) {
   setTimeout(function() { mrDrawCharts(d); }, 100);
   // Kurva imbal hasil: fetch sendiri (endpoint terpisah)
   setTimeout(function() { mrLoadCurve(); }, 0);
+  setTimeout(function() { mrLoadMonitor(); }, 0);
+  setTimeout(function() { mrLoadRegimeBar(); }, 0);
+  setTimeout(function() { mrLoadInternals(); }, 0);
   // Fetch news
   setTimeout(function() { mrRenderNews('mr-news'); }, 200);
 }
@@ -159,7 +163,7 @@ function mrLoadCurve(force) {
 
 function mrFmtBp(v) {
   if (v === null || v === undefined) return '—';
-  return (v > 0 ? '+' : '') + v.toFixed(1);
+  return (v > 0 ? '+' : '') + v.toFixed(2);
 }
 
 function mrRenderCurve(box, d) {
@@ -256,7 +260,7 @@ function mrRenderCurve(box, d) {
   d.tenors.forEach(function(t) {
     var on = t.on_curve !== false && t.close !== null && t.close !== undefined;
     var cellYield = on
-      ? '<b style="font-family:var(--fm)">' + t.close.toFixed(3) + '</b>'
+      ? '<b style="font-family:var(--fm)">' + t.close.toFixed(2) + '</b>'
       : '<span style="color:var(--am)" title="tidak ada bar pada ' + esc(d.as_of || '') + '">— <span style="font-size:9px">' + esc(t.date || 'tanpa bar') + '</span></span>';
     var c1 = on && t.chg_1d_bp !== null ? (t.chg_1d_bp > 0 ? 'color:var(--rd)' : t.chg_1d_bp < 0 ? 'color:var(--gn)' : '') : '';
     var c20 = on && t.chg_20d_bp !== null ? (t.chg_20d_bp > 0 ? 'color:var(--rd)' : t.chg_20d_bp < 0 ? 'color:var(--gn)' : '') : '';
@@ -298,7 +302,7 @@ function mrDrawCurve(d) {
         var t = (d.tenors || [])[p.dataIndex] || {};
         var s = '<b>' + esc(t.tenor || '') + '</b> · ' + esc(d.as_of || '') + '<br/>';
         if (p.value === null || p.value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
-        return s + p.value.toFixed(3) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20 sesi ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+        return s + p.value.toFixed(2) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20 sesi ' + mrFmtBp(t.chg_20d_bp) + ' bp';
       }
     },
     grid: BL.grid({ top: 14, bottom: 22, left: 42, right: 12 }),
@@ -349,9 +353,9 @@ function mrRenderGlobal(g) {
     h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:140px;flex:1">';
     h += '<div style="font-size:10px;color:var(--t3);margin-bottom:2px">' + signal + ' ' + esc(item.name || item.code) + '</div>';
     h += '<div style="font-size:18px;font-weight:700;font-family:var(--fm);' + cls + '">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">Price: ' + (item.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + '</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">5D: <span style="' + (trend5 > 0 ? 'color:var(--gn)' : trend5 < 0 ? 'color:var(--rd)' : '') + '">' + (trend5 > 0 ? '+' : '') + trend5.toFixed(1) + '%</span>';
-    h += ' · 20D: <span style="' + (trend20 > 0 ? 'color:var(--gn)' : trend20 < 0 ? 'color:var(--rd)' : '') + '">' + (trend20 > 0 ? '+' : '') + trend20.toFixed(1) + '%</span></div>';
+    h += '<div style="font-size:9px;color:var(--t3)">Price: ' + (item.close || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</div>';
+    h += '<div style="font-size:9px;color:var(--t3)">5D: <span style="' + (trend5 > 0 ? 'color:var(--gn)' : trend5 < 0 ? 'color:var(--rd)' : '') + '">' + (trend5 > 0 ? '+' : '') + trend5.toFixed(2) + '%</span>';
+    h += ' · 20D: <span style="' + (trend20 > 0 ? 'color:var(--gn)' : trend20 < 0 ? 'color:var(--rd)' : '') + '">' + (trend20 > 0 ? '+' : '') + trend20.toFixed(2) + '%</span></div>';
     h += '</div>';
   });
   h += '</div>';
@@ -376,7 +380,7 @@ function mrRenderMacro(ms) {
     h += '<div style="background:' + bg + ';border:1px solid ' + border + '33;border-radius:6px;padding:8px 10px">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
     h += '<span style="font-size:10px;font-weight:700;color:var(--t1)">' + s.emoji + ' ' + esc(s.code) + '</span>';
-    h += '<span style="font-size:14px;font-weight:700;font-family:var(--fm);color:var(--t1)">' + (typeof s.value === 'number' ? s.value.toLocaleString(undefined, {maximumFractionDigits: 4}) : '-') + '</span>';
+    h += '<span style="font-size:14px;font-weight:700;font-family:var(--fm);color:var(--t1)">' + (typeof s.value === 'number' ? s.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-') + '</span>';
     h += '</div>';
     h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.detail) + '</div>';
     if (s.bull > 0) h += '<div style="font-size:8px;color:var(--gn);margin-top:2px">+' + s.bull + ' bull point' + (s.bull > 1 ? 's' : '') + '</div>';
@@ -436,8 +440,8 @@ function mrRenderCommodity(cmds) {
     h += '<tr style="border-bottom:1px solid var(--b1)' + (stale ? ';opacity:.85' : '') + '">';
     h += '<td style="padding:4px 8px;font-weight:600;color:var(--bl)">' + esc(c.name || c.code) + '</td>';
     h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm)">' + priceCell + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c5style + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(1) + '%') + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20style + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c5style + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(2) + '%') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20style + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(2) + '%') + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px">' + trend + '</td>';
     h += '<td style="padding:4px 8px;font-size:10px;color:var(--t3)">' + esc(c.linked_sector || '-') + '</td>';
     h += '</tr>';
@@ -458,9 +462,9 @@ function mrRenderIDX(idx) {
   var regimeLabel = regime === 'bull' ? '🟢 BULL' : regime === 'bear' ? '🔴 BEAR' : regime === 'mild_bull' ? '🟢 Mild Bull' : regime === 'mild_bear' ? '🔴 Mild Bear' : '🟡 Sideways';
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:10px 14px;min-width:180px">';
   h += '<div style="font-size:10px;color:var(--t3)">IHSG Composite</div>';
-  h += '<div style="font-size:22px;font-weight:700;font-family:var(--fm)">' + (ihsg.level || 0).toLocaleString() + '</div>';
+  h += '<div style="font-size:22px;font-weight:700;font-family:var(--fm)">' + (ihsg.level || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</div>';
   h += '<div style="font-size:12px;font-weight:700;color:' + regimeColor + '">' + regimeLabel + '</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">5D: ' + (ihsg.chg_5d > 0 ? '+' : '') + (ihsg.chg_5d || 0).toFixed(1) + '% · 20D: ' + (ihsg.chg_20d > 0 ? '+' : '') + (ihsg.chg_20d || 0).toFixed(1) + '%</div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">5D: ' + (ihsg.chg_5d > 0 ? '+' : '') + (ihsg.chg_5d || 0).toFixed(2) + '% · 20D: ' + (ihsg.chg_20d > 0 ? '+' : '') + (ihsg.chg_20d || 0).toFixed(2) + '%</div>';
   h += '</div>';
 
   // Foreign Flow card
@@ -477,9 +481,9 @@ function mrRenderIDX(idx) {
   var br = idx.breadth || {};
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:10px 14px;min-width:180px">';
   h += '<div style="font-size:10px;color:var(--t3)">Market Breadth</div>';
-  h += '<div style="font-size:10px;margin-top:4px">Above MA20: <b style="color:' + ((br.pct_above_ma20 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma20 || 0).toFixed(0) + '%</b></div>';
-  h += '<div style="font-size:10px">Above MA50: <b style="color:' + ((br.pct_above_ma50 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma50 || 0).toFixed(0) + '%</b></div>';
-  h += '<div style="font-size:10px">Above MA200: <b style="color:' + ((br.pct_above_ma200 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma200 || 0).toFixed(0) + '%</b></div>';
+  h += '<div style="font-size:10px;margin-top:4px">Above MA20: <b style="color:' + ((br.pct_above_ma20 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma20 || 0).toFixed(2) + '%</b></div>';
+  h += '<div style="font-size:10px">Above MA50: <b style="color:' + ((br.pct_above_ma50 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma50 || 0).toFixed(2) + '%</b></div>';
+  h += '<div style="font-size:10px">Above MA200: <b style="color:' + ((br.pct_above_ma200 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma200 || 0).toFixed(2) + '%</b></div>';
   h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">New High: ' + (br.new_high || 0) + ' · New Low: ' + (br.new_low || 0) + '</div>';
   h += '</div>';
 
@@ -514,7 +518,7 @@ function mrRenderSectors(sectors) {
     h += '<tr style="border-bottom:1px solid var(--b1)">';
     h += '<td style="padding:5px 8px;font-weight:600"' + sectorClick + '>' + esc(s.sector.replace('IDX Sector ', '')) + '</td>';
     h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (chg > 0 ? 'color:var(--gn)' : chg < 0 ? 'color:var(--rd)' : '') + '">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
-    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);font-weight:600;' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20 > 0 ? '+' : '') + chg20.toFixed(1) + '%</td>';
+    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);font-weight:600;' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20 > 0 ? '+' : '') + chg20.toFixed(2) + '%</td>';
     h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (rs > 0 ? 'color:var(--gn)' : rs < 0 ? 'color:var(--rd)' : '') + '">' + (rs > 0 ? '+' : '') + rs.toFixed(2) + '%</td>';
     h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (fnet > 0 ? 'color:var(--gn)' : fnet < 0 ? 'color:var(--rd)' : '') + '">' + fmtRp(fnet) + '</td>';
     h += '<td style="padding:5px 8px;font-size:10px">' + signal + '</td>';
@@ -564,8 +568,8 @@ function mrRenderDecision(d) {
   // IHSG
   if (d.idx && d.idx.ihsg) {
     var regime = d.idx.ihsg.regime;
-    if (regime === 'bull' || regime === 'mild_bull') { signals.push({ level: 'IHSG', signal: '🟢 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(1) + '%' }); bullPoints += 2; }
-    else if (regime === 'bear' || regime === 'mild_bear') { signals.push({ level: 'IHSG', signal: '🔴 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(1) + '%' }); bearPoints += 2; }
+    if (regime === 'bull' || regime === 'mild_bull') { signals.push({ level: 'IHSG', signal: '🟢 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(2) + '%' }); bullPoints += 2; }
+    else if (regime === 'bear' || regime === 'mild_bear') { signals.push({ level: 'IHSG', signal: '🔴 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(2) + '%' }); bearPoints += 2; }
     else { signals.push({ level: 'IHSG', signal: '🟡 Sideways', detail: '' }); }
   }
 
@@ -579,9 +583,9 @@ function mrRenderDecision(d) {
   // Breadth
   if (d.idx && d.idx.breadth) {
     var ma50 = d.idx.breadth.pct_above_ma50 || 0;
-    if (ma50 > 60) { signals.push({ level: 'Breadth', signal: '🟢 Healthy', detail: ma50.toFixed(0) + '% > MA50' }); bullPoints++; }
-    else if (ma50 < 30) { signals.push({ level: 'Breadth', signal: '🔴 Weak', detail: ma50.toFixed(0) + '% > MA50' }); bearPoints++; }
-    else { signals.push({ level: 'Breadth', signal: '🟡 Neutral', detail: ma50.toFixed(0) + '% > MA50' }); }
+    if (ma50 > 60) { signals.push({ level: 'Breadth', signal: '🟢 Healthy', detail: ma50.toFixed(2) + '% > MA50' }); bullPoints++; }
+    else if (ma50 < 30) { signals.push({ level: 'Breadth', signal: '🔴 Weak', detail: ma50.toFixed(2) + '% > MA50' }); bearPoints++; }
+    else { signals.push({ level: 'Breadth', signal: '🟡 Neutral', detail: ma50.toFixed(2) + '% > MA50' }); }
   }
 
   // Final verdict
@@ -743,4 +747,204 @@ function mrNewsTab(idx) {
   document.querySelectorAll('.mr-news-panel').forEach(function(p, i) {
     p.style.display = i === idx ? 'block' : 'none';
   });
+}
+
+// ═══ Monitor lintas aset (kanban t_19f4f0d4) ═══
+// Satu tabel untuk SEMUA seri aktif. Data baru = baris baru, bukan blok UI baru.
+var mrMonitorData = null;
+
+function mrLoadMonitor() {
+  var box = $('mr-monitor-box'); if (!box) return;
+  fetch('/api/idx/monitor').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) { box.innerHTML = '<div style="color:var(--rd);font-size:11px">monitor gagal dimuat</div>'; return; }
+    mrMonitorData = d;
+    box.innerHTML = mrRenderMonitor(d);
+  }).catch(function () {
+    box.innerHTML = '<div style="color:var(--rd);font-size:11px">monitor gagal dimuat</div>';
+  });
+}
+
+function mrMonLabels(lags, freq) {
+  if (freq === 'M') return ['1M', '3M', '12M'];
+  if (freq === 'Q') return ['1Q', '4Q', '12Q'];
+  if (freq === 'W') return ['1W', '4W', '12W'];
+  return ['1D', '5D', '20D'];
+}
+
+function mrMonNum(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function mrMonPct(v, mode) {
+  if (v === null || v === undefined || isNaN(v)) return '<span style="color:var(--t3)">—</span>';
+  var c = v > 0 ? 'var(--gn)' : v < 0 ? 'var(--rd)' : 'var(--t2)';
+  var body = (v > 0 ? '+' : '') + Number(v).toFixed(2);
+  // mode 'delta': suku bunga/neraca dilaporkan sebagai selisih (bp, USD bn, poin),
+  // bukan persen — persen pada nilai yang bisa negatif menyesatkan.
+  return '<span style="color:' + c + '">' + body + (mode === 'delta' ? '' : '%') + '</span>';
+}
+
+function mrRenderMonitor(d) {
+  var order = ['global_index', 'currency', 'rates', 'macro', 'commodity', 'commodity_unverified', 'other'];
+  var title = {
+    global_index: 'Indeks Global', currency: 'Valuta', rates: 'Suku Bunga & Kurva',
+    macro: 'Makro Indonesia', commodity: 'Komoditas', commodity_unverified: 'Komoditas (belum terverifikasi)',
+    other: 'Lain-lain'
+  };
+  var freqLabel = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan' };
+  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">' +
+    'Level &amp; perubahan per horizon sesuai kadensi seri. Kolom as-of = tanggal acuan data, bukan tanggal hari ini.</div>';
+
+  order.forEach(function (g) {
+    var items = (d.groups || {})[g]; if (!items || !items.length) return;
+    var freq = items[0].freq, lab = mrMonLabels(items[0].lags, freq), mode = items[0].mode || 'pct';
+    if (mode === 'delta') lab = lab.map(function (x) { return '\u0394' + x; });
+    h += '<div style="margin:10px 0 4px;font-size:10px;font-weight:700;color:var(--t1)">' + title[g] +
+      ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri · ' + (freqLabel[freq] || freq) + '</span></div>';
+    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">' +
+      '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>' +
+      '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>' +
+      lab.map(function (x) { return '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">' + x + '</th>'; }).join('') +
+      '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">' + (mode === 'delta' ? '\u0394 YTD' : 'YTD') + '</th>' +
+      '<th style="text-align:right;padding:3px 6px;font-weight:600">%ile 1Y</th>' +
+      '<th style="text-align:right;padding:3px 6px;font-weight:600">as-of</th></tr>';
+    items.forEach(function (it) {
+      var stale = it.stale_days > (it.freq === 'D' ? 5 : it.freq === 'W' ? 12 : it.freq === 'M' ? 45 : 130);
+      h += '<tr style="border-bottom:1px solid var(--b1)' + (stale ? ';opacity:.6' : '') + '">';
+      h += '<td style="padding:3px 6px;font-family:var(--f)">' + esc(it.name || it.code) +
+        (stale ? ' <span style="color:var(--am)">⏸</span>' : '') + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null ? '' : it.last) + '">' + mrMonNum(it.last) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 === null ? '' : it.chg_1) + '">' + mrMonPct(it.chg_1, it.mode) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_5 === null ? '' : it.chg_5) + '">' + mrMonPct(it.chg_5, it.mode) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_20 === null ? '' : it.chg_20) + '">' + mrMonPct(it.chg_20, it.mode) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_ytd === null ? '' : it.chg_ytd) + '">' + mrMonPct(it.chg_ytd, it.mode) + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;color:var(--t2)" data-v="' + (it.pctile_1y === null ? '' : it.pctile_1y) + '">' + (it.pctile_1y === null ? '—' : it.pctile_1y + '%') + '</td>';
+      h += '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + esc(it.as_of || '') + '</td>';
+      h += '</tr>';
+    });
+    h += '</table>';
+  });
+
+  var cov = d.coverage || { stale: [], thin: [] };
+  var staleN = (cov.stale || []).length, thinN = (cov.thin || []).length;
+  h += '<div style="margin-top:10px;font-size:9px;color:var(--t3)">Cakupan: ' +
+    ((cov.stale || []).length ? '<span style="color:var(--am)">' + staleN + ' seri basi</span>' : '0 seri basi') +
+    ' · ' + (thinN ? thinN + ' seri tanpa data' : '0 seri tanpa data') + '</div>';
+  if (staleN) {
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:3px">' +
+      cov.stale.slice(0, 12).map(function (s) { return esc(s.name || s.code) + ' (' + s.as_of + ', ' + s.days + ' hari)'; }).join(' · ') + '</div>';
+  }
+  return h;
+}
+
+// ═══ Regime bar: 4 skor + komposit (kanban t_19f4f0d4) ═══
+function mrLoadRegimeBar() {
+  var box = $('mr-regimebar'); if (!box) return;
+  fetch('/api/idx/regime-score').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) { box.innerHTML = ''; return; }
+    box.innerHTML = mrRenderRegimeBar(d);
+  }).catch(function () { box.innerHTML = ''; });
+}
+
+function mrScoreColor(v) {
+  if (v === null || v === undefined) return 'var(--t3)';
+  return v >= 65 ? 'var(--gn)' : v >= 45 ? 'var(--am)' : 'var(--rd)';
+}
+
+function mrRenderRegimeBar(d) {
+  var s = d.scores || {}, l = d.labels || {}, c = d.components || {};
+  var tiles = [
+    { k: 'risk', name: 'Risk Appetite', sub: 'aset risiko naik 20P: ' + (c.risk_up_share === null ? '—' : c.risk_up_share + '%') },
+    { k: 'external', name: 'Eksternal', sub: 'IDR ' + (c.usdidr_20d === null ? '—' : (c.usdidr_20d > 0 ? '+' : '') + c.usdidr_20d + '%') + ' · DXY ' + (c.dxy_20d === null ? '—' : (c.dxy_20d > 0 ? '+' : '') + c.dxy_20d + '%') },
+    { k: 'liquidity', name: 'Likuiditas', sub: 'SRBI 1M ' + (c.srbi_total_1m === null ? '—' : (c.srbi_total_1m > 0 ? '+' : '') + c.srbi_total_1m + '%') + ' · BI ' + (c.bi_rate_delta_3m === null ? '—' : (c.bi_rate_delta_3m > 0 ? '+' : '') + c.bi_rate_delta_3m) },
+    { k: 'equity', name: 'Equity IDX', sub: 'breadth ' + (c.breadth_ma50 === null ? '—' : c.breadth_ma50 + '%') + ' · IHSG 20D ' + (c.ihsg_20d === null ? '—' : (c.ihsg_20d > 0 ? '+' : '') + c.ihsg_20d + '%') },
+  ];
+  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch">';
+  tiles.forEach(function (t) {
+    var v = s[t.k];
+    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:150px;flex:1">';
+    h += '<div style="font-size:9px;color:var(--t3)">' + t.name + '</div>';
+    h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(v) + '">' + (v === null ? '—' : v) +
+      ' <span style="font-size:9px;font-weight:400">' + (l[t.k] || '') + '</span></div>';
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">' + t.sub + '</div>';
+    h += '</div>';
+  });
+  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:130px">';
+  h += '<div style="font-size:9px;color:var(--t3)">Komposit</div>';
+  h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(s.composite) + '">' + (s.composite === null ? '—' : s.composite) + '</div>';
+  h += '<div style="font-size:9px;color:var(--t3)">' + (l.composite || '') + ' · ' + esc(d.as_of || '') + '</div>';
+  h += '</div></div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Skor 0-100: &ge;65 positif · 45-65 netral · &lt;45 negatif. Komponen tiap skor ditampilkan di bawah angkanya, bukan kotak hitam.</div>';
+  return h;
+}
+
+// ═══ Internals: rotasi sektor + konsentrasi kepemilikan (t_19f4f0d4) ═══
+function mrLoadInternals() {
+  var box = $('mr-internals-box'); if (!box) return;
+  fetch('/api/idx/internals-extra').then(function (r) { return r.json(); }).then(function (d) {
+    box.innerHTML = (d && d.ok) ? mrRenderInternals(d) : '<div style="color:var(--rd);font-size:11px">internals gagal dimuat</div>';
+  }).catch(function () { box.innerHTML = '<div style="color:var(--rd);font-size:11px">internals gagal dimuat</div>'; });
+}
+
+function mrRenderInternals(d) {
+  var h = '';
+  var s = d.sectors || { top: [], bottom: [] };
+  h += '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Rotasi sektor <span style="font-weight:400;color:var(--t3)">· rata-rata 20D, min 5 emiten · ' + esc(d.as_of || '') + '</span></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+  var rows = (s.top || []).map(function (x) { return ['▲', x]; })
+    .concat((s.bottom || []).map(function (x) { return ['▼', x]; }));
+  rows.forEach(function (pair) {
+    var x = pair[1];
+    h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">' + pair[0] + '</td>' +
+      '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.sector) + '</td>' +
+      '<td style="padding:3px 6px;text-align:right">' + Number(x.avg20).toFixed(2) + '%</td>' +
+      '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + x.n + ' emiten</td></tr>';
+  });
+  h += '</table>';
+
+  var o = d.ownership;
+  if (o) {
+    var age = Math.round((Date.now() - new Date(o.period).getTime()) / 86400000);
+    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Konsentrasi kepemilikan &ge;1% ' +
+      '<span style="font-weight:400;color:' + (age > 90 ? 'var(--am)' : 'var(--t3)') + '">· periode ' + esc(o.period) +
+      ' (' + age + ' hari) · ' + o.issuers + ' emiten</span></div>';
+    h += '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">Porsi asing dari total kepemilikan &ge;1% yang tercatat: <b>' +
+      (o.foreign_share_of_tracked === null ? '—' : o.foreign_share_of_tracked.toFixed(2) + '%') + '</b></div>';
+    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+    h += '<tr style="color:var(--t3)"><th style="text-align:left;padding:3px 6px">Paling terkonsentrasi</th><th style="text-align:right;padding:3px 6px">Top holder</th><th style="text-align:left;padding:3px 6px">Asing terbesar</th><th style="text-align:right;padding:3px 6px">Porsi asing</th></tr>';
+    var a = o.most_concentrated || [], b = o.biggest_foreign || [];
+    for (var i = 0; i < Math.max(a.length, b.length); i++) {
+      var ra = a[i], rb = b[i];
+      h += '<tr style="border-bottom:1px solid var(--b1)">' +
+        '<td style="padding:3px 6px">' + (ra ? esc(ra.code) : '') + '</td>' +
+        '<td style="padding:3px 6px;text-align:right">' + (ra ? Number(ra.top_pct).toFixed(2) + '%' : '') + '</td>' +
+        '<td style="padding:3px 6px">' + (rb ? esc(rb.code) : '') + '</td>' +
+        '<td style="padding:3px 6px;text-align:right">' + (rb ? Number(rb.foreign_pct).toFixed(2) + '%' : '') + '</td></tr>';
+    }
+    h += '</table>';
+    if (age > 90) h += '<div style="font-size:9px;color:var(--am);margin-top:3px">Data kepemilikan terakhir '+age+' hari lalu — BEI belum menerbitkan periode berikutnya. Bukan angka hari ini.</div>';
+  } else {
+    h += '<div style="font-size:10px;color:var(--t3);margin-top:10px">Data kepemilikan &ge;1% belum tersedia.</div>';
+  }
+  return h;
+}
+
+function mrSortTable(th) {
+  var table = th.closest('table'); if (!table) return;
+  var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
+  var asc = th.getAttribute('data-asc') !== '1';
+  th.setAttribute('data-asc', asc ? '1' : '0');
+  var body = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(function (r) { return r.querySelector('td'); });
+  body.sort(function (a, b) {
+    var ca = a.children[idx], cb = b.children[idx];
+    var va = ca && ca.getAttribute('data-v') !== null && ca.getAttribute('data-v') !== '' ? parseFloat(ca.getAttribute('data-v')) : NaN;
+    var vb = cb && cb.getAttribute('data-v') !== null && cb.getAttribute('data-v') !== '' ? parseFloat(cb.getAttribute('data-v')) : NaN;
+    if (isNaN(va) && isNaN(vb)) return 0;
+    if (isNaN(va)) return 1;
+    if (isNaN(vb)) return -1;
+    return asc ? va - vb : vb - va;
+  });
+  body.forEach(function (r) { table.appendChild(r); });
 }
