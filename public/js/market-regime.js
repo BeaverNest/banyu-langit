@@ -168,82 +168,20 @@ function mrClock(iso) {
   } catch (e) { return String(iso); }
 }
 
-// ═══ 1. Regime bar: 4 skor dari payload.regime ═══
-// Tidak ada skor komposit di sini. Komposit = rata-rata berbobot 4 skor heterogen; bobotnya
-// TIDAK diputuskan di kartu mana pun, jadi menampilkannya berarti mengarang asumsi diam-diam
-// (versi sebelumnya menampilkannya dan angkanya bentrok dengan endpoint kembar: 24 vs 62,91).
-// Yang ditampilkan: 4 skor + label band dari server + tanggal acuan + status kesegaran.
-function mrScoreColor(v) {
-  if (v === null || v === undefined) return 'var(--t3)';
-  return v >= 67 ? 'var(--gn)' : v >= 45 ? 'var(--am)' : v >= 33 ? 'var(--or, #f97316)' : 'var(--rd)';
-}
+// ═══ 1. Regime bar — TIDAK dirender (permintaan owner 20 Okt 2026) ═══
+// Fungsi render-nya (dulu `mrRenderRegimeBar` + pembantu `mrScoreColor`/`MR_STATUS_TEXT`)
+// DIHAPUS di kartu t_651e530e, bukan dikomentari: jalur render yang ditinggal hidup adalah
+// cara termudah menghidupkan kembali seksi yang sudah diputuskan owner untuk dibuang.
+// Data `regime` tetap dikirim /api/idx/cross-asset (field `regime`) untuk diagnosis via API.
+//
+// Catatan yang berlaku untuk isi skor: tidak ada skor komposit di mana pun. Komposit =
+// rata-rata berbobot 4 skor heterogen; bobotnya TIDAK diputuskan di kartu mana pun, jadi
+// menampilkannya berarti mengarang asumsi diam-diam (versi lama: 24 vs 62,91 di endpoint kembar).
 
-var MR_STATUS_TEXT = {
-  fresh:       { t: 'segar',           c: 'var(--gn)' },
-  stale:       { t: 'basi',            c: 'var(--rd)' },
-  aged:        { t: 'umur lewat kadens', c: 'var(--am)' },
-  unmeasured:  { t: 'umur tak terukur', c: 'var(--t3)' },
-  unavailable: { t: 'tidak terukur',   c: 'var(--t3)' }
-};
+// ═══ 1b. "Berubah hari ini" — TIDAK dirender (permintaan owner 20 Okt 2026) ═══
+// `mrRenderChanged` ikut DIHAPUS (kartu t_651e530e) dengan alasan yang sama. Payload tetap
+// membawa `changed_today` untuk diagnosis; UI tidak punya jalur untuk mencetaknya.
 
-function mrRenderRegimeBar(regime) {
-  if (!regime || !regime.length) return '<div style="color:var(--t3);font-size:11px">Skor regime belum tersedia.</div>';
-  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch">';
-  regime.forEach(function (s) {
-    var st = MR_STATUS_TEXT[s.status] || MR_STATUS_TEXT.unavailable;
-    var comps = (s.components || []).map(function (c) {
-      return esc(c.label) + ' ' + mrNum(c.value) + (c.unit === '%' ? '%' : '');
-    }).join(' · ');
-    var miss = (s.missing || []).map(function (m) { return esc(m.label); }).join(', ');
-    h += '<div class="mr-score" data-id="' + esc(s.id) + '" style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:210px;flex:1"'
-      + ' title="' + esc(s.method || '') + '">';
-    h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.label) + '</div>';
-    // Keadaan dulu, angka belakang: yang dibaca 2 detik pertama adalah KATA, bukan skor 0-100.
-    h += '<div style="font-size:18px;font-weight:700;color:' + mrScoreColor(s.score) + '">'
-      + esc(s.band_label || (s.score === null ? '—' : '')) + '</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">'
-      + (s.score === null ? '' : Math.round(s.score) + '/100 · ')
-      + 'acuan ' + esc(s.as_of || '—')
-      + (s.age_days ? ' · ' + s.age_days + ' hr' : '') + '</div>';
-    if (s.score === null) {
-      h += '<div style="font-size:9px;color:var(--am)">' + esc(s.reason || 'skor tidak dihitung') + '</div>';
-    } else {
-      h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">' + comps + '</div>';
-      if (miss) h += '<div style="font-size:9px;color:var(--am)">tanpa komponen: ' + miss + '</div>';
-    }
-    h += '</div>';
-  });
-  h += '</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">0-100 · &ge;67 mendukung · &lt;33 menekan · bukan sinyal</div>';
-  return h;
-}
-
-// ═══ strip "berubah hari ini" — 3-5 baris ═══
-// Satuan menempel pada FIELD yang benar, bukan pada baris: `value` = level/harga (bukan persen),
-// `delta` = pergerakan dalam %. Versi pertama memberi '%' pada level IHSG ("4,996.61%") dan
-// mengalikan ulang nilai yang sudah dalam Rp triliun ("-0.00 T").
-function mrRenderChanged(list) {
-  if (!list || !list.length) return '<div style="color:var(--t3);font-size:11px">Tidak ada pergerakan segar untuk sesi ini.</div>';
-  var fmtValue = function (x) {
-    if (x.unit === 'Rp tn') return mrSigned(x.value, ' T');      // nilai SUDAH dalam triliun
-    if (x.unit === 'x') return mrNum(x.value) + 'x';
-    if (x.unit === 'pct') return x.kind === 'breadth' ? mrNum(x.value) + '%' : mrNum(x.value);
-    return mrNum(x.value);
-  };
-  var h = '<div style="display:flex;gap:6px;flex-wrap:wrap">';
-  list.slice(0, 6).forEach(function (x) {
-    var c = x.tone === 'up' ? 'var(--gn)' : x.tone === 'down' ? 'var(--rd)' : 'var(--t2)';
-    var val = fmtValue(x);
-    var dlt = (x.delta === null || x.delta === undefined) ? ''
-      : ' <span style="color:' + mrColor(x.delta) + '">' + mrSigned(x.delta, '%') + '</span>';
-    h += '<span style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:3px 8px;font-size:10px">'
-      + '<span style="color:var(--t3)">' + esc(x.label) + '</span> '
-      + '<b style="font-family:var(--fm);color:' + c + '">' + esc(val) + '</b>' + dlt
-      + ' <span style="font-size:9px;color:var(--t3)">' + esc(x.as_of || '') + '</span></span>';
-  });
-  h += '</div>';
-  return h;
-}
 
 // ═══ 2. Monitor lintas aset ═══
 // Kelompok = payload.monitor.groups (array dari server, urutannya ditentukan server). TIDAK ADA
@@ -708,7 +646,15 @@ function mrRenderInternals(it) {
   }
 
   // Konsentrasi kepemilikan ≥1% tidak ditampilkan (permintaan owner 20 Okt 2026).
-  // Data tetap ada di payload /api/idx/internals-extra (field `ownership`).
+  // Data tetap ada di payload /api/idx/cross-asset (field `internals.ownership`; ringkasannya
+  // juga di `coverage.extras.ownership`). Endpoint lama /api/idx/internals-extra sudah 404
+  // sejak commit dcbd997 — komentar yang menyebutnya menyesatkan (temuan sena r5).
+  //
+  // `mrRenderCoverage` / `mrCovBucket` / `mrCovItems` di bawah juga tidak dipanggil: seksi
+  // L5 Coverage dipangkas owner. Ketiganya SENGAJA dipertahankan di kartu t_651e530e karena
+  // kartu ini hanya menugaskan penghapusan mrRenderRegimeBar/mrRenderChanged; menghapus blok
+  // ini adalah keputusan terpisah (payload `coverage` masih satu-satunya cara membaca status
+  // 78 seri lewat API, dan fungsi ini adalah referensi bentuknya).
   return h;
 }
 
