@@ -6,6 +6,7 @@ const { getCodeVersion } = require('../utils/code-version');
 const { loadFactors, adjustRows, factorAt, factorForRow, fallbackRatioActions, registerSqlAdjust } = require('../utils/price-adjust');
 const freshnessUtil = require('../utils/series-freshness');
 const pullLog = require('../utils/pull-log');
+const { allowsNonPositive, strictNum } = require('../utils/series-sign');
 
 // Provenance stamp written into every daily_scores row (agent rail contract):
 // names the variant of each derived indicator, so a stored number stays auditable
@@ -3838,8 +3839,13 @@ module.exports = function(upload) {
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
       if (!SOURCE_RE.test(source)) return res.status(400).json({ error: 'source tidak valid (maks 64 karakter, [A-Za-z0-9_.:/-])' });
 
-      const isNonPrice = isNonPriceSeries(code, category);
-      const gated = rows.filter(r => r && r.date && (isNonPrice ? Number.isFinite(Number(r.close)) : r.close > 0)).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const g = gateRows(code, rows, fillMissing);
+      const gated = g.gated;
+      const rejection = rejectInfo(code, rows.length, g.rejected, g.signed);
+      // Semua baris ditolak = kehilangan total, bukan "tidak ada data baru". Dulu dijawab
+      // ok:true dan pemanggil tidak pernah tahu barisnya hilang (204 baris, t_0e4e2cba).
+      if (!gated.length) return res.status(422).json({ ok: false, code,
+        error: 'semua baris ditolak gerbang — tidak ada yang ditulis', ...rejection });
       const verdict = explicitMode || seriesVerdict(gated);
       const priceOnly = verdict === 'price_only';
       // Pemanggil menyatakan sendiri serinya price_only -> ketiadaan O/H/L di payload berarti
@@ -3918,6 +3924,9 @@ module.exports = function(upload) {
         status: written > 0 ? 'ok' : 'no_data',
       });
       res.json({ ok: true, code, source, written,
+                 rows_sent: rejection.rows_sent, rows_dropped: rejection.rows_dropped,
+                 rejected: rejection.rejected, allow_nonpositive: rejection.allow_nonpositive,
+                 gate_warning: rejection.message, gate_hint: rejection.hint,
                  rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
                  total_rows: cnt, fill_missing: fillMissing,
                  ohlc_mode: verdict || getTickerMode(code), price_only: priceOnly,
@@ -4154,8 +4163,11 @@ module.exports = function(upload) {
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
 
       // Gerbang OHLC yang sama seperti /custom/upsert — jalur tulis tidak boleh berbeda aturan.
-      const isNonPrice = isNonPriceSeries(code, category);
-      const gated = rows.filter(r => r && r.date && (isNonPrice ? Number.isFinite(Number(r.close)) : r.close > 0)).map(r => ({ date: r.date, ...gateBar(r, fillMissing) }));
+      const g = gateRows(code, rows, fillMissing);
+      const gated = g.gated;
+      const rejection = rejectInfo(code, rows.length, g.rejected, g.signed);
+      if (!gated.length) return res.status(422).json({ ok: false, code,
+        error: 'semua baris ditolak gerbang — tidak ada yang ditulis', ...rejection });
       const verdict = explicitMode || seriesVerdict(gated);
       const priceOnly = verdict === 'price_only';
       const declaredPriceOnly = explicitMode === 'price_only';
@@ -4213,6 +4225,9 @@ module.exports = function(upload) {
       const okSingle = after.length === 1 && after[0].source === source;
       res.status(okSingle ? 200 : 500).json({
         ok: okSingle, code, source, written,
+        rows_sent: rejection.rows_sent, rows_dropped: rejection.rows_dropped,
+        rejected: rejection.rejected, allow_nonpositive: rejection.allow_nonpositive,
+        gate_warning: rejection.message, gate_hint: rejection.hint,
         rewrites_logged: rewrites.count, rewrites_max_age_days: rewrites.max_age_days,
         archived: arch.archived, archived_by_source: arch.by_source,
         total_rows: meta.total_rows, date_range: meta.date_range, fill_missing: fillMissing,
@@ -4254,7 +4269,7 @@ module.exports = function(upload) {
           db.transaction(() => {
             const up = gatedUpsertStmt();
             for (const row of (r.rows || [])) {
-              if (!row.date || !row.close) continue;
+              if (!row.date || !(strictNum(row.close) > 0)) continue;  // seri harga: close<=0 = cetakan rusak
               const st = writeBarGated(up, t.code, row, r.source || 'yahoo');
               barStates[st] = (barStates[st] || 0) + 1;
               written++;
@@ -4321,7 +4336,7 @@ module.exports = function(upload) {
       let inserted = 0, updated = 0;
       db.transaction(() => {
         for (const r of rows) {
-          if (!r.date || !r.close) continue;
+          if (!r.date || !(strictNum(r.close) > 0)) continue;  // seri harga: close<=0 = cetakan rusak
           const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, code);
           const st = writeBarGated(upsert, code, r, result.source || 'external');
           barStates[st] = (barStates[st] || 0) + 1;
@@ -4388,7 +4403,7 @@ module.exports = function(upload) {
           const barStates = {};
           db.transaction(() => {
             for (const r of data.rows) {
-              if (!r.date || !r.close) continue;
+              if (!r.date || !(strictNum(r.close) > 0)) continue;  // seri harga: close<=0 = cetakan rusak
               const existing = db.prepare('SELECT id FROM custom_ohlc WHERE trade_date=? AND code=?').get(r.date, ticker.code);
               const st = writeBarGated(upsert, ticker.code, r, data.source || 'external');
               barStates[st] = (barStates[st] || 0) + 1;
@@ -4434,6 +4449,11 @@ module.exports = function(upload) {
       const name = (req.body.name || code).trim();
       const category = (req.body.category || 'custom').trim();
       const linkedSector = (req.body.linked_sector || '').trim();
+      // Sama dengan /custom/upsert & /custom/replace: boleh ≤ 0 hanya untuk seri yang
+      // dideklarasikan di utils/series-sign.js — upload CSV dulu membuang negatif tanpa
+      // pengecualian (review sena R3), jadi seri makro lewat CSV kehilangan barisnya diam-diam.
+      const signed = allowsNonPositive(code);
+      let skippedNonpositive = 0, skippedInvalid = 0;
 
       if (!code) return res.status(400).json({ error: 'Ticker code required' });
 
@@ -4471,12 +4491,17 @@ module.exports = function(upload) {
         const volIdx = colMap.indexOf('Volume');
 
         // Parse numbers (handle various formats + strip % suffix)
+        // null = bukan angka. Dulu mengembalikan 0, sehingga '-' dan sel kosong tidak bisa
+        // dibedakan dari nilai 0 sungguhan (seri makro boleh 0, tapi bukan karena sel kosong).
+        // Tanda minus ikut diterima, termasuk format ID "-1.234,56".
         function parseNum(s) {
-          if (!s || s === '-' || s === 'null') return 0;
+          if (s === null || s === undefined) return null;
           s = String(s).replace(/"/g, '').replace(/%/g, '').trim();
-          if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+          if (!s || s === '-' || s.toLowerCase() === 'null') return null;
+          if (/^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
           else s = s.replace(/,/g, '');
-          return parseFloat(s) || 0;
+          const n = parseFloat(s);
+          return Number.isFinite(n) ? n : null;
         }
         function parseVol(s) {
           if (!s || s === '-' || s === 'null') return 0;
@@ -4539,8 +4564,11 @@ module.exports = function(upload) {
           const cols = splitCSV(lines[i], sep || ',');
           if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
           const date = parseDate(cols[dateIdx] || '');
-          const close = parseNum(cols[closeIdx] || '');
-          if (!date || close <= 0) continue;
+          const close = parseNum(cols[closeIdx] !== undefined ? cols[closeIdx] : '');
+          // close <= 0 ditolak HANYA untuk seri harga. Seri bertanda (deflasi/defisit/
+          // kontraksi, lihat utils/series-sign.js) menyimpannya apa adanya (review sena R3).
+          if (!date || close === null) { skippedInvalid++; continue; }
+          if (!signed && !(close > 0)) { skippedNonpositive++; continue; }
           rows.push({
             date,
             open: openIdx >= 0 ? parseNum(cols[openIdx] || '') : close,
@@ -4563,11 +4591,20 @@ module.exports = function(upload) {
           const cols = parseCSVLine(lines[i]);
           if (cols.length < 4) continue;
           const parsed = parseRow(cols, fmt, header);
-          if (parsed && parsed.date && parsed.close > 0) rows.push(parsed);
+          if (!parsed || !parsed.date || parsed.close === null || parsed.close === undefined) { skippedInvalid++; continue; }
+          if (!signed && !(parsed.close > 0)) { skippedNonpositive++; continue; }
+          rows.push(parsed);
         }
       }
 
-      if (!rows.length) return res.status(400).json({ error: 'No valid rows parsed' });
+      if (!rows.length) return res.status(400).json({ ok: false,
+        error: 'No valid rows parsed',
+        rows_dropped: skippedNonpositive + skippedInvalid,
+        rejected: { nonpositive: skippedNonpositive, invalid: skippedInvalid },
+        allow_nonpositive: signed,
+        hint: (!signed && skippedNonpositive)
+          ? `semua baris close<=0; kalau ${code} seri bertanda, deklarasikan di server/utils/series-sign.js`
+          : undefined });
 
       // Sort by date ascending
       rows.sort((a, b) => a.date.localeCompare(b.date));
@@ -4606,6 +4643,13 @@ module.exports = function(upload) {
         ok: true, code, name, category,
         format: colMap ? 'custom_mapped' : 'auto_detect',
         inserted, updated,
+        rows_parsed: rows.length,
+        rows_dropped: skippedNonpositive + skippedInvalid,
+        rejected: { nonpositive: skippedNonpositive, invalid: skippedInvalid },
+        allow_nonpositive: signed,
+        gate_warning: (skippedNonpositive + skippedInvalid)
+          ? `ditolak gerbang: ${skippedNonpositive} baris close<=0 (seri harga wajib >0); ${skippedInvalid} baris bukan angka`
+          : null,
         bar_states: barStates,
         total_rows: totalRows,
         date_range: { first: dateRange?.first, last: dateRange?.last }
@@ -4715,19 +4759,22 @@ module.exports = function(upload) {
       if (!date) return null;
 
       // Parse numbers (handle "1.234,56" Investing ID format + "1,234.56" EN format)
+      // null = bukan angka; lihat catatan di parseNum jalur col_map. Minus ikut diterima.
       function parseNum(s) {
-        if (!s || s === '-' || s === 'null') return 0;
+        if (s === null || s === undefined) return null;
         s = String(s).replace(/"/g, '').trim();
+        if (!s || s === '-' || s.toLowerCase() === 'null') return null;
         // Detect Investing ID format: dot as thousand sep, comma as decimal
         // "15.690,50" or "15,52"
-        if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) {
+        if (/^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) {
           // European/ID format: 1.234.567,89
           s = s.replace(/\./g, '').replace(',', '.');
         } else {
           // EN format: 1,234,567.89
           s = s.replace(/,/g, '');
         }
-        return parseFloat(s) || 0;
+        const n = parseFloat(s);
+        return Number.isFinite(n) ? n : null;
       }
 
       // Parse volume (handle "1,03M", "870,54K", "1.03M", "870.54K")
