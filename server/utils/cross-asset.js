@@ -29,6 +29,10 @@
 //     TIDAK dikirim sebagai `last` (null) karena bar terakhirnya bukan sesi terkini.
 //     Seri 'by_source'/'na' mengirim level + tanggal + umur; UI wajib menampilkan tanggalnya.
 //  5. Semua angka dibulatkan 2 desimal di server (r2) supaya format konsisten lintas blok.
+//  6. Setiap baris membawa `status` EKSKLUSIF (fresh|stale|delayed|aged|unmeasured|no_series).
+//     Penanda baris dan hitungan coverage membaca field yang sama; jumlah bucket = jumlah seri.
+//     `state` mentah dari series-freshness.js tetap dikirim untuk diagnosis, tapi JANGAN dipakai
+//     untuk menghitung — percabangan ganda di dua tempat itulah yang dulu membuat strip 79/78.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const freshnessUtil = require('./series-freshness');
@@ -170,14 +174,32 @@ function buildRow(t, rawRows, ctx) {
   const stale = fresh.state === 'excess';
   const levelCurrent = stale ? null : (lastRow ? lastRow.close : null);
 
-  // 'na' = umurnya tidak diukur. Bila umurnya sudah jauh lebih panjang dari kadensnya, itu
-  // bukan "segar" — diberi tanda `aged` supaya masuk coverage (tanpa menyebutnya basi).
-  // Ambang = kelonggaran rilis normal per kadens (data bulanan memang terbit ~1 bulan kemudian;
-  // data kuartalan ~1 kuartal). Bukan ambang "basi" — seri ber-deklarasi memakai
-  // expected_lag_sessions, ini hanya untuk seri yang umurnya TIDAK diukur.
-  const AGED_DAYS = { D: 5, W: 21, M: 60, Q: 130, Y: 400 };
+  // ── Umur lewat kadens: aturan lama L2 dipulihkan (D5 / W12 / M45 / Q130) ──
+  // Versi sebelumnya memakai M60/W21 dan itu membuat 7 seri SRBI (bar 31 Agu, umur 49 hari pada
+  // rujukan 19 Okt) tampil berwarna seperti pergerakan hari ini TANPA penanda — persis yang
+  // dilarang DoD3 kalimat kedua (temuan review sena r2, kartu t_19f4f0d4).
+  //
+  // KEPUTUSAN yang tercatat di sini (bukan asumsi tersembunyi):
+  //  a) ambang generik hanya berlaku untuk seri yang lag-nya BELUM dideklarasikan (state 'na').
+  //     Seri ber-`expected_lag_sessions` sudah punya keadaan sendiri dari series-freshness.js
+  //     (fresh / by_source / excess); ambang kadens tidak boleh menimpa deklarasi per sumber.
+  //  b) jalur yang lebih tepat untuk SRBI/IndONIA adalah mendeklarasikan lag per sumber di
+  //     scripts/seed_expected_lag.js. Itu TIDAK dikerjakan di sini karena butuh jadwal rilis
+  //     yang terverifikasi — mengarang angka lag adalah data palsu, bukan perbaikan.
+  const AGED_DAYS = { D: 5, W: 12, M: 45, Q: 130, Y: 400 };
   const agedDays = AGED_DAYS[freqInfo.freq] || AGED_DAYS.D;
-  const aged = !stale && ageDays != null && ageDays > agedDays;
+  const aged = fresh.state === 'na' && ageDays != null && ageDays > agedDays;
+
+  // ── Status baris EKSKLUSIF: satu seri menempati tepat satu status ──
+  // Dipakai BERSAMA oleh penanda baris dan hitungan coverage. Sebelumnya coverage menghitung
+  // `unmeasured` dari state 'na' lalu menambahkan `aged` di luar rantai if/else, sehingga
+  // BI_RATE masuk dua bucket dan strip menjumlah 79 untuk 78 seri (temuan review sena r2).
+  // Sekarang hitungan dan penanda membaca field yang sama — secara konstruksi tidak bisa beda.
+  const status = !n ? 'no_series'
+    : fresh.state === 'excess' ? 'stale'
+      : fresh.state === 'by_source' ? 'delayed'
+        : fresh.state === 'fresh' ? 'fresh'
+          : aged ? 'aged' : 'unmeasured';
 
   return {
     code: t.code,
@@ -212,6 +234,7 @@ function buildRow(t, rawRows, ctx) {
     no_series: n === 0,
     // ---- kesegaran (kontrak series-freshness.js, diteruskan apa adanya) ----
     state: fresh.state,
+    status,                      // EKSKLUSIF: fresh | stale | delayed | aged | unmeasured | no_series
     stale,
     aged,
     lag_sessions: fresh.lag_sessions,
@@ -250,20 +273,24 @@ function buildMonitor(db, ctx) {
   for (const cat of order) {
     if (!seen[cat]) continue;
     const items = seen[cat].slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    const fresh = items.filter(i => i.state === 'fresh').length;
+    // Hitungan per grup juga dari `status` (eksklusif), bukan dari `state` — kalau tidak,
+    // grup bisa melaporkan dua keadaan untuk satu seri yang sama.
+    const nStatus = (st) => items.filter(i => i.status === st).length;
+    const fresh = nStatus('fresh');
     const dates = items.map(i => i.as_of).filter(Boolean).sort();
     groups.push({
       category: cat,
       label: CATEGORY_LABELS[cat] || cat,
       count: items.length,
       fresh_count: fresh,
-      unmeasured_count: items.filter(i => i.state === 'na').length,
-      stale_count: items.filter(i => i.state === 'excess').length,
-      delayed_count: items.filter(i => i.state === 'by_source').length,
-      no_series_count: items.filter(i => i.no_series).length,
+      unmeasured_count: nStatus('unmeasured'),
+      stale_count: nStatus('stale'),
+      delayed_count: nStatus('delayed'),
+      aged_count: nStatus('aged'),
+      no_series_count: nStatus('no_series'),
       as_of_min: dates.length ? dates[0] : null,
       as_of_max: dates.length ? dates[dates.length - 1] : null,
-      stale_codes: items.filter(i => i.state === 'excess').map(i => i.code),
+      stale_codes: items.filter(i => i.status === 'stale').map(i => i.code),
       // legend jendela: satu group bisa memuat seri harian dan bulanan
       windows: Array.from(new Set(items.map(i => i.freq))).sort().join('/'),
       items,
@@ -275,17 +302,32 @@ function buildMonitor(db, ctx) {
 /**
  * Coverage: apa yang TIDAK kita punya / tidak bisa diklaim. Menggantikan tombol refresh:
  * halaman harus jujur soal lubangnya, bukan menawarkan "coba lagi".
+ *
+ * Dua jenis daftar, dan perbedaannya disengaja:
+ *  1. BUCKET STATUS (fresh/stale/delayed/aged/unmeasured/no_series) — saling eksklusif,
+ *     dibaca dari `series[].status` yang juga dipakai penanda baris. Jumlahnya WAJIB = jumlah
+ *     seri; `counts.status_sum` dikirim supaya pembaca bisa memeriksa sendiri tanpa menghitung
+ *     ulang (temuan review r2: versi lama menjumlah 79 untuk 78 seri karena `aged` ditambahkan
+ *     di luar rantai if/else).
+ *  2. ATRIBUT SILANG (undeclared_lag, unit_missing, unit_unknown, thin) — sengaja TUMPANG
+ *     TINDIH dengan status: satu seri bisa basi sekaligus berhistori tipis. Tidak dijumlahkan
+ *     ke `series` dan tidak boleh dibaca sebagai partisi.
  */
 function coverageOf(monitor, ctx, extras) {
   const e = extras || {};
   const stale = [], delayed = [], unmeasured = [], undeclared_lag = [], unit_missing = [], unit_unknown = [], thin = [], no_series = [], aged = [];
   for (const s of monitor.series) {
-    const item = { code: s.code, name: s.name, category: s.category, as_of: s.as_of, age_days: s.age_days, state: s.state, lag_sessions: s.lag_sessions, expected_lag_sessions: s.expected_lag_sessions };
-    if (s.no_series) { no_series.push(item); continue; }
-    if (s.state === 'excess') stale.push(item);
-    else if (s.state === 'by_source') delayed.push(item);
-    else if (s.state === 'na') unmeasured.push(Object.assign({ lag_basis: s.lag_basis, aged: s.aged }, item));
-    if (s.state !== 'excess' && s.aged) aged.push(item);
+    const item = { code: s.code, name: s.name, category: s.category, as_of: s.as_of, age_days: s.age_days, state: s.state, status: s.status, lag_sessions: s.lag_sessions, expected_lag_sessions: s.expected_lag_sessions };
+    // Bucket EKSKLUSIF: satu `switch`, satu tempat keluar. `status` sudah dihitung sekali di
+    // buildRow, jadi strip dan badge baris tidak mungkin bercerita beda.
+    switch (s.status) {
+      case 'no_series': no_series.push(item); break;
+      case 'stale': stale.push(item); break;
+      case 'delayed': delayed.push(item); break;
+      case 'aged': aged.push(item); break;
+      case 'fresh': break;
+      default: unmeasured.push(Object.assign({ lag_basis: s.lag_basis }, item)); break;
+    }
     if (!s.lag_basis) undeclared_lag.push(item);
     // Dua kelas satuan yang berbeda dan TIDAK boleh dicampur:
     //   unit_missing = value_kind belum dideklarasikan -> perubahan tidak bisa ditafsirkan
@@ -297,23 +339,38 @@ function coverageOf(monitor, ctx, extras) {
   }
   const byAge = (a, b) => (b.age_days == null ? -1 : b.age_days) - (a.age_days == null ? -1 : a.age_days);
   stale.sort(byAge); unmeasured.sort(byAge); thin.sort(byAge); delayed.sort(byAge); aged.sort(byAge);
+  const statusCounts = {
+    fresh: monitor.series.filter(s => s.status === 'fresh').length,
+    stale: stale.length,
+    delayed: delayed.length,
+    aged: aged.length,
+    unmeasured: unmeasured.length,
+    no_series: no_series.length,
+  };
+  const statusSum = statusCounts.fresh + statusCounts.stale + statusCounts.delayed
+    + statusCounts.aged + statusCounts.unmeasured + statusCounts.no_series;
   return {
     ref_date: ctx ? ctx.ref_date : null,
     ref_source: ctx ? ctx.ref_source : null,
     pipeline: (ctx && ctx.pipeline) || null,
-    counts: {
+    // Aturan umur-lewat-kadens yang BERLAKU, dikirim bersama datanya supaya pembaca bisa
+    // membantahnya tanpa membaca kode (dan supaya perubahan ambang tidak jadi asumsi tersembunyi).
+    age_thresholds: { D: 5, W: 12, M: 45, Q: 130, Y: 400 },
+    age_threshold_note: 'Ambang umur (hari) per kadens untuk seri yang lag-nya BELUM dideklarasikan. '
+      + 'Berlaku hanya untuk seri tanpa expected_lag_sessions; seri ber-deklarasi memakai keadaan '
+      + 'fresh/by_source/excess dari series-freshness.js. Aturan lama L2 (D5/W12/M45/Q130) dipulihkan '
+      + 'pada review r2 supaya seri SRBI 49 hari tidak tampil seperti angka hari ini.',
+    counts: Object.assign({
       series: monitor.series.length,
-      fresh: monitor.series.filter(s => s.state === 'fresh').length,
-      stale: stale.length,
-      delayed: delayed.length,
-      unmeasured: unmeasured.length,
-      aged: aged.length,
+      status_sum: statusSum,
+      status_sum_ok: statusSum === monitor.series.length,
+    }, statusCounts, {
+      // Atribut silang — TIDAK dijumlahkan ke `series` (boleh tumpang tindih).
       undeclared_lag: undeclared_lag.length,
       unit_missing: unit_missing.length,
       unit_unknown: unit_unknown.length,
       thin: thin.length,
-      no_series: no_series.length,
-    },
+    }),
     stale, delayed, unmeasured, aged, undeclared_lag, unit_missing, unit_unknown, thin, no_series,
     extras: e.extras || null,
   };

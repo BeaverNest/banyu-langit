@@ -76,7 +76,11 @@ router.get('/cross-asset', (req, res) => {
           chg_1: s.chg_1,               // perubahan 1 PERIODE seri (bulanan untuk SRBI) — bukan 3 bulan
           chg_1_unit: s.kind === 'price' ? '%' : (s.unit || null),
           period_1: s.window ? s.window.lags[0] + ' ' + s.window.unit : null,
-          state: s.state, stale: s.stale,
+          // `status` diteruskan apa adanya: tabel likuiditas tidak boleh punya aturan kesegaran
+          // sendiri (dulu ia menyimpulkan 'stale/na/fresh' dari `state` dan itu menyembunyikan
+          // seri SRBI yang umurnya lewat kadens).
+          status: s.status,
+          state: s.state, stale: s.stale, aged: s.aged,
           lag_sessions: s.lag_sessions, expected_lag_sessions: s.expected_lag_sessions,
         };
       }),
