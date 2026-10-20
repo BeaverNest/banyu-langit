@@ -386,7 +386,8 @@ function mrRowDetail(tr) {
 // Sparkline = SVG poligraf inline, bukan chart library: 30 titik tidak butuh kanvas, dan
 // import ECharts untuk 78 baris (bila semua dibuka) akan menambah beban render tanpa manfaat.
 function mrSparkSvg(vals) {
-  var w = 240, hgt = 34, pad = 2;
+  // Lebar sparkline mengikuti lebar tabel (viewBox diskalakan), bukan 240px tetap.
+  var w = 1000, hgt = 140, pad = 6;
   var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
   var pts = vals.map(function (v, i) {
@@ -395,9 +396,11 @@ function mrSparkSvg(vals) {
     return x.toFixed(1) + ',' + y.toFixed(1);
   }).join(' ');
   var col = vals[vals.length - 1] >= vals[0] ? 'var(--gn)' : 'var(--rd)';
-  return '<svg width="' + w + '" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '"'
-    + ' style="display:block;margin-top:5px" aria-label="sparkline" role="img">'
-    + '<polyline fill="none" stroke="' + col + '" stroke-width="1.4" points="' + pts + '"></polyline></svg>';
+  return '<svg width="100%" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '"'
+    + ' preserveAspectRatio="none"'
+    + ' style="display:block;margin-top:6px;width:100%" aria-label="sparkline" role="img">'
+    + '<polyline fill="none" stroke="' + col + '" stroke-width="1.6" vector-effect="non-scaling-stroke"'
+    + ' points="' + pts + '"></polyline></svg>';
 }
 
 function mrSeriesDetailHtml(it) {
