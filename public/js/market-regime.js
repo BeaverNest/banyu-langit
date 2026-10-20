@@ -423,6 +423,7 @@ function mrSeriesDetailHtml(it) {
     + (it.age_days == null ? '' : ' · umur <b style="color:var(--t2)">' + it.age_days + ' hari</b>') + '</span>'
     + '<span>sumber <b style="color:var(--t2)">' + esc(it.source || '—') + '</b></span>'
     + '<span>n_bars <b style="color:var(--t2)">' + n + '</b>'
+    + (it.freq ? ' · ' + esc(MR_FREQ_TEXT[it.freq] || it.freq) : '')
     + (it.first_date ? ' (' + esc(it.first_date) + ' &rarr; ' + esc(it.as_of || '—') + ')' : '') + '</span>'
     + '<span>satuan <b style="color:var(--t2)">' + esc(it.unit || '—') + '</b></span>'
     + '<span>terakhir <b style="color:var(--t2)">' + mrNum(it.last) + '</b></span>'
