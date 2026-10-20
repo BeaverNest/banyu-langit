@@ -97,7 +97,6 @@ function renderTickerPage(d) {
   h += '<button onclick="window.open(\'https://stockbit.com/symbol/' + esc(code) + '/chartbit\',\'_blank\')" style="background:var(--bl);color:#fff;border-color:var(--bl)">📈 Chart</button>';
   h += '<button onclick="window.open(\'https://www.idx.co.id/id/hasil-pencarian?q=' + esc(code) + '&p=1&sort=1\',\'_blank\')">🏛 IDX</button>';
   h += '<button onclick="addWatchlistFrom(\'' + esc(code) + '\');showT(\'Watchlist\',\'' + esc(code) + '.JK added\')">+ Watchlist</button>';
-  h += '<button onclick="gsClose();stab(\'ins\',document.querySelectorAll(\'.tabs .tab\')[5]);setTimeout(function(){insGoStock(\'' + esc(code) + '\')},200)">🔍 Insider</button>';
   h += '<button onclick="gsClose();togWL();setTimeout(function(){$(\'as\').value=\'' + esc(code) + '.JK\';},200)">🔔 Alert</button>';
   h += '</div></div>';
   // Sector & index badges
@@ -111,7 +110,7 @@ function renderTickerPage(d) {
   }
   // Price
   h += '<div class="tp-price">';
-  h += '<span class="price ' + pCls + '">' + close.toLocaleString() + '</span>';
+  h += '<span class="price ' + pCls + '">' + close.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + '</span>';
   h += '<span class="chg ' + pCls + '">' + (chg > 0 ? '+' : '') + chg.toLocaleString() + ' (' + (chgPct > 0 ? '+' : '') + chgPct.toFixed(2) + '%)</span>';
   h += '</div>';
   // Meta row
@@ -125,7 +124,7 @@ function renderTickerPage(d) {
     h += '<span>Val <b>' + fmtRp(p.value || 0) + '</b></span>';
     h += '<span>Freq <b>' + fmtNum(p.frequency || 0) + '</b></span>';
     if (mktCap) h += '<span>MCap <b>' + fmtRp(mktCap) + '</b></span>';
-    if (ff) h += '<span>FF <b>' + ff.toFixed(1) + '%</b></span>';
+    if (ff) h += '<span>FF <b>' + ff.toFixed(2) + '%</b></span>';
     if (p.bid) h += '<span>Bid <b>' + p.bid.toLocaleString() + '</b> (' + fmtNum(p.bid_vol) + ')</span>';
     if (p.offer) h += '<span>Offer <b>' + p.offer.toLocaleString() + '</b> (' + fmtNum(p.offer_vol) + ')</span>';
     h += '</div>';
@@ -274,12 +273,12 @@ function renderTickerPage(d) {
     if (hasIdx) {
       h += '<div class="tp-section">Valuation & Profitability</div>';
       h += '<div class="tp-grid">';
-      h += '<div class="tp-stat"><div class="sv">' + (fund.per ? fund.per.toFixed(1) : '-') + '</div><div class="sl">PER</div></div>';
+      h += '<div class="tp-stat"><div class="sv">' + (fund.per ? fund.per.toFixed(2) : '-') + '</div><div class="sl">PER</div></div>';
       h += '<div class="tp-stat"><div class="sv">' + (fund.pbv ? fund.pbv.toFixed(2) : '-') + '</div><div class="sl">PBV</div></div>';
-      h += '<div class="tp-stat"><div class="sv ' + (fund.roe > 15 ? 'up' : fund.roe < 5 ? 'dn' : '') + '">' + (fund.roe ? fund.roe.toFixed(1) + '%' : '-') + '</div><div class="sl">ROE</div></div>';
-      h += '<div class="tp-stat"><div class="sv ' + (fund.roa > 10 ? 'up' : fund.roa < 3 ? 'dn' : '') + '">' + (fund.roa ? fund.roa.toFixed(1) + '%' : '-') + '</div><div class="sl">ROA</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.roe > 15 ? 'up' : fund.roe < 5 ? 'dn' : '') + '">' + (fund.roe ? fund.roe.toFixed(2) + '%' : '-') + '</div><div class="sl">ROE</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.roa > 10 ? 'up' : fund.roa < 3 ? 'dn' : '') + '">' + (fund.roa ? fund.roa.toFixed(2) + '%' : '-') + '</div><div class="sl">ROA</div></div>';
       h += '<div class="tp-stat"><div class="sv ' + (fund.der < 1 ? 'up' : fund.der > 2 ? 'dn' : '') + '">' + (fund.der != null ? fund.der.toFixed(2) : '-') + '</div><div class="sl">DER</div></div>';
-      h += '<div class="tp-stat"><div class="sv ' + (fund.npm > 15 ? 'up' : fund.npm < 5 ? 'dn' : '') + '">' + (fund.npm ? fund.npm.toFixed(1) + '%' : '-') + '</div><div class="sl">NPM</div></div>';
+      h += '<div class="tp-stat"><div class="sv ' + (fund.npm > 15 ? 'up' : fund.npm < 5 ? 'dn' : '') + '">' + (fund.npm ? fund.npm.toFixed(2) + '%' : '-') + '</div><div class="sl">NPM</div></div>';
       h += '<div class="tp-stat"><div class="sv">' + fmtRp(fund.mkt_cap || 0) + '</div><div class="sl">Mkt Cap</div></div>';
       h += '<div class="tp-stat"><div class="sv">' + fmtRp(fund.total_rev || 0) + '</div><div class="sl">Revenue</div></div>';
       h += '</div>';
@@ -287,8 +286,8 @@ function renderTickerPage(d) {
       if (hasRatios) {
         var latR = d.financial_ratios[0];
         h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:-2px 0 8px">';
-        if (latR.eps) h += '<span style="font-size:var(--font-sm);padding:2px 8px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1)">EPS <b style="color:var(--bl)">' + latR.eps.toFixed(0) + '</b></span>';
-        if (latR.book_value) h += '<span style="font-size:var(--font-sm);padding:2px 8px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1)">BV <b style="color:var(--bl)">' + latR.book_value.toFixed(0) + '</b></span>';
+        if (latR.eps) h += '<span style="font-size:var(--font-sm);padding:2px 8px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1)">EPS <b style="color:var(--bl)">' + latR.eps.toFixed(2) + '</b></span>';
+        if (latR.book_value) h += '<span style="font-size:var(--font-sm);padding:2px 8px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1)">BV <b style="color:var(--bl)">' + latR.book_value.toFixed(2) + '</b></span>';
         h += '</div>';
       }
     }
@@ -301,11 +300,11 @@ function renderTickerPage(d) {
       if (ip) h += ' · ' + esc(ip.industry) + ' (' + ip.count + ')';
       h += '</div>';
       var metrics = [
-        {k:'per', label:'PER', val: fund.per, fmt:function(v){return v.toFixed(1);}},
+        {k:'per', label:'PER', val: fund.per, fmt:function(v){return v.toFixed(2);}},
         {k:'pbv', label:'PBV', val: fund.pbv, fmt:function(v){return v.toFixed(2);}},
-        {k:'roe', label:'ROE', val: fund.roe, fmt:function(v){return v.toFixed(1)+'%';}},
+        {k:'roe', label:'ROE', val: fund.roe, fmt:function(v){return v.toFixed(2)+'%';}},
         {k:'der', label:'DER', val: fund.der, fmt:function(v){return v.toFixed(2);}},
-        {k:'npm', label:'NPM', val: fund.npm, fmt:function(v){return v.toFixed(1)+'%';}}
+        {k:'npm', label:'NPM', val: fund.npm, fmt:function(v){return v.toFixed(2)+'%';}}
       ].filter(function(m){return m.val && sp[m.k];});
       h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg2);padding:4px 0">' + BL.container('gs-bullet-chart', metrics.length * 32 + 16) + '</div>';
       h += '<div style="display:flex;gap:12px;font-size:8px;color:var(--t3);margin-top:3px;padding:0 4px">';
@@ -343,7 +342,7 @@ function renderTickerPage(d) {
         if (stockVal > 0) {
           h += '<div style="font-size:var(--font-sm);margin-top:4px;display:flex;gap:8px;align-items:center">';
           h += '<span style="padding:2px 8px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1);color:' + zColor + ';font-weight:700">' + zLabel + '</span>';
-          h += '<span style="color:var(--t3)">' + esc(code) + ' ' + bm.toUpperCase() + ' ' + stockVal.toFixed(bm === 'pbv' ? 2 : 1) + ' vs Industry avg ' + mean.toFixed(1) + ' (z=' + zscore.toFixed(1) + ')</span>';
+          h += '<span style="color:var(--t3)">' + esc(code) + ' ' + bm.toUpperCase() + ' ' + stockVal.toFixed(bm === 'pbv' ? 2 : 1) + ' vs Industry avg ' + mean.toFixed(2) + ' (z=' + zscore.toFixed(2) + ')</span>';
           h += '</div>';
         }
       }
@@ -370,7 +369,7 @@ function renderTickerPage(d) {
       h += '<div class="tp-grid">';
       [['mtd', 'MTD'], ['ytd', 'YTD'], ['chg_4w', '4W'], ['chg_13w', '13W'], ['chg_26w', '26W'], ['chg_52w', '52W']].forEach(function(p) {
         var v = fund[p[0]] || 0; var cls = v > 0 ? 'up' : v < 0 ? 'dn' : '';
-        h += '<div class="tp-stat"><div class="sv ' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</div><div class="sl">' + p[1] + '</div></div>';
+        h += '<div class="tp-stat"><div class="sv ' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(2) + '%</div><div class="sl">' + p[1] + '</div></div>';
       });
       h += '</div>';
     }
@@ -648,7 +647,7 @@ function gsRenderCharts() {
       var c2 = BL.init(el2, 'gs-band'); if (c2) {
         var dates = bd2.its.map(function(r){return r.trade_date;});
         var vals2 = bd2.its.map(function(r){return r[bd2.bm]||null;});
-        var markLines = [{yAxis:bd2.mean,name:'μ '+bd2.mean.toFixed(1),lineStyle:{color:'#6b7a8d',type:'dashed',width:1}},
+        var markLines = [{yAxis:bd2.mean,name:'μ '+bd2.mean.toFixed(2),lineStyle:{color:'#6b7a8d',type:'dashed',width:1}},
           {yAxis:bd2.mean+bd2.stddev,name:'+1σ',lineStyle:{color:'#3a4a5a',type:'dotted'}},
           {yAxis:bd2.mean-bd2.stddev,name:'-1σ',lineStyle:{color:'#3a4a5a',type:'dotted'}}];
         var markAreas = [[{yAxis:bd2.mean-bd2.stddev},{yAxis:bd2.mean+bd2.stddev}]];
@@ -657,7 +656,7 @@ function gsRenderCharts() {
           grid:BL.grid({top:12,bottom:36,left:40,right:50}),
           dataZoom:BL.dataZoom(),
           xAxis:{type:'category',data:dates,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
-          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(1);}}},
+          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(2);}}},
           series:[{type:'line',data:vals2,symbol:'none',lineStyle:{width:1.5,color:BL.colors.blue,opacity:0.7},
             markLine:{silent:true,symbol:'none',label:{fontSize:7,color:'#6b7a8d',formatter:function(p){return p.name;}},data:markLines},
             markArea:{silent:true,itemStyle:{color:'rgba(84,112,198,0.06)'},data:markAreas}}]
@@ -682,7 +681,7 @@ function gsRenderCharts() {
           grid:BL.grid({top:10,bottom:36,left:40,right:50}),
           dataZoom:BL.dataZoom(),
           xAxis:{type:'category',data:dates3,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
-          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(1);}}},
+          yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(2);}}},
           series:[{type:'line',data:vals3,symbol:'none',lineStyle:{width:1.5,color:BL.colors.amber},
             markLine:{silent:true,symbol:'none',label:{fontSize:7,color:'#6b7a8d'},data:[
               {yAxis:bd3.pbvMean,name:'μ '+bd3.pbvMean.toFixed(2),lineStyle:{color:'#6b7a8d',type:'dashed',width:1}}
@@ -716,7 +715,7 @@ function gsRenderCharts() {
         if (cas5 && cas5.length) {
           var caLines = cas5.map(function(ca){
             var typeLbl = {split:'S',reverse:'R',rights_or_bonus:'RB',manual:'M'}[ca.action_type]||'?';
-            return {xAxis:ca.ex_date,label:{formatter:'⚡'+typeLbl+' '+ca.ratio.toFixed(1)+'x',fontSize:8,color:BL.colors.amber,fontWeight:700,position:'start'},lineStyle:{color:BL.colors.amber,type:'dashed',width:1}};
+            return {xAxis:ca.ex_date,label:{formatter:'⚡'+typeLbl+' '+ca.ratio.toFixed(2)+'x',fontSize:8,color:BL.colors.amber,fontWeight:700,position:'start'},lineStyle:{color:BL.colors.amber,type:'dashed',width:1}};
           });
           seriesArr[seriesArr.length-1].markLine = {silent:true,symbol:'none',data:caLines};
         }

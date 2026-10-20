@@ -216,7 +216,7 @@ function renderCorrResult() {
   var acCls = avgCorr > 0.6 ? 'color:var(--rd)' : avgCorr > 0.3 ? 'color:var(--am)' : 'color:var(--gn)';
   var dsCls = divScore < 40 ? 'color:var(--rd)' : divScore < 70 ? 'color:var(--am)' : 'color:var(--gn)';
   var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
-  h += '<div class="bd-card"><div class="bd-card-label">Avg Correlation</div><div class="bd-card-val"><span style="' + acCls + '">' + avgCorr.toFixed(3) + '</span></div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Avg Correlation</div><div class="bd-card-val"><span style="' + acCls + '">' + avgCorr.toFixed(2) + '</span></div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Diversification Score</div><div class="bd-card-val"><span style="' + dsCls + '">' + divScore + '/100</span></div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">High Corr Pairs (≥0.7)</div><div class="bd-card-val"><span style="' + (highPairs.length > 0 ? 'color:var(--rd)' : 'color:var(--gn)') + '">' + highPairs.length + '</span></div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Low Corr Pairs (≤0.2)</div><div class="bd-card-val"><span style="color:var(--gn)">' + lowPairs.length + '</span></div></div>';
@@ -271,10 +271,10 @@ function renderCorrResult() {
 
       h += '<tr>';
       h += '<td class="al"><span class="code" onclick="gsOpen(\'' + esc(code) + '\')">' + esc(code) + '</span></td>';
-      h += '<td class="ar" style="font-weight:700;background:' + bg + '">' + compScore.toFixed(1) + '</td>';
-      h += '<td class="ar">' + (sc.score_fundamental || 0).toFixed(1) + '</td>';
-      h += '<td class="ar">' + (sc.score_valuation || 0).toFixed(1) + '</td>';
-      h += '<td class="ar">' + (sc.score_momentum || 0).toFixed(1) + '</td>';
+      h += '<td class="ar" style="font-weight:700;background:' + bg + '">' + compScore.toFixed(2) + '</td>';
+      h += '<td class="ar">' + (sc.score_fundamental || 0).toFixed(2) + '</td>';
+      h += '<td class="ar">' + (sc.score_valuation || 0).toFixed(2) + '</td>';
+      h += '<td class="ar">' + (sc.score_momentum || 0).toFixed(2) + '</td>';
       h += '<td class="al" style="font-size:9px">' + esc(sc.sector || '-') + '</td>';
       h += '<td class="ar" style="font-weight:600;' + acC + '">' + avgC.toFixed(2) + '</td>';
       h += '<td class="ar" style="font-weight:600;' + mcC + '">' + maxC.toFixed(2) + '</td>';
@@ -485,8 +485,8 @@ function renderBuilderResult() {
   var divScore = Math.max(0, Math.min(100, Math.round((1 - r.avgCorr) * 100)));
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
   h += '<div class="bd-card"><div class="bd-card-label">Selected</div><div class="bd-card-val">' + r.selected.length + '/' + r.maxPos + '</div></div>';
-  h += '<div class="bd-card"><div class="bd-card-label">Avg Score</div><div class="bd-card-val" style="color:var(--gn)">' + avgScore.toFixed(1) + '</div></div>';
-  h += '<div class="bd-card"><div class="bd-card-label">Avg Correlation</div><div class="bd-card-val" style="' + (r.avgCorr > 0.5 ? 'color:var(--am)' : 'color:var(--gn)') + '">' + r.avgCorr.toFixed(3) + '</div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Avg Score</div><div class="bd-card-val" style="color:var(--gn)">' + avgScore.toFixed(2) + '</div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Avg Correlation</div><div class="bd-card-val" style="' + (r.avgCorr > 0.5 ? 'color:var(--am)' : 'color:var(--gn)') + '">' + r.avgCorr.toFixed(2) + '</div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Diversification</div><div class="bd-card-val" style="' + (divScore < 50 ? 'color:var(--am)' : 'color:var(--gn)') + '">' + divScore + '/100</div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Max Corr Threshold</div><div class="bd-card-val">' + r.maxCorr + '</div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Skipped</div><div class="bd-card-val" style="color:var(--rd)">' + r.skipped.length + '</div></div>';
@@ -503,7 +503,7 @@ function renderBuilderResult() {
     h += '<tr><td style="text-align:center;color:var(--t3)">' + (i + 1) + '</td>';
     h += '<td class="al"><span class="code" onclick="gsOpen(\'' + esc(s.code) + '\')">' + esc(s.code) + '</span></td>';
     h += '<td class="ar" style="font-family:var(--fm)">' + s.rank + '</td>';
-    h += '<td class="ar" style="font-weight:700;color:var(--gn)">' + s.score.toFixed(1) + '</td>';
+    h += '<td class="ar" style="font-weight:700;color:var(--gn)">' + s.score.toFixed(2) + '</td>';
     h += '<td class="al" style="font-size:9px">' + esc(sc.sector || '') + '</td>';
     h += '</tr>';
   });
@@ -528,7 +528,7 @@ function renderBuilderResult() {
     r.skipped.slice(0, 20).forEach(function(s) {
       h += '<tr><td class="al"><span class="code" onclick="gsOpen(\'' + esc(s.code) + '\')">' + esc(s.code) + '</span></td>';
       h += '<td class="ar" style="font-family:var(--fm)">' + s.rank + '</td>';
-      h += '<td class="ar">' + s.score.toFixed(1) + '</td>';
+      h += '<td class="ar">' + s.score.toFixed(2) + '</td>';
       h += '<td class="al" style="font-size:9px;color:var(--rd)">' + esc(s.reason) + '</td></tr>';
     });
     h += '</tbody></table></div>';

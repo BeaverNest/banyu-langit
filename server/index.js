@@ -68,6 +68,9 @@ app.use('/api', watchlistRoutes);
 app.use('/api', marketRoutes);
 app.use('/api/insider', insiderRoutes);
 app.use('/api/idx', idxRoutes);
+// Monitor lintas aset + skor regime (kanban t_19f4f0d4) — router sendiri supaya berkas route
+// idx.js (6 ribu baris) tidak perlu ditumbuhi satu blok lagi setiap kali ada data baru.
+app.use('/api/idx', require('./routes/cross-asset'));
 app.use('/api/screener', screenerRoutes);
 app.use('/api/backtest', require('./routes/backtest'));
 app.use('/api/portfolio', require('./routes/portfolio'));

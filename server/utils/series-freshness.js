@@ -313,7 +313,17 @@ function buildContext(db, opts) {
   const now = toDate(o.now == null ? new Date() : o.now) || new Date();
   let rail = '', idx = '';
   try {
-    rail = (db.prepare(`SELECT MAX(trade_date) AS d FROM custom_ohlc WHERE ${REGULAR_SESSION}`).get() || {}).d || '';
+    // Frontier rail WAJIB dinormalisasi ke ISO sebelum dibandingkan. Sebagian penulis (rail
+    // investing/calendar untuk seri MACRO_*) menyimpan tanggal sebagai 'YYYY/MM/DD'; karena '/'
+    // (0x2F) > '-' (0x2D), MAX() string memilih '2026/10/09' alih-alih sesi ISO '2026-10-19'.
+    // Akibatnya `ref` jadi tanggal yang TIDAK sebanding dengan kalender sesi (semua sesi ISO
+    // terbaca <= ref karena '-' < '/'): lag_sessions semua seri jadi 0 -> seluruh panel mencetak
+    // 'fresh', dan satu-satunya seri yang menyala adalah yang tertinggal (kasus TIN lag 3,
+    // seharusnya 2). Normalisasi di sini = satu perbaikan untuk semua surface kesegaran.
+    const iso = "trade_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'";
+    const isoOf = "substr(trade_date,1,4)||'-'||substr(trade_date,6,2)||'-'||substr(trade_date,9,2)";
+    rail = (db.prepare(`SELECT MAX(CASE WHEN ${iso} THEN trade_date ELSE ${isoOf} END) AS d
+                        FROM custom_ohlc WHERE ${REGULAR_SESSION}`).get() || {}).d || '';
   } catch (e) { /* tabel belum ada -> biarkan kosong */ }
   try {
     idx = (db.prepare('SELECT MAX(trade_date) AS d FROM idx_daily').get() || {}).d || '';

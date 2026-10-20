@@ -153,7 +153,7 @@ var AFL_VARIABLES = {
 function _t(d,k){return d.tech?d.tech[k]:null;}
 function _f(d,k){return d.fund?d.fund[k]:null;}
 function _x(d,k){return d.extra?d.extra[k]:null;}
-function _pct(v){if(v==null)return'—';return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'%</span>';}
+function _pct(v){if(v==null)return'—';return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(2)+'%</span>';}
 function _num(v){if(v==null||v===0)return'—';return typeof v==='number'?v.toLocaleString():v;}
 function _bool(v){return v?'<span class="up">✓</span>':'<span style="color:var(--t3)">·</span>';}
 function _dist(d,k){var t=d.tech;if(!t||!t[k]||!d.close)return null;return Math.round((d.close-t[k])/t[k]*10000)/100;}
@@ -190,7 +190,7 @@ var scrAllCols = {
   value:{label:'Value',align:'ar',mono:1,sort:function(d){return d.value||0;},fmt:function(d){return fmtRp(d.value);}},
   freq:{label:'Freq',align:'ar',mono:1,sort:function(d){return d.frequency||0;},fmt:function(d){return(d.frequency||0).toLocaleString();}},
   dvmil:{label:'DVMil',align:'ar',mono:1,sort:function(d){return(d.value||0)/1e6;},fmt:function(d){return d.value?Math.round(d.value/1e6).toLocaleString():'—';}},
-  relvol:{label:'RelVol',align:'ar',mono:1,sort:function(d){return _x(d,'RelVol')||0;},fmt:function(d){var v=_x(d,'RelVol');return v?v.toFixed(1)+'x':'—';}},
+  relvol:{label:'RelVol',align:'ar',mono:1,sort:function(d){return _x(d,'RelVol')||0;},fmt:function(d){var v=_x(d,'RelVol');return v?v.toFixed(2)+'x':'—';}},
   ma3:{label:'MA3',align:'ar',mono:1,sort:function(d){return _t(d,'ma3')||0;},fmt:function(d){return _num(_t(d,'ma3'));}},
   ma5:{label:'MA5',align:'ar',mono:1,sort:function(d){return _t(d,'ma5')||0;},fmt:function(d){return _num(_t(d,'ma5'));}},
   ma10:{label:'MA10',align:'ar',mono:1,sort:function(d){return _t(d,'ma10')||0;},fmt:function(d){return _num(_t(d,'ma10'));}},
@@ -221,13 +221,13 @@ var scrAllCols = {
   isnearlow:{label:'NrLow',align:'ar',sort:function(d){return _x(d,'isNearLow')||0;},fmt:function(d){return _bool(_x(d,'isNearLow'));}},
   hhv20:{label:'HHV20',align:'ar',mono:1,sort:function(d){return _x(d,'HHV20')||0;},fmt:function(d){return _num(_x(d,'HHV20'));}},
   llv20:{label:'LLV20',align:'ar',mono:1,sort:function(d){return _x(d,'LLV20')||0;},fmt:function(d){return _num(_x(d,'LLV20'));}},
-  macd:{label:'MACD',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.macd:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.macd;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'</span>';}},
-  signal:{label:'Signal',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.signal:0;},fmt:function(d){var m=_t(d,'macd');return m?m.signal.toFixed(1):'—';}},
-  macd_hist:{label:'MACD_H',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.histogram:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.histogram;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(1)+'</span>';}},
+  macd:{label:'MACD',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.macd:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.macd;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(2)+'</span>';}},
+  signal:{label:'Signal',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.signal:0;},fmt:function(d){var m=_t(d,'macd');return m?m.signal.toFixed(2):'—';}},
+  macd_hist:{label:'MACD_H',align:'ar',mono:1,sort:function(d){var m=_t(d,'macd');return m?m.histogram:0;},fmt:function(d){var m=_t(d,'macd');if(!m)return'—';var v=m.histogram;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+v.toFixed(2)+'</span>';}},
   macd_trend:{label:'MACD Tr',align:'ar',sort:function(d){return _x(d,'MACD_Status')||0;},fmt:function(d){var v=_x(d,'MACD_Status');return _trend(v);}},
   macd_cross:{label:'MACD×',align:'ar',sort:function(d){return _x(d,'MACDCross')?1:_x(d,'MACDDeathCross')?-1:0;},fmt:function(d){if(_x(d,'MACDCross'))return _cross('golden');if(_x(d,'MACDDeathCross'))return _cross('death');return '<span style="color:var(--t3)">—</span>';}},
-  k:{label:'K',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?s.k:0;},fmt:function(d){var s=_t(d,'stoch');if(!s)return'—';var v=s.k;var c=v>80?'dn':v<20?'up':'';return '<span class="'+c+'">'+v.toFixed(1)+'</span>';}},
-  d_stoch:{label:'D',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?(s.d||0):0;},fmt:function(d){var s=_t(d,'stoch');return s&&s.d?s.d.toFixed(1):'—';}},
+  k:{label:'K',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?s.k:0;},fmt:function(d){var s=_t(d,'stoch');if(!s)return'—';var v=s.k;var c=v>80?'dn':v<20?'up':'';return '<span class="'+c+'">'+v.toFixed(2)+'</span>';}},
+  d_stoch:{label:'D',align:'ar',mono:1,sort:function(d){var s=_t(d,'stoch');return s?(s.d||0):0;},fmt:function(d){var s=_t(d,'stoch');return s&&s.d?s.d.toFixed(2):'—';}},
   stoch_trend:{label:'Stoch Tr',align:'ar',sort:function(d){return _x(d,'StochTrend')||0;},fmt:function(d){var v=_x(d,'StochTrend');return v?'<span class="up" style="font-size:9px">▲ Up</span>':'<span class="dn" style="font-size:9px">▼ Down</span>';}},
   stoch_cross:{label:'Stoch×',align:'ar',sort:function(d){return _x(d,'StochCrossUp')||0;},fmt:function(d){return _x(d,'StochCrossUp')?_cross('golden'):'<span style="color:var(--t3)">—</span>';}},
   fnet:{label:'FNet',align:'ar',mono:1,bold:1,sort:function(d){return d.foreign_net_val||0;},fmt:function(d){var v=d.foreign_net_val||0;return '<span class="'+(v>0?'up':v<0?'dn':'')+'">'+fmtRp(v)+'</span>';}},
@@ -239,13 +239,13 @@ var scrAllCols = {
   f2:{label:'F2',align:'ar',mono:1,sort:function(d){return _x(d,'F2')||0;},fmt:function(d){return _fval(d,'F2');}},
   f3:{label:'F3',align:'ar',mono:1,sort:function(d){return _x(d,'F3')||0;},fmt:function(d){return _fval(d,'F3');}},
   f4:{label:'F4',align:'ar',mono:1,sort:function(d){return _x(d,'F4')||0;},fmt:function(d){return _fval(d,'F4');}},
-  per:{label:'PER',align:'ar',mono:1,sort:function(d){return _f(d,'per')||0;},fmt:function(d){var v=_f(d,'per');return v?v.toFixed(1):'—';}},
-  pbv:{label:'PBV',align:'ar',mono:1,sort:function(d){return _f(d,'pbv')||0;},fmt:function(d){var v=_f(d,'pbv');return v?v.toFixed(1):'—';}},
-  roe:{label:'ROE',align:'ar',mono:1,sort:function(d){return _f(d,'roe')||0;},fmt:function(d){var v=_f(d,'roe');return v?v.toFixed(1)+'%':'—';}},
-  roa:{label:'ROA',align:'ar',mono:1,sort:function(d){return _f(d,'roa')||0;},fmt:function(d){var v=_f(d,'roa');return v?v.toFixed(1)+'%':'—';}},
+  per:{label:'PER',align:'ar',mono:1,sort:function(d){return _f(d,'per')||0;},fmt:function(d){var v=_f(d,'per');return v?v.toFixed(2):'—';}},
+  pbv:{label:'PBV',align:'ar',mono:1,sort:function(d){return _f(d,'pbv')||0;},fmt:function(d){var v=_f(d,'pbv');return v?v.toFixed(2):'—';}},
+  roe:{label:'ROE',align:'ar',mono:1,sort:function(d){return _f(d,'roe')||0;},fmt:function(d){var v=_f(d,'roe');return v?v.toFixed(2)+'%':'—';}},
+  roa:{label:'ROA',align:'ar',mono:1,sort:function(d){return _f(d,'roa')||0;},fmt:function(d){var v=_f(d,'roa');return v?v.toFixed(2)+'%':'—';}},
   sector:{label:'Sector',align:'al',sort:function(d){return _f(d,'sector')||'';},fmt:function(d){var v=_f(d,'sector');return v?'<span style="font-size:9px">'+esc(v)+'</span>':'—';}},
   industry:{label:'Industry',align:'al',sort:function(d){return _f(d,'industry')||'';},fmt:function(d){var v=_f(d,'industry');return v?'<span style="font-size:9px">'+esc(v)+'</span>':'—';}},
-  tickratio:{label:'Tick×',align:'ar',mono:1,sort:function(d){return _x(d,'TickRatio')||0;},fmt:function(d){var v=_x(d,'TickRatio');if(!v)return'—';var c=v>2.5?'#0ea5e9':v<0.6?'#f97316':'var(--t2)';return '<span style="color:'+c+'">'+v.toFixed(1)+'x</span>';}},
+  tickratio:{label:'Tick×',align:'ar',mono:1,sort:function(d){return _x(d,'TickRatio')||0;},fmt:function(d){var v=_x(d,'TickRatio');if(!v)return'—';var c=v>2.5?'#0ea5e9':v<0.6?'#f97316':'var(--t2)';return '<span style="color:'+c+'">'+v.toFixed(2)+'x</span>';}},
   blocktrade:{label:'Block',align:'ar',sort:function(d){return _x(d,'isBlockTrade')||0;},fmt:function(d){return _bool(_x(d,'isBlockTrade'));}},
   retailfrenzy:{label:'Retail',align:'ar',sort:function(d){return _x(d,'isRetailFrenzy')||0;},fmt:function(d){return _bool(_x(d,'isRetailFrenzy'));}},
   smartaccum:{label:'SmartA',align:'ar',sort:function(d){return _x(d,'isSmartAccum')||0;},fmt:function(d){return _bool(_x(d,'isSmartAccum'));}},

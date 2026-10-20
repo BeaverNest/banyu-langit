@@ -214,21 +214,24 @@ function assembleCurve(seriesByCode, opts) {
       return {
         code: t.code, tenor: t.tenor, months: t.months,
         close: null, date: ownLatest, on_curve: false,
-        chg_1d_bp: null, chg_20d_bp: null,
+        chg_1d_bp: null, chg_5d_bp: null, chg_20d_bp: null,
         points: rows.length, own_latest_date: ownLatest,
         source: rows.length ? (rows[0].source || null) : null,
       };
     }
     const cur = rows[idx];
     const prev = rows[idx + 1];
+    const back5 = rows[idx + 5];
     const back20 = rows[idx + 20];
     return {
       code: t.code, tenor: t.tenor, months: t.months,
       close: isNum(cur.close) ? cur.close : null,
       date: cur.date, on_curve: true,
-      // Δ dihitung dari bar SERI ITU SENDIRI (prev/20 bar sebelum tanggal kurva), bukan dari
-      // bar tetangga yang tanggalnya berbeda.
+      // Δ dihitung dari bar SERI ITU SENDIRI (prev/5/20 bar sebelum tanggal kurva), bukan dari
+      // bar tetangga yang tanggalnya berbeda. chg_5d_bp = 1 minggu bursa (kanban t_19f4f0d4:
+      // permintaan panel "hari ini vs 1W vs 1M"); chg_20d_bp = 1 bulan bursa.
       chg_1d_bp: (prev && isNum(prev.close) && isNum(cur.close)) ? r1((cur.close - prev.close) * DENOM) : null,
+      chg_5d_bp: (back5 && isNum(back5.close) && isNum(cur.close)) ? r1((cur.close - back5.close) * DENOM) : null,
       chg_20d_bp: (back20 && isNum(back20.close) && isNum(cur.close)) ? r1((cur.close - back20.close) * DENOM) : null,
       points: rows.length, own_latest_date: ownLatest,
       source: cur.source || null,

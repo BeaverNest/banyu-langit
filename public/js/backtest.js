@@ -197,7 +197,7 @@ async function runBt(){
       scope_type:$('bt-scope').value,scope_value:$('bt-sv')?$('bt-sv').value.trim():'',
     })});
     btR=await r.json();btShowT=false;btSort={col:'',dir:'desc'};
-    if(st)st.textContent=btR.error?'❌ '+btR.error:'✅ '+(btR.compute_time/1000).toFixed(1)+'s · '+btR.stats.total_trades+' trades · '+btR.period.days+' days';
+    if(st)st.textContent=btR.error?'❌ '+btR.error:'✅ '+(btR.compute_time/1000).toFixed(2)+'s · '+btR.stats.total_trades+' trades · '+btR.period.days+' days';
     var el=$('bt-res');if(el){el.innerHTML=btR.error?'':renderBtR(btR);if(!btR.error)btRenderCharts(btR);}
   }catch(e){if(st)st.textContent='❌ '+e.message;}
   btRun=false;if(btn){btn.textContent='▶ Run';btn.disabled=false;}
@@ -263,7 +263,7 @@ function renderBtR(d){
   h+=btSR('Largest Win','+'+s.largest_win+'%',1);
   h+='</table>';
   h+=btSH('Losers');h+='<table style="width:100%;font-size:10px;border-collapse:collapse">';
-  h+=btSR('Losers',s.losses_count+' ('+(100-s.win_rate).toFixed(1)+'%)',-1);
+  h+=btSR('Losers',s.losses_count+' ('+(100-s.win_rate).toFixed(2)+'%)',-1);
   h+=btSR('Avg Loss',s.avg_loss+'%',-1);
   h+=btSR('Avg Bars (loss)',s.avg_hold_loss+' days',0);
   h+=btSR('Max Consecutive',s.max_consec_losses,0);
@@ -339,7 +339,7 @@ function renderBtR(d){
     h+='</tbody></table></div>';
   }
   if(d.trades&&d.trades.length)h+=btTR(d.trades);
-  h+='<div style="font-size:9px;color:var(--t3);margin-top:4px">'+d.period.start+' → '+d.period.end+' · '+d.period.days+'d · '+(d.compute_time/1000).toFixed(1)+'s</div>';
+  h+='<div style="font-size:9px;color:var(--t3);margin-top:4px">'+d.period.start+' → '+d.period.end+' · '+d.period.days+'d · '+(d.compute_time/1000).toFixed(2)+'s</div>';
   return h;
 }
 
@@ -380,13 +380,13 @@ function btDDC_render(d){
     tooltip:{trigger:'axis',formatter:function(p){return'<b>'+p[0].axisValue+'</b><br>DD: <b style="color:'+BL.colors.red+'">'+p[0].value.toFixed(2)+'%</b>';}},
     grid:{left:8,right:55,top:3,bottom:3,containLabel:false},
     xAxis:{type:'category',data:dates,show:false},
-    yAxis:{type:'value',axisLabel:{fontSize:7,formatter:function(v){return v.toFixed(1)+'%';}},splitLine:{lineStyle:{color:'#1e2836'}}},
+    yAxis:{type:'value',axisLabel:{fontSize:7,formatter:function(v){return v.toFixed(2)+'%';}},splitLine:{lineStyle:{color:'#1e2836'}}},
     series:[{type:'line',data:dd,symbol:'none',lineStyle:{width:0.8,color:BL.colors.red},areaStyle:{color:'rgba(239,68,68,0.12)'}}]
   });
 }
 
 // ═══ MONTHLY ═══
-function btMon(eq){var mo={};for(var i=0;i<eq.length;i++){var ym=eq[i].date.substring(0,7);if(!mo[ym])mo[ym]={f:eq[i].equity,l:eq[i].equity};mo[ym].l=eq[i].equity;}var ks=Object.keys(mo).sort(),by={},pr=null;for(var i=0;i<ks.length;i++){var ym=ks[i],yr=ym.substring(0,4),m=parseInt(ym.substring(5,7));var st=pr!==null?pr:mo[ym].f;var ret=st>0?Math.round((mo[ym].l-st)/st*10000)/100:0;if(!by[yr])by[yr]={};by[yr][m]=ret;pr=mo[ym].l;}var yrs=Object.keys(by).sort(),yt={};for(var i=0;i<yrs.length;i++){var yr=yrs[i],t=0;for(var m=1;m<=12;m++)if(by[yr][m]!==undefined)t+=by[yr][m];yt[yr]=Math.round(t*100)/100;}var mn=['J','F','M','A','M','J','J','A','S','O','N','D'];var h='<div style="background:var(--bg2);border:1px solid var(--b2);border-radius:8px;overflow:hidden">'+btSH('Monthly Returns')+'<div style="overflow-x:auto;padding:4px"><table style="width:100%;border-collapse:collapse;font-size:9px;font-family:var(--fm)"><tr><th style="padding:3px 4px;border-bottom:1px solid var(--b1);text-align:left;color:var(--t3);font-size:8px">Yr</th>';for(var m=0;m<12;m++)h+='<th style="padding:3px 3px;border-bottom:1px solid var(--b1);text-align:center;color:var(--t3);font-size:8px;min-width:30px">'+mn[m]+'</th>';h+='<th style="padding:3px 4px;border-bottom:1px solid var(--b1);text-align:center;font-size:8px;font-weight:700;color:var(--t3)">YR</th></tr>';for(var i=0;i<yrs.length;i++){var yr=yrs[i];h+='<tr><td style="padding:2px 4px;border-bottom:1px solid var(--b1);font-weight:700;color:var(--t2)">'+yr.substring(2)+'</td>';for(var m=1;m<=12;m++){var v=by[yr][m];if(v!==undefined){var bg=v>0?'rgba(34,197,94,'+Math.min(.35,Math.abs(v)/15)+')':v<0?'rgba(239,68,68,'+Math.min(.35,Math.abs(v)/15)+')':'transparent';var tc=v>0?'var(--gn)':v<0?'var(--rd)':'var(--t3)';h+='<td style="padding:2px 2px;border-bottom:1px solid var(--b1);text-align:center;background:'+bg+';color:'+tc+';font-weight:600">'+(v>0?'+':'')+v.toFixed(1)+'</td>';}else h+='<td style="padding:2px;border-bottom:1px solid var(--b1);text-align:center;color:var(--t3)">—</td>';}var yv=yt[yr]||0;h+='<td style="padding:2px 4px;border-bottom:1px solid var(--b1);text-align:center;font-weight:700;color:'+(yv>0?'var(--gn)':yv<0?'var(--rd)':'var(--t3)')+'">'+(yv>0?'+':'')+yv.toFixed(1)+'</td></tr>';}h+='</table></div></div>';return h;}
+function btMon(eq){var mo={};for(var i=0;i<eq.length;i++){var ym=eq[i].date.substring(0,7);if(!mo[ym])mo[ym]={f:eq[i].equity,l:eq[i].equity};mo[ym].l=eq[i].equity;}var ks=Object.keys(mo).sort(),by={},pr=null;for(var i=0;i<ks.length;i++){var ym=ks[i],yr=ym.substring(0,4),m=parseInt(ym.substring(5,7));var st=pr!==null?pr:mo[ym].f;var ret=st>0?Math.round((mo[ym].l-st)/st*10000)/100:0;if(!by[yr])by[yr]={};by[yr][m]=ret;pr=mo[ym].l;}var yrs=Object.keys(by).sort(),yt={};for(var i=0;i<yrs.length;i++){var yr=yrs[i],t=0;for(var m=1;m<=12;m++)if(by[yr][m]!==undefined)t+=by[yr][m];yt[yr]=Math.round(t*100)/100;}var mn=['J','F','M','A','M','J','J','A','S','O','N','D'];var h='<div style="background:var(--bg2);border:1px solid var(--b2);border-radius:8px;overflow:hidden">'+btSH('Monthly Returns')+'<div style="overflow-x:auto;padding:4px"><table style="width:100%;border-collapse:collapse;font-size:9px;font-family:var(--fm)"><tr><th style="padding:3px 4px;border-bottom:1px solid var(--b1);text-align:left;color:var(--t3);font-size:8px">Yr</th>';for(var m=0;m<12;m++)h+='<th style="padding:3px 3px;border-bottom:1px solid var(--b1);text-align:center;color:var(--t3);font-size:8px;min-width:30px">'+mn[m]+'</th>';h+='<th style="padding:3px 4px;border-bottom:1px solid var(--b1);text-align:center;font-size:8px;font-weight:700;color:var(--t3)">YR</th></tr>';for(var i=0;i<yrs.length;i++){var yr=yrs[i];h+='<tr><td style="padding:2px 4px;border-bottom:1px solid var(--b1);font-weight:700;color:var(--t2)">'+yr.substring(2)+'</td>';for(var m=1;m<=12;m++){var v=by[yr][m];if(v!==undefined){var bg=v>0?'rgba(34,197,94,'+Math.min(.35,Math.abs(v)/15)+')':v<0?'rgba(239,68,68,'+Math.min(.35,Math.abs(v)/15)+')':'transparent';var tc=v>0?'var(--gn)':v<0?'var(--rd)':'var(--t3)';h+='<td style="padding:2px 2px;border-bottom:1px solid var(--b1);text-align:center;background:'+bg+';color:'+tc+';font-weight:600">'+(v>0?'+':'')+v.toFixed(2)+'</td>';}else h+='<td style="padding:2px;border-bottom:1px solid var(--b1);text-align:center;color:var(--t3)">—</td>';}var yv=yt[yr]||0;h+='<td style="padding:2px 4px;border-bottom:1px solid var(--b1);text-align:center;font-weight:700;color:'+(yv>0?'var(--gn)':yv<0?'var(--rd)':'var(--t3)')+'">'+(yv>0?'+':'')+yv.toFixed(2)+'</td></tr>';}h+='</table></div></div>';return h;}
 
 // ═══ DISTRIBUTION (ECharts) ═══
 function btDist(trades){var bs=2.5,bk={};for(var i=0;i<trades.length;i++){var p=trades[i].pnlP||0;var b=Math.floor(p/bs)*bs;if(!bk[b])bk[b]=0;bk[b]++;}var ks=Object.keys(bk).map(Number).sort(function(a,b){return a-b;});if(!ks.length)return'';var h='<div style="background:var(--bg2);border:1px solid var(--b2);border-radius:8px;overflow:hidden">'+btSH('P&L Distribution')+BL.container('bt-dist-chart',200)+'</div>';return h;}
@@ -408,7 +408,7 @@ function btDist_render(trades){
 }
 
 // ═══ MAE/MFE (ECharts) ═══
-function btMAE(trades){var maes=trades.filter(function(t){return(t.mae||0)<0;}).map(function(t){return t.mae;}),mfes=trades.filter(function(t){return(t.mfe||0)>0;}).map(function(t){return t.mfe;});var am=maes.length?Math.round(maes.reduce(function(s,v){return s+v;},0)/maes.length*100)/100:0,af=mfes.length?Math.round(mfes.reduce(function(s,v){return s+v;},0)/mfes.length*100)/100:0;var h='<div style="background:var(--bg2);border:1px solid var(--b2);border-radius:8px;overflow:hidden">'+btSH('MAE / MFE')+'<div style="padding:8px;display:flex;gap:6px"><div style="flex:1;background:var(--rdB);border-radius:6px;padding:6px;text-align:center"><div style="font-size:8px;color:var(--rd);font-weight:600">Avg MAE</div><div style="font-family:var(--fm);font-size:14px;font-weight:700;color:var(--rd)">'+am.toFixed(1)+'%</div></div><div style="flex:1;background:var(--gnB);border-radius:6px;padding:6px;text-align:center"><div style="font-size:8px;color:var(--gn);font-weight:600">Avg MFE</div><div style="font-family:var(--fm);font-size:14px;font-weight:700;color:var(--gn)">+'+af.toFixed(1)+'%</div></div></div>';if(trades.length>=5){h+=BL.container('bt-mae-chart',140);}h+='</div>';return h;}
+function btMAE(trades){var maes=trades.filter(function(t){return(t.mae||0)<0;}).map(function(t){return t.mae;}),mfes=trades.filter(function(t){return(t.mfe||0)>0;}).map(function(t){return t.mfe;});var am=maes.length?Math.round(maes.reduce(function(s,v){return s+v;},0)/maes.length*100)/100:0,af=mfes.length?Math.round(mfes.reduce(function(s,v){return s+v;},0)/mfes.length*100)/100:0;var h='<div style="background:var(--bg2);border:1px solid var(--b2);border-radius:8px;overflow:hidden">'+btSH('MAE / MFE')+'<div style="padding:8px;display:flex;gap:6px"><div style="flex:1;background:var(--rdB);border-radius:6px;padding:6px;text-align:center"><div style="font-size:8px;color:var(--rd);font-weight:600">Avg MAE</div><div style="font-family:var(--fm);font-size:14px;font-weight:700;color:var(--rd)">'+am.toFixed(2)+'%</div></div><div style="flex:1;background:var(--gnB);border-radius:6px;padding:6px;text-align:center"><div style="font-size:8px;color:var(--gn);font-weight:600">Avg MFE</div><div style="font-family:var(--fm);font-size:14px;font-weight:700;color:var(--gn)">+'+af.toFixed(2)+'%</div></div></div>';if(trades.length>=5){h+=BL.container('bt-mae-chart',140);}h+='</div>';return h;}
 function btMAE_render(trades){
   var el=$('bt-mae-chart');if(!el)return;
   var c=BL.init(el,'bt-mae');if(!c)return;
@@ -605,7 +605,7 @@ async function runWF() {
     }
     var r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     wfR = await r.json();
-    if (st) st.textContent = wfR.error ? '❌ ' + wfR.error : '✅ ' + wfR.total_steps + ' steps · ' + (wfR.compute_time / 1000).toFixed(1) + 's';
+    if (st) st.textContent = wfR.error ? '❌ ' + wfR.error : '✅ ' + wfR.total_steps + ' steps · ' + (wfR.compute_time / 1000).toFixed(2) + 's';
     var el = $('wf-results');
     if (el) { el.innerHTML = wfR.error ? '' : renderWFResults(wfR); }
     if (!wfR.error) setTimeout(function() { wfDrawCharts(wfR); }, 100);

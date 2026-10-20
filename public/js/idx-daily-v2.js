@@ -436,8 +436,8 @@ function idxRenderCell(k, r) {
   if (k==='freq_spike') return '<td class="ar" style="font-family:var(--fm);color:' + spikeClr(r.freq_spike||0) + '">' + (r.freq_spike?r.freq_spike+'x':'-') + '</td>';
   if (k==='vol_spike') return '<td class="ar" style="font-family:var(--fm);color:' + spikeClr(r.vol_spike||0) + '">' + (r.vol_spike?r.vol_spike+'x':'-') + '</td>';
   if (k==='fnet_spike') return '<td class="ar" style="font-family:var(--fm);color:' + spikeClr(r.fnet_spike||0) + '">' + (r.fnet_spike?r.fnet_spike+'x':'-') + '</td>';
-  if (k==='ma20') return '<td class="ar" style="font-family:var(--fm);color:' + (r.close>(r.ma20||0)?'var(--gn)':'var(--t3)') + '">' + (r.ma20?r.ma20.toLocaleString():'-') + '</td>';
-  if (k==='ma200') return '<td class="ar" style="font-family:var(--fm);color:' + (r.close>(r.ma200||0)?'var(--gn)':'var(--t3)') + '">' + (r.ma200?r.ma200.toLocaleString():'-') + '</td>';
+  if (k==='ma20') return '<td class="ar" style="font-family:var(--fm);color:' + (r.close>(r.ma20||0)?'var(--gn)':'var(--t3)') + '">' + (r.ma20?r.ma20.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'-') + '</td>';
+  if (k==='ma200') return '<td class="ar" style="font-family:var(--fm);color:' + (r.close>(r.ma200||0)?'var(--gn)':'var(--t3)') + '">' + (r.ma200?r.ma200.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'-') + '</td>';
   if (k==='sector') return '<td class="al" style="font-size:9px;color:var(--t2);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.sector||'') + '</td>';
   return '<td>-</td>';
 }

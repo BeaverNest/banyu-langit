@@ -14,6 +14,8 @@ services:
       - ./public:/app/public
       - ./server:/app/server
       - ./.env:/app/.env:ro
+      # read-only git HEAD so the agent rail can stamp code_version (no git binary needed)
+      - ./.git:/app/.git:ro
       - ./IDX-API-main/data:/app/IDX-API-main/data:ro
     restart: unless-stopped
     command: npx nodemon --watch server server/index.js

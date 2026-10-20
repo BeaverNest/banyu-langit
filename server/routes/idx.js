@@ -3514,13 +3514,6 @@ module.exports = function(upload) {
   const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
 
   /** Gerbang per-bar: nilai yang boleh disimpan + alasannya. */
-  // Seri non-harga (makro/fundamental) boleh bernilai ≤ 0: deflasi, defisit, kontraksi.
-  // Seri harga tetap wajib > 0 (t_0e4e2cba).
-  function isNonPriceSeries(code, category) {
-    const c = String(category || '').toLowerCase();
-    return c === 'macro' || c === 'fundamental' || /^MACRO_/.test(String(code || ''));
-  }
-
   function gateBar(r, fillMissing) {
     const c = numOrNull(r.close);
     const o = numOrNull(r.open), h = numOrNull(r.high), l = numOrNull(r.low);
@@ -3550,6 +3543,52 @@ module.exports = function(upload) {
     if (!seen.length) return null;
     const flatOrFail = seen.filter(g => g.ohlc_state !== 'ok').length;
     return (flatOrFail * 100 / seen.length) >= OHLC_PRICE_ONLY_PCT ? 'price_only' : 'candle';
+  }
+
+  /** Gerbang BARIS untuk jalur tulis berbasis payload (/custom/upsert, /custom/replace,
+   *  /custom/upload). Satu aturan untuk ketiga jalur — kalau tidak, JSON menolak apa yang
+   *  diterima CSV (review sena t_a3832847 R3).
+   *
+   *  Boleh ≤ 0 hanya kalau SERI-nya dideklarasikan di utils/series-sign.js. `category`
+   *  dari payload TIDAK dipakai lagi: fred_push_bl.py mengirim category='macro' untuk
+   *  DXY/VIX/US10Y/USDCNY, jadi guard harga dulu ikut longgar untuk 17 seri level (R2).
+   *
+   *  Baris yang ditolak DIHITUNG dan dikembalikan, bukan hilang diam-diam: bug aslinya
+   *  membuang 204 baris sementara API menjawab ok:true, sehingga pemanggil tidak tahu.
+   *  close diambil lewat strictNum(): null/'' tidak lagi jadi 0 yang lolos gerbang (R4). */
+  function gateRows(code, rows, fillMissing) {
+    const signed = allowsNonPositive(code);
+    const gated = [];
+    const rejected = { nonpositive: 0, invalid: 0, missing_date: 0 };
+    for (const r of rows) {
+      if (!r || !r.date) { rejected.missing_date++; continue; }
+      const close = strictNum(r.close);
+      if (close === null) { rejected.invalid++; continue; }
+      if (!signed && !(close > 0)) { rejected.nonpositive++; continue; }
+      gated.push({ date: r.date, ...gateBar({
+        close,
+        open: strictNum(r.open), high: strictNum(r.high),
+        low: strictNum(r.low), volume: strictNum(r.volume),
+      }, fillMissing) });
+    }
+    return { gated, rejected, signed };
+  }
+
+  /** Ringkasan penolakan untuk respons + pesan saat SEMUA baris ditolak. */
+  function rejectInfo(code, sent, rejected, signed) {
+    const total = rejected.nonpositive + rejected.invalid + rejected.missing_date;
+    const parts = [];
+    if (rejected.nonpositive) parts.push(`${rejected.nonpositive} baris close<=0 (seri harga wajib >0)`);
+    if (rejected.invalid) parts.push(`${rejected.invalid} baris close bukan angka (null/NaN)`);
+    if (rejected.missing_date) parts.push(`${rejected.missing_date} baris tanpa date`);
+    return {
+      rows_sent: sent, rows_dropped: total, rejected,
+      allow_nonpositive: signed,
+      message: total ? `ditolak gerbang: ${parts.join('; ')}` : null,
+      hint: (rejected.nonpositive && !signed)
+        ? `kalau ${code} memang seri bertanda (deflasi/defisit/kontraksi), deklarasikan di server/utils/series-sign.js`
+        : undefined,
+    };
   }
 
   function getTickerMode(code) {

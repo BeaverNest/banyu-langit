@@ -8,6 +8,11 @@ registerSqlAdjust(db); // ca_adj(close, code, trade_date) — lihat utils/price-
 
 const router = express.Router();
 
+// Sesi bursa (kanban t_4acc7bf7): kolom `session` di custom_ohlc (generated dari trade_date)
+// menandai bar Sabtu/Minggu. Jendela harga/chg memakai sesi REGULER saja supaya
+// "5 hari"/"20 hari" berarti 5/20 SESI bursa, bukan 5/20 baris.
+const REGULAR_SESSION = "COALESCE(session,'regular')<>'weekend'";
+
 // ═══ IDX INDEX CODE → Display label mapping ═══
 const IDX_INDEX_LABELS = {
   'COMPOSITE': { label: 'IHSG', desc: 'IDX Composite' },
@@ -145,6 +150,13 @@ router.get('/idx-indices', (req, res) => {
 // Sumber: idx_indices (indeks IDX), idx_daily (tape + sektor), custom_ohlc
 // (global/makro/komoditas/FX, diisi pipeline harian). TIDAK memakai Yahoo live
 // supaya angkanya identik dengan Market Regime dan punya tanggal.
+// Catatan label (t_24a4ea98): `desc` harus menyebut instrumen yang benar-benar dipakai seri
+// custom_ohlc-nya (lihat custom_tickers.name/source), dan harus ringkas karena .mkt-desc
+// di-ellipsis (public/css/market.css:8) — provenance penuh tinggal di custom_tickers.name.
+// ALUMINIUM = investing/49768 = LME cash MAL, BUKAN futures COMEX ALI=F (desc lama sisa era yahoo).
+// GOLD dihapus dari peta ini: tidak ada seri ber-kode GOLD (emas = XAUUSD, 519 bar, category
+// commodity -> tampil di Market Regime). commodityItems masih memuat 'GOLD' yang selalu ter-filter;
+// menambah baris emas ke Overview = keputusan produk, tidak diambil di sini.
 const OV_LABEL = {
   SPX: ['S&P 500', 'Wall Street'], VIX: ['VIX', 'Volatilitas'],
   DXY: ['DXY', 'Dolar index'], US10Y: ['US 10Y', 'Yield 10 tahun'],
@@ -152,9 +164,15 @@ const OV_LABEL = {
   BI_RATE: ['BI RATE', '7-day reverse repo (%)'],
   COAL: ['Coal', 'Newcastle, USD/t'], CPO: ['CPO', 'Malaysia, MYR/t'],
   NICKEL: ['Nikel', 'USD/t'], TIN: ['Timah', 'USD/t'],
-  COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'COMEX, USD/t'],
-  WTI: ['WTI', 'NYMEX front-month'], BRENT: ['Brent', 'USD/bbl'],
-  NATGAS: ['Nat Gas', 'Gas alam'], GOLD: ['Emas', 'USD/oz'],
+  COPPER: ['Tembaga', 'USD/lb'], ALUMINIUM: ['Aluminium', 'LME cash MAL, USD/t'],
+  // WTI (t_4acc7bf7 r2): desc lama "NYMEX front-month" bertentangan dengan metadata SUMBER pin
+  // investing/8849 (symbol CL, long_name "Crude Oil WTI Futures", exchange_short_name=ICE).
+  // yahoo CL=F menyebut venue NYM untuk kontrak yang sama — dua penyedia beda venue; yang mengikat
+  // = pin yang dipakai seri ini. Karena itu desc menyebut venue "per sumber", bukan mengklaim bursa.
+  // Provenance penuh (termasuk catatan rollover + basis futures-vs-spot) ada di custom_tickers.name.
+  // Ringkas karena .mkt-desc di-ellipsis (public/css/market.css:8).
+  WTI: ['WTI', 'CL futures, USD/bbl · venue ICE (per sumber) · rollover bulanan'], BRENT: ['Brent', 'USD/bbl'],
+  NATGAS: ['Nat Gas', 'Gas alam'],
   USDIDR: ['USD/IDR', 'Rupiah'], USDCNY: ['USD/CNY', 'Yuan'],
 };
 const OV_LINK = {
@@ -197,7 +215,7 @@ router.get('/market/overview', (req, res) => {
     // signature (code, withFreshness) boolean, elemen kedua dan seterusnya akan
     // ikut tertandai tanpa niat.
     function fromOhlc(code, opts) {
-      const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 260').all(code);
+      const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 260`).all(code);
       const st = stats(rows);
       if (!st) return null;
       const [label, desc] = OV_LABEL[code] || [code, code];
@@ -255,7 +273,7 @@ router.get('/market/overview', (req, res) => {
     // sini sengaja tetap level + spread: satu baris per kode, bukan kurva.
     const rateItems = ['ID10Y', 'BI_RATE', 'US10Y'].map(fromOhlc).filter(Boolean);
     const close = (code) => {
-      const r = db.prepare('SELECT close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 1').get(code);
+      const r = db.prepare(`SELECT close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 1`).get(code);
       return r ? r.close : null;
     };
     const id10 = close('ID10Y'), ust10 = close('US10Y'), bi = close('BI_RATE');
@@ -441,7 +459,7 @@ router.get('/commodities', (req, res) => {
 
     function cmdStats(code) {
       if (!code) return null;
-      const rows = db.prepare('SELECT trade_date, close FROM custom_ohlc WHERE code=? ORDER BY trade_date DESC LIMIT 60').all(code);
+      const rows = db.prepare(`SELECT trade_date, close FROM custom_ohlc WHERE code=? AND ${REGULAR_SESSION} ORDER BY trade_date DESC LIMIT 60`).all(code);
       if (!rows.length) return null;
       const asc = rows.map(r => r.close).reverse();
       const n = asc.length, last = asc[n - 1];

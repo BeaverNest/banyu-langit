@@ -95,10 +95,10 @@ BL.colors = {
 BL.fmtRp = function(n) {
   if (!n) return '0';
   var a = Math.abs(n), s = n < 0 ? '-' : '';
-  if (a >= 1e12) return s + (a / 1e12).toFixed(1) + 'T';
-  if (a >= 1e9) return s + (a / 1e9).toFixed(1) + 'B';
-  if (a >= 1e6) return s + (a / 1e6).toFixed(1) + 'M';
-  if (a >= 1e3) return s + (a / 1e3).toFixed(1) + 'K';
+  if (a >= 1e12) return s + (a / 1e12).toFixed(2) + 'T';
+  if (a >= 1e9) return s + (a / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return s + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return s + (a / 1e3).toFixed(2) + 'K';
   return n.toLocaleString();
 };
 

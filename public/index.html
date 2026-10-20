@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/css/base.css">
 <link rel="stylesheet" href="/css/diary.css">
 <link rel="stylesheet" href="/css/watchlist.css">
-<link rel="stylesheet" href="/css/insider.css">
+
 <link rel="stylesheet" href="/css/market.css">
 <link rel="stylesheet" href="/css/components.css">
 <link rel="stylesheet" href="/css/chart-panel.css">
@@ -95,8 +95,7 @@
     <button class="tab" onclick="stab('idx',this)">Market Intel</button>
     <button class="tab" onclick="stab('diary',this)">Diary</button>
     <button class="tab" onclick="stab('analysis',this)">Analysis</button>
-    <button class="tab" onclick="stab('pf',this)">Portfolio</button>
-    <button class="tab" onclick="stab('ins',this)">Insider</button>
+
   </div>
 
   <!-- TAB 1: MARKET -->
@@ -157,40 +156,21 @@
       <button class="wt-b" onclick="anaSubTab('compare',this)">Data Explorer</button>
       <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
       <button class="wt-b" onclick="anaSubTab('portbuilder',this)">Portfolio Builder</button>
-      <button class="wt-b" onclick="anaSubTab('backtest',this)">Backtest</button>
-      <button class="wt-b" onclick="anaSubTab('tearsheet',this)">Tearsheet</button>
+
     </div>
     <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-screener"><div id="scr-content" style="flex:1;overflow-y:auto"></div></div>
     <div class="wp" id="ana-sectors" style="display:none"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="ana-backtest"><div id="bt-content" style="flex:1;overflow-y:auto"><div class="ne">Configure backtest</div></div></div>
+
     <div class="wp" id="ana-scoring"><div id="scoring-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Configure scoring</div></div></div>
     <div class="wp" id="ana-portbuilder"><div id="pb-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Portfolio Builder</div></div></div>
     <div class="wp" id="ana-stockdetail"><div id="sd-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Enter ticker to analyze</div></div></div>
-    <div class="wp" id="ana-tearsheet"><div id="ts-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Run a backtest first, then open Tearsheet for detailed analysis</div></div></div>
+
   </div>
 
-  <!-- TAB 5: PORTFOLIO -->
-  <div class="tpanel" id="t-pf">
-    <div id="pf-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div>
-  </div>
 
-  <!-- TAB 6: INSIDER -->
-  <div class="tpanel" id="t-ins">
-    <div class="ins-topbar" id="ins-topbar">
-      <div class="ins-nav">
-        <button class="ins-back" id="ins-back" onclick="insBack()" style="display:none">← Back</button>
-        <span class="ins-title" id="ins-title">Insider</span>
-      </div>
-      <div class="ins-search-bar">
-        <div class="ins-search"><input id="inq" placeholder="Search ticker / investor..." onkeydown="acKey(event)" oninput="acType()" autocomplete="off"><button onclick="insSearch()">Go</button><div class="ins-ac" id="ins-ac"></div></div>
-      </div>
-    </div>
-    <div class="ins-info" id="ins-info"></div>
-    <div class="ins-content" id="ins-content"><div class="ne">Loading...</div></div>
-  </div>
 </div>
 </div>
 

@@ -12,7 +12,48 @@
 
 const DENO_URL = process.env.DENO_SYNC_URL || 'http://host.docker.internal:3456';
 
+/**
+ * The Deno sync server this proxy talks to is NOT part of this repo — there is no
+ * deno-server.ts / start-deno.ps1 anywhere in the tree — and :3456 refuses connections
+ * from host and container alike (curl rc=000, verified 2026-10-14). Upstream fetching
+ * is owned by IDX-API's scripts/daily-sync.sh, which pushes into Banyu Langit via
+ * POST /api/idx/sync/import-all. So this is a SUPERSEDED path, not a stopped one.
+ *
+ * Kept registered rather than deleted for two reasons: the settings panel calls these
+ * paths and a bare 404 leaves it with an unparseable body; and the last time a bridge
+ * writer was reachable ONLY from a dead path, idx_daily drifted away from IDX-API for
+ * months with zero alarms (that is what IDX-API/scripts/check-bridge-parity.py caught).
+ * A dead dependency must name itself: "fetch failed" reads like a transient network
+ * hiccup and invites endless retries.
+ *
+ * Opt back in by setting DENO_SYNC_URL in .env — nothing else changes.
+ */
+const DENO_ENABLED = !!process.env.DENO_SYNC_URL;
+const DENO_UNREACHABLE_HINT = `Deno sync server unreachable at ${DENO_URL} — deprecated path; upstream fetch is owned by IDX-API daily-sync.sh (POST /api/idx/sync/import-all)`;
+const DISABLED_PAYLOAD = {
+  ok: false,
+  error: 'deno_proxy_disabled',
+  detail: 'Jalur Deno (:3456) sudah tidak dipakai: server Deno tidak ada di repo ini dan port-nya menolak koneksi. Data upstream diambil IDX-API (daily-sync.sh) lalu didorong ke Banyu Langit via POST /api/idx/sync/import-all.',
+  use_instead: ['POST /api/idx/sync/import-all', 'POST /api/idx/sync/today', 'POST /api/idx/sync/price-history'],
+  enable: 'set DENO_SYNC_URL in .env (currently unset) to re-enable these routes'
+};
+const DISABLED_ACTIONS = ['/sync/1click-daily', '/sync/1click-full', '/sync/1click-cron', '/sync/custom',
+  '/sync/custom-blocking', '/sync/start-daily', '/sync/start-full', '/sync/start-cron'];
+const DISABLED_STATUS = ['/sync/deno-status', '/sync/deno-health'];
+
+function registerDisabledRoutes(router) {
+  for (const p of DISABLED_ACTIONS) {
+    router.post(p, (req, res) => res.status(501).json(DISABLED_PAYLOAD));
+  }
+  // Status probes keep the shape their callers already parse (public/js/settings.js
+  // reads .ok / .running / .reachable) and only add `disabled: true`.
+  for (const p of DISABLED_STATUS) {
+    router.get(p, (req, res) => res.json({ ...DISABLED_PAYLOAD, running: false, reachable: false, disabled: true }));
+  }
+}
+
 function setupDenoProxy(router, db, idxBridge, logSync) {
+  if (!DENO_ENABLED) return registerDisabledRoutes(router);
 
   // ═══ 1-Click Daily Sync ═══
   // Browser → Node → Deno(fetch idx.co.id) → bridge import → done
@@ -42,7 +83,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
         bridge: bridgeResult
       });
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running? Start: deno run --allow-all deno-server.ts' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -72,7 +113,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
         bridge: bridgeResult
       });
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -102,7 +143,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
         bridge: bridgeResult
       });
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -136,7 +177,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
       // Return immediately — frontend will poll /sync/deno-status
       res.json({ ok: true, message: 'Custom sync started', modules, from, to });
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running? Start: start-deno.ps1' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -170,7 +211,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
         bridge: bridgeResult
       });
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -184,7 +225,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
       });
       res.json(await denoRes.json());
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -197,7 +238,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
       });
       res.json(await denoRes.json());
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -210,7 +251,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
       });
       res.json(await denoRes.json());
     } catch (e) {
-      res.json({ ok: false, error: e.message, hint: 'Is Deno server running?' });
+      res.json({ ok: false, error: e.message, hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -220,7 +261,7 @@ function setupDenoProxy(router, db, idxBridge, logSync) {
       const denoRes = await fetch(`${DENO_URL}/status`);
       res.json(await denoRes.json());
     } catch (e) {
-      res.json({ ok: false, running: false, error: 'Deno server not reachable', hint: 'Start: deno run --allow-all deno-server.ts' });
+      res.json({ ok: false, running: false, error: 'Deno server not reachable', hint: DENO_UNREACHABLE_HINT });
     }
   });
 
@@ -305,6 +346,12 @@ function runBridgeImport(db, idxBridge, logSync) {
     if (typeof idxBridge.importParticipantProfiles === 'function') results.prof_part = idxBridge.importParticipantProfiles(db);
     if (typeof idxBridge.importTradeSummary === 'function') results.trade_sum = idxBridge.importTradeSummary(db);
     if (typeof idxBridge.importFinancialRatiosFull === 'function') results.fin_ratios = idxBridge.importFinancialRatiosFull(db);
+    // No-arg call = the BOUNDED incremental window (see importStockPriceHistory). Never
+    // pass {full:true} from here: this helper is one click away from the settings panel
+    // and a full run re-upserts 1,382,240 rows synchronously (~18s), stalling every
+    // other request. Until 2026-10-14 this line was the function's ONLY caller — and it
+    // sat behind the dead Deno path, which is how idx_daily stayed frozen at 2025-01-02
+    // while IDX-API already held 2020→2026.
     if (typeof idxBridge.importStockPriceHistory === 'function') results.price_hist = idxBridge.importStockPriceHistory(db);
 
     const totalRows = Object.values(results).reduce((s, r) => s + (r?.rows || 0), 0);

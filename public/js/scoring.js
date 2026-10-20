@@ -384,41 +384,41 @@ function scoreRenderCell(k, r) {
     var sat = Math.min(80, v) + '%';
     var bg = 'hsla(' + hue + ',' + sat + ',50%,' + (k === 'composite' ? '0.18' : '0.10') + ')';
     var fw = k === 'composite' ? 'font-weight:700;font-size:11px;' : '';
-    return '<td class="ar" style="' + base + fw + 'background:' + bg + '">' + v.toFixed(1) + '</td>';
+    return '<td class="ar" style="' + base + fw + 'background:' + bg + '">' + v.toFixed(2) + '</td>';
   }
 
   // Percentage columns
   if (k === 'roe' || k === 'roa' || k === 'npm') {
     var v2 = r[k] || 0; var c2 = v2 > 0 ? (v2 > 15 ? 'color:var(--gn)' : '') : 'color:var(--rd)';
-    return '<td class="ar" style="' + base + c2 + '">' + v2.toFixed(1) + '%</td>';
+    return '<td class="ar" style="' + base + c2 + '">' + v2.toFixed(2) + '%</td>';
   }
   if (k === 'der') { var d2 = r.der || 0; var c3 = d2 < 1 ? 'color:var(--gn)' : d2 > 2 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + c3 + '">' + d2.toFixed(2) + '</td>'; }
-  if (k === 'per') return '<td class="ar" style="' + base + '">' + (r.per || 0).toFixed(1) + '</td>';
+  if (k === 'per') return '<td class="ar" style="' + base + '">' + (r.per || 0).toFixed(2) + '</td>';
   if (k === 'pbv') return '<td class="ar" style="' + base + '">' + (r.pbv || 0).toFixed(2) + '</td>';
-  if (k === 'per_vs_ind' || k === 'pbv_vs_ind') { var vr = r[k] || 0; var cr = vr < 0 ? 'color:var(--gn)' : vr > 30 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + cr + '">' + (vr > 0 ? '+' : '') + vr.toFixed(1) + '%</td>'; }
+  if (k === 'per_vs_ind' || k === 'pbv_vs_ind') { var vr = r[k] || 0; var cr = vr < 0 ? 'color:var(--gn)' : vr > 30 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + cr + '">' + (vr > 0 ? '+' : '') + vr.toFixed(2) + '%</td>'; }
   if (k === 'div_yield') { var dy = r.div_yield || 0; return '<td class="ar" style="' + base + (dy > 3 ? 'color:var(--gn)' : '') + '">' + (dy ? dy.toFixed(2) + '%' : '-') + '</td>'; }
 
   // MA values
   if (k === 'ma5' || k === 'ma10' || k === 'ma20' || k === 'ma50' || k === 'ma200') return '<td class="ar" style="' + base + '">' + (r[k] || 0).toLocaleString() + '</td>';
   // MA % distance
-  if (k.endsWith('_pct')) { var mp = r[k] || 0; var mc = mp > 0 ? 'color:var(--gn)' : mp < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + mc + '">' + (mp > 0 ? '+' : '') + mp.toFixed(1) + '%</td>'; }
+  if (k.endsWith('_pct')) { var mp = r[k] || 0; var mc = mp > 0 ? 'color:var(--gn)' : mp < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + mc + '">' + (mp > 0 ? '+' : '') + mp.toFixed(2) + '%</td>'; }
   // RSI
-  if (k === 'rsi14') { var rs = r.rsi14 || 0; var rc = rs > 70 ? 'color:var(--rd)' : rs < 30 ? 'color:var(--gn)' : ''; return '<td class="ar" style="' + base + rc + '">' + rs.toFixed(1) + '</td>'; }
+  if (k === 'rsi14') { var rs = r.rsi14 || 0; var rc = rs > 70 ? 'color:var(--rd)' : rs < 30 ? 'color:var(--gn)' : ''; return '<td class="ar" style="' + base + rc + '">' + rs.toFixed(2) + '</td>'; }
   // MACD
-  if (k === 'macd') return '<td class="ar" style="' + base + '">' + (r.macd || 0).toFixed(0) + '</td>';
-  if (k === 'macd_hist') { var mh = r.macd_hist || 0; var mhc = mh > 0 ? 'color:var(--gn)' : mh < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + mhc + '">' + mh.toFixed(0) + '</td>'; }
+  if (k === 'macd') return '<td class="ar" style="' + base + '">' + (r.macd || 0).toFixed(2) + '</td>';
+  if (k === 'macd_hist') { var mh = r.macd_hist || 0; var mhc = mh > 0 ? 'color:var(--gn)' : mh < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + mhc + '">' + mh.toFixed(2) + '</td>'; }
   // Returns
   if (k === 'ret_5d' || k === 'ret_20d') { var rv = r[k] || 0; var rvc = rv > 0 ? 'color:var(--gn)' : rv < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + rvc + '">' + (rv > 0 ? '+' : '') + rv.toFixed(2) + '%</td>'; }
 
   // Demand/Supply columns
   if (k === 'bid_offer_ratio' || k === 'bid_offer_5d') { var bo = r[k] || 0; var boc = bo > 0.6 ? 'color:var(--gn)' : bo < 0.4 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + boc + '">' + bo.toFixed(2) + '</td>'; }
-  if (k === 'rel_vol' || k === 'freq_spike' || k === 'val_spike') { var sv = r[k] || 0; var svc = sv > 2 ? 'color:var(--gn);font-weight:600' : sv > 1.5 ? 'color:var(--am)' : ''; return '<td class="ar" style="' + base + svc + '">' + sv.toFixed(1) + 'x</td>'; }
+  if (k === 'rel_vol' || k === 'freq_spike' || k === 'val_spike') { var sv = r[k] || 0; var svc = sv > 2 ? 'color:var(--gn);font-weight:600' : sv > 1.5 ? 'color:var(--am)' : ''; return '<td class="ar" style="' + base + svc + '">' + sv.toFixed(2) + 'x</td>'; }
 
   // Foreign Smart Money columns
   if (k === 'fnet_10d' || k === 'fnet_20d') { var fn2 = r[k] || 0; var fnc2 = fn2 > 0 ? 'color:var(--gn)' : fn2 < 0 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + fnc2 + '">' + fmtRp(fn2) + '</td>'; }
-  if (k === 'foreign_pct_val') { var fp = r.foreign_pct_val || 0; return '<td class="ar" style="' + base + (fp > 30 ? 'color:var(--am)' : '') + '">' + fp.toFixed(1) + '%</td>'; }
+  if (k === 'foreign_pct_val') { var fp = r.foreign_pct_val || 0; return '<td class="ar" style="' + base + (fp > 30 ? 'color:var(--am)' : '') + '">' + fp.toFixed(2) + '%</td>'; }
   if (k === 'foreign_accum_streak') { var fas = r.foreign_accum_streak || 0; var fasc = fas >= 5 ? 'color:var(--gn);font-weight:600' : fas >= 3 ? 'color:var(--gn)' : ''; return '<td class="ar" style="' + base + fasc + '">' + fas + 'd</td>'; }
-  if (k === 'fnet_vs_avg') { var fva = r.fnet_vs_avg || 0; var fvac = fva > 1.5 ? 'color:var(--gn)' : fva < -1.5 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + fvac + '">' + fva.toFixed(1) + 'x</td>'; }
+  if (k === 'fnet_vs_avg') { var fva = r.fnet_vs_avg || 0; var fvac = fva > 1.5 ? 'color:var(--gn)' : fva < -1.5 ? 'color:var(--rd)' : ''; return '<td class="ar" style="' + base + fvac + '">' + fva.toFixed(2) + 'x</td>'; }
 
   return '<td class="ar" style="' + base + '">-</td>';
 }
@@ -459,8 +459,8 @@ function renderICView(el, d) {
   var hrCls = s.avg_hit_rate > 55 ? 'color:var(--gn)' : s.avg_hit_rate < 45 ? 'color:var(--rd)' : '';
   var spCls = s.avg_spread > 0 ? 'color:var(--gn)' : s.avg_spread < 0 ? 'color:var(--rd)' : '';
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
-  h += '<div class="bd-card"><div class="bd-card-label">Avg IC (Composite)</div><div class="bd-card-val"><span style="' + icCls + '">' + s.avg_ic.toFixed(4) + '</span></div></div>';
-  h += '<div class="bd-card"><div class="bd-card-label">Avg Hit Rate (Top 20)</div><div class="bd-card-val"><span style="' + hrCls + '">' + s.avg_hit_rate.toFixed(1) + '%</span></div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Avg IC (Composite)</div><div class="bd-card-val"><span style="' + icCls + '">' + s.avg_ic.toFixed(2) + '</span></div></div>';
+  h += '<div class="bd-card"><div class="bd-card-label">Avg Hit Rate (Top 20)</div><div class="bd-card-val"><span style="' + hrCls + '">' + s.avg_hit_rate.toFixed(2) + '%</span></div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Avg Spread (Top-Bot)</div><div class="bd-card-val"><span style="' + spCls + '">' + s.avg_spread.toFixed(2) + '%</span></div></div>';
   h += '<div class="bd-card"><div class="bd-card-label">Horizon</div><div class="bd-card-val">' + d.horizon + ' days</div></div>';
   h += '</div>';
@@ -487,11 +487,11 @@ function renderICView(el, d) {
     var spc = r.spread > 0 ? 'up' : r.spread < 0 ? 'dn' : '';
     h += '<tr>';
     h += '<td class="al" style="font-family:var(--fm)">' + r.date + '</td>';
-    h += '<td class="ar ' + icc + '" style="font-family:var(--fm);font-weight:600">' + r.ic_composite.toFixed(4) + '</td>';
-    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_fundamental.toFixed(4) + '</td>';
-    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_valuation.toFixed(4) + '</td>';
-    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_momentum.toFixed(4) + '</td>';
-    h += '<td class="ar ' + hrc + '" style="font-family:var(--fm)">' + r.hit_rate.toFixed(1) + '%</td>';
+    h += '<td class="ar ' + icc + '" style="font-family:var(--fm);font-weight:600">' + r.ic_composite.toFixed(2) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_fundamental.toFixed(2) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_valuation.toFixed(2) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm)">' + r.ic_momentum.toFixed(2) + '</td>';
+    h += '<td class="ar ' + hrc + '" style="font-family:var(--fm)">' + r.hit_rate.toFixed(2) + '%</td>';
     h += '<td class="ar" style="font-family:var(--fm);color:' + (r.avg_ret_top20 > 0 ? 'var(--gn)' : 'var(--rd)') + '">' + (r.avg_ret_top20 > 0 ? '+' : '') + r.avg_ret_top20.toFixed(2) + '%</td>';
     h += '<td class="ar" style="font-family:var(--fm);color:' + (r.avg_ret_bot20 > 0 ? 'var(--gn)' : 'var(--rd)') + '">' + (r.avg_ret_bot20 > 0 ? '+' : '') + r.avg_ret_bot20.toFixed(2) + '%</td>';
     h += '<td class="ar ' + spc + '" style="font-family:var(--fm);font-weight:600">' + (r.spread > 0 ? '+' : '') + r.spread.toFixed(2) + '%</td>';
@@ -512,7 +512,7 @@ function icRenderChart(data) {
   c.setOption({
     tooltip: { trigger: 'axis', formatter: function(p) {
       var h = '<b>' + p[0].axisValue + '</b>';
-      p.forEach(function(s) { h += '<br><span style="color:' + s.color + '">●</span> ' + s.seriesName + ': <b>' + (typeof s.value === 'number' ? s.value.toFixed(4) : s.value) + '</b>'; });
+      p.forEach(function(s) { h += '<br><span style="color:' + s.color + '">●</span> ' + s.seriesName + ': <b>' + (typeof s.value === 'number' ? s.value.toFixed(2) : s.value) + '</b>'; });
       return h;
     }},
     legend: { data: ['Composite','Fund','Value','Momentum','Demand','Foreign'], top: 0, left: 0, textStyle: { fontSize: 9 } },
@@ -697,7 +697,7 @@ function renderICDecay(el, d) {
   // Best horizon badge
   h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
   h += '<div style="font-size:14px;font-weight:700;color:var(--t1)">IC DECAY ANALYSIS</div>';
-  h += '<div style="font-size:12px;padding:4px 12px;border-radius:4px;background:rgba(84,112,198,0.1);border:1px solid var(--bl);color:var(--bl)">Best horizon: <b>' + d.best_horizon + 'D</b> (IR ' + d.best_ir.toFixed(3) + ')</div>';
+  h += '<div style="font-size:12px;padding:4px 12px;border-radius:4px;background:rgba(84,112,198,0.1);border:1px solid var(--bl);color:var(--bl)">Best horizon: <b>' + d.best_horizon + 'D</b> (IR ' + d.best_ir.toFixed(2) + ')</div>';
   h += '<span style="font-size:10px;color:var(--t3)">' + d.scored_dates + ' scored dates</span>';
   h += '</div>';
 
@@ -731,9 +731,9 @@ function renderICDecay(el, d) {
       var v = row[f] || {};
       var icColor = v.avg_ic > 0.05 ? 'var(--gn)' : v.avg_ic < 0 ? 'var(--rd)' : 'var(--am)';
       var irColor = v.ir > 0.5 ? 'var(--gn)' : v.ir > 0.2 ? 'var(--am)' : 'var(--t3)';
-      h += '<td class="ar" style="font-family:var(--fm);color:' + icColor + ';font-weight:600">' + (v.avg_ic || 0).toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (v.std_ic || 0).toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:' + irColor + ';font-weight:700">' + (v.ir || 0).toFixed(3) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + icColor + ';font-weight:600">' + (v.avg_ic || 0).toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + (v.std_ic || 0).toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + irColor + ';font-weight:700">' + (v.ir || 0).toFixed(2) + '</td>';
     });
     h += '</tr>';
   });
@@ -788,7 +788,7 @@ function icDecayRenderChart(d) {
     grid: { left: 50, right: 50, top: 40, bottom: 30 },
     xAxis: { type: 'category', data: horizons, axisLabel: { color: '#8a9bb5', fontSize: 10 }, axisLine: { lineStyle: { color: '#2a3f5f' } } },
     yAxis: [
-      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(3); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
+      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
       { type: 'value', name: 'IR', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { show: false } }
     ],
     series: series
@@ -870,9 +870,9 @@ function renderICStaleness(el, d) {
   if (d.summary) {
     var s = d.summary;
     h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
-    h += '<div class="bd-card"><div class="bd-card-label">Fresh IC (0-1mo)</div><div class="bd-card-val"><span style="color:' + (s.fresh_ic > 0.05 ? 'var(--gn)' : s.fresh_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.fresh_ic != null ? s.fresh_ic.toFixed(4) : '—') + '</span></div></div>';
-    h += '<div class="bd-card"><div class="bd-card-label">Stale IC (3+mo)</div><div class="bd-card-val"><span style="color:' + (s.stale_ic > 0.05 ? 'var(--gn)' : s.stale_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.stale_ic != null ? s.stale_ic.toFixed(4) : '—') + '</span></div></div>';
-    h += '<div class="bd-card"><div class="bd-card-label">IC Drop</div><div class="bd-card-val"><span style="color:' + (s.ic_drop_pct > 50 ? 'var(--rd)' : s.ic_drop_pct > 25 ? 'var(--am)' : 'var(--gn)') + '">' + (s.ic_drop_pct != null ? s.ic_drop_pct.toFixed(1) + '%' : '—') + '</span></div></div>';
+    h += '<div class="bd-card"><div class="bd-card-label">Fresh IC (0-1mo)</div><div class="bd-card-val"><span style="color:' + (s.fresh_ic > 0.05 ? 'var(--gn)' : s.fresh_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.fresh_ic != null ? s.fresh_ic.toFixed(2) : '—') + '</span></div></div>';
+    h += '<div class="bd-card"><div class="bd-card-label">Stale IC (3+mo)</div><div class="bd-card-val"><span style="color:' + (s.stale_ic > 0.05 ? 'var(--gn)' : s.stale_ic > 0 ? 'var(--am)' : 'var(--rd)') + '">' + (s.stale_ic != null ? s.stale_ic.toFixed(2) : '—') + '</span></div></div>';
+    h += '<div class="bd-card"><div class="bd-card-label">IC Drop</div><div class="bd-card-val"><span style="color:' + (s.ic_drop_pct > 50 ? 'var(--rd)' : s.ic_drop_pct > 25 ? 'var(--am)' : 'var(--gn)') + '">' + (s.ic_drop_pct != null ? s.ic_drop_pct.toFixed(2) + '%' : '—') + '</span></div></div>';
     if (s.recommended_max_age != null) {
       h += '<div class="bd-card"><div class="bd-card-label">Max Useful Age</div><div class="bd-card-val"><span style="color:var(--bl)">' + s.recommended_max_age + ' months</span></div></div>';
     }
@@ -882,10 +882,10 @@ function renderICStaleness(el, d) {
     h += '<div style="font-size:11px;padding:8px 10px;border-radius:4px;margin-bottom:12px;line-height:1.6;';
     if (s.ic_drop_pct > 50) {
       h += 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);color:var(--rd)">';
-      h += '⚠ <b>Significant staleness decay detected.</b> Fundamental IC drops ' + s.ic_drop_pct.toFixed(0) + '% after data ages beyond ' + (s.recommended_max_age || 3) + ' months. Consider discounting fundamental weight for stocks with stale data, or increase upload frequency.';
+      h += '⚠ <b>Significant staleness decay detected.</b> Fundamental IC drops ' + s.ic_drop_pct.toFixed(2) + '% after data ages beyond ' + (s.recommended_max_age || 3) + ' months. Consider discounting fundamental weight for stocks with stale data, or increase upload frequency.';
     } else if (s.ic_drop_pct > 25) {
       h += 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);color:var(--am)">';
-      h += '⚡ <b>Moderate staleness effect.</b> Fundamental IC decays ' + s.ic_drop_pct.toFixed(0) + '% with age. Data beyond ' + (s.recommended_max_age || 6) + ' months should be treated with caution.';
+      h += '⚡ <b>Moderate staleness effect.</b> Fundamental IC decays ' + s.ic_drop_pct.toFixed(2) + '% with age. Data beyond ' + (s.recommended_max_age || 6) + ' months should be treated with caution.';
     } else {
       h += 'background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);color:var(--gn)">';
       h += '✅ <b>Minimal staleness decay.</b> Fundamental data retains predictive power even when ' + (s.recommended_max_age || 6) + '+ months old. Current upload frequency is adequate.';
@@ -908,12 +908,12 @@ function renderICStaleness(el, d) {
       h += '<tr>';
       h += '<td class="al" style="font-weight:600">' + esc(b.label) + '</td>';
       h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + b.n + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:' + icC + ';font-weight:600">' + b.ic_fundamental.toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm)">' + b.ic_valuation.toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);font-weight:700">' + b.ic_composite.toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + b.std_ic.toFixed(4) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:' + irC + ';font-weight:700">' + b.ir.toFixed(3) + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm);color:' + hrC + '">' + b.hit_rate.toFixed(1) + '%</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + icC + ';font-weight:600">' + b.ic_fundamental.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm)">' + b.ic_valuation.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);font-weight:700">' + b.ic_composite.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + b.std_ic.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + irC + ';font-weight:700">' + b.ir.toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-family:var(--fm);color:' + hrC + '">' + b.hit_rate.toFixed(2) + '%</td>';
       h += '</tr>';
     });
     h += '</tbody></table>';
@@ -929,7 +929,7 @@ function renderICStaleness(el, d) {
       var bg = ds.multiplier >= 0.8 ? 'rgba(34,197,94,0.1)' : ds.multiplier >= 0.5 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)';
       var c = ds.multiplier >= 0.8 ? 'var(--gn)' : ds.multiplier >= 0.5 ? 'var(--am)' : 'var(--rd)';
       h += '<div style="padding:6px 10px;border-radius:4px;background:' + bg + ';text-align:center;min-width:70px">';
-      h += '<div style="font-size:13px;font-weight:700;font-family:var(--fm);color:' + c + '">' + (ds.multiplier * 100).toFixed(0) + '%</div>';
+      h += '<div style="font-size:13px;font-weight:700;font-family:var(--fm);color:' + c + '">' + (ds.multiplier * 100).toFixed(2) + '%</div>';
       h += '<div style="font-size:9px;color:var(--t3)">' + esc(ds.label) + '</div>';
       h += '</div>';
     });
@@ -961,7 +961,7 @@ function icStalenessRenderChart(d) {
       axisLine: { lineStyle: { color: '#2a3f5f' } }
     },
     yAxis: [
-      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(3); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
+      { type: 'value', name: 'IC', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { lineStyle: { color: '#1a2332' } } },
       { type: 'value', name: 'IR', nameTextStyle: { color: '#8a9bb5', fontSize: 9 }, position: 'right', axisLabel: { color: '#8a9bb5', fontSize: 9, formatter: function(v) { return v.toFixed(2); } }, splitLine: { show: false } }
     ],
     series: [

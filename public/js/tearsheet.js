@@ -159,9 +159,9 @@ function tsMonthlyHeatmap(eq){
   yKeys.forEach(function(y){
     h+='<tr><td style="padding:3px 6px;font-weight:700;font-family:var(--fm);border-bottom:1px solid var(--b1)">'+y+'</td>';
     var yt=0;
-    for(var mo=1;mo<=12;mo++){var v=years[y][mo];if(v!==undefined){yt+=v;var bg=tsHC(v);var tc=Math.abs(v)>8?'#fff':'var(--t1)';h+='<td style="padding:3px 4px;text-align:center;font-family:var(--fm);font-weight:600;border-bottom:1px solid var(--b1);background:'+bg+';color:'+tc+'">'+(v>0?'+':'')+v.toFixed(1)+'</td>';}else{h+='<td style="padding:3px 4px;text-align:center;border-bottom:1px solid var(--b1);color:var(--t3)">—</td>';}}
+    for(var mo=1;mo<=12;mo++){var v=years[y][mo];if(v!==undefined){yt+=v;var bg=tsHC(v);var tc=Math.abs(v)>8?'#fff':'var(--t1)';h+='<td style="padding:3px 4px;text-align:center;font-family:var(--fm);font-weight:600;border-bottom:1px solid var(--b1);background:'+bg+';color:'+tc+'">'+(v>0?'+':'')+v.toFixed(2)+'</td>';}else{h+='<td style="padding:3px 4px;text-align:center;border-bottom:1px solid var(--b1);color:var(--t3)">—</td>';}}
     var yBg=tsHC(yt);var yTc=Math.abs(yt)>8?'#fff':'var(--t1)';
-    h+='<td style="padding:3px 6px;text-align:center;font-family:var(--fm);font-weight:700;border-bottom:1px solid var(--b1);background:'+yBg+';color:'+yTc+'">'+(yt>0?'+':'')+yt.toFixed(1)+'%</td></tr>';
+    h+='<td style="padding:3px 6px;text-align:center;font-family:var(--fm);font-weight:700;border-bottom:1px solid var(--b1);background:'+yBg+';color:'+yTc+'">'+(yt>0?'+':'')+yt.toFixed(2)+'%</td></tr>';
   });
   h+='</tbody></table>';return h;
 }
@@ -183,7 +183,7 @@ function tsDrawdownTable(eq){
   var h='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr>';
   ['#','Depth','Start','Trough','Recovery','Days'].forEach(function(c){h+='<th style="padding:3px 6px;font-size:8px;color:var(--t3);text-align:'+(c==='Depth'||c==='Days'?'right':'left')+';border-bottom:1px solid var(--b1)">'+c+'</th>';});
   h+='</tr></thead><tbody>';
-  top5.forEach(function(ep,i){h+='<tr><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-weight:700;color:var(--t3)">'+(i+1)+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:700;color:var(--rd)">-'+ep.maxDD.toFixed(1)+'%</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+ep.start+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+ep.trough+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+(ep.recovery||'ongoing')+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+(ep.duration||'—')+'</td></tr>';});
+  top5.forEach(function(ep,i){h+='<tr><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-weight:700;color:var(--t3)">'+(i+1)+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:700;color:var(--rd)">-'+ep.maxDD.toFixed(2)+'%</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+ep.start+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+ep.trough+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);font-family:var(--fm)">'+(ep.recovery||'ongoing')+'</td><td style="padding:3px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm)">'+(ep.duration||'—')+'</td></tr>';});
   if(!top5.length)h+='<tr><td colspan="6" style="padding:8px;color:var(--t3);text-align:center">No significant drawdowns</td></tr>';
   h+='</tbody></table>';return h;
 }
@@ -192,10 +192,10 @@ function tsSummaryTable(d){
   var s=d.stats,eq=d.equity||[];var sortino=tsSortino(eq);
   var calmar=s.max_drawdown>0?(s.annual_return/s.max_drawdown).toFixed(2):'N/A';
   var wlRatio=Math.abs(s.avg_loss)>0?(Math.abs(s.avg_win)/Math.abs(s.avg_loss)).toFixed(2):'N/A';
-  var wr=s.win_rate/100;var kelly=Math.abs(s.avg_loss)>0?((wr-(1-wr)/(Math.abs(s.avg_win)/Math.abs(s.avg_loss)))*100).toFixed(1)+'%':'N/A';
+  var wr=s.win_rate/100;var kelly=Math.abs(s.avg_loss)>0?((wr-(1-wr)/(Math.abs(s.avg_win)/Math.abs(s.avg_loss)))*100).toFixed(2)+'%':'N/A';
   var mr=tsMonthlyReturns(eq);var pm=mr.filter(function(r){return r>0;}).length;var nm=mr.filter(function(r){return r<0;}).length;
-  var bm=mr.length?Math.max.apply(null,mr).toFixed(1)+'%':'N/A';var wm=mr.length?Math.min.apply(null,mr).toFixed(1)+'%':'N/A';
-  var rows=[['Sharpe Ratio',s.sharpe.toFixed(3)],['Sortino Ratio',sortino.toFixed(3)],['Calmar Ratio',calmar],['Kelly Criterion',kelly],['Win/Loss Ratio',wlRatio],['Exposure',s.exposure+'%'],['',''],['Positive Months',pm+' / '+(pm+nm)],['Best Month',bm],['Worst Month',wm],['',''],['Max Consec. Wins',s.max_consec_wins],['Max Consec. Losses',s.max_consec_losses],['Avg Bars (win)',s.avg_hold_win+'d'],['Avg Bars (loss)',s.avg_hold_loss+'d'],['Largest Win','+'+s.largest_win+'%'],['Largest Loss',s.largest_loss+'%']];
+  var bm=mr.length?Math.max.apply(null,mr).toFixed(2)+'%':'N/A';var wm=mr.length?Math.min.apply(null,mr).toFixed(2)+'%':'N/A';
+  var rows=[['Sharpe Ratio',s.sharpe.toFixed(2)],['Sortino Ratio',sortino.toFixed(2)],['Calmar Ratio',calmar],['Kelly Criterion',kelly],['Win/Loss Ratio',wlRatio],['Exposure',s.exposure+'%'],['',''],['Positive Months',pm+' / '+(pm+nm)],['Best Month',bm],['Worst Month',wm],['',''],['Max Consec. Wins',s.max_consec_wins],['Max Consec. Losses',s.max_consec_losses],['Avg Bars (win)',s.avg_hold_win+'d'],['Avg Bars (loss)',s.avg_hold_loss+'d'],['Largest Win','+'+s.largest_win+'%'],['Largest Loss',s.largest_loss+'%']];
   var h='<table style="width:100%;border-collapse:collapse;font-size:10px">';
   rows.forEach(function(r){if(!r[0])h+='<tr><td colspan="2" style="padding:2px;border-bottom:1px solid var(--b1)"></td></tr>';else h+='<tr><td style="padding:2px 6px;border-bottom:1px solid var(--b1);color:var(--t2)">'+r[0]+'</td><td style="padding:2px 6px;border-bottom:1px solid var(--b1);text-align:right;font-family:var(--fm);font-weight:600;color:var(--t1)">'+r[1]+'</td></tr>';});
   h+='</table>';return h;
@@ -216,7 +216,7 @@ function tsUnderwaterRender(eq){
   var c=BL.init(el,'ts-uw');if(!c)return;
   var dates=[],dd=[],peak=eq[0].equity;
   for(var i=0;i<eq.length;i++){if(eq[i].equity>peak)peak=eq[i].equity;dates.push(eq[i].date);dd.push(Math.round(-(peak-eq[i].equity)/peak*10000)/100);}
-  c.setOption({tooltip:{trigger:'axis',formatter:function(p){if(!p||!p[0])return'';return p[0].axisValue+'<br>DD: <b>'+p[0].value.toFixed(2)+'%</b>';}},grid:BL.grid({top:10,bottom:36}),dataZoom:BL.dataZoom(),xAxis:{type:'category',data:dates,axisLabel:{fontSize:8,interval:'auto'}},yAxis:{type:'value',max:0,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(0)+'%';}}},series:[{type:'line',data:dd,symbol:'none',lineStyle:{width:0.5,color:BL.colors.red},areaStyle:{color:'rgba(220,50,50,0.15)',opacity:1},itemStyle:{color:BL.colors.red}}]});
+  c.setOption({tooltip:{trigger:'axis',formatter:function(p){if(!p||!p[0])return'';return p[0].axisValue+'<br>DD: <b>'+p[0].value.toFixed(2)+'%</b>';}},grid:BL.grid({top:10,bottom:36}),dataZoom:BL.dataZoom(),xAxis:{type:'category',data:dates,axisLabel:{fontSize:8,interval:'auto'}},yAxis:{type:'value',max:0,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(2)+'%';}}},series:[{type:'line',data:dd,symbol:'none',lineStyle:{width:0.5,color:BL.colors.red},areaStyle:{color:'rgba(220,50,50,0.15)',opacity:1},itemStyle:{color:BL.colors.red}}]});
 }
 
 function tsRollingSharpeRender(eq){
@@ -248,7 +248,7 @@ function tsRollingRetRender(eq){
     var vals=[];for(var i=sm.n;i<eq.length;i++){if(i>=w.n)vals.push(Math.round((eq[i].equity-eq[i-w.n].equity)/eq[i-w.n].equity*10000)/100);else vals.push(null);}
     return{name:w.name,type:'line',data:vals,symbol:'none',lineStyle:{width:1,color:colors[wi]},itemStyle:{color:colors[wi]},connectNulls:false};
   });
-  c.setOption({tooltip:{trigger:'axis'},legend:{data:windows.map(function(w){return w.name;}),top:0,left:0,textStyle:{fontSize:8}},grid:BL.grid({top:22,bottom:36}),dataZoom:BL.dataZoom(),xAxis:{type:'category',data:xDates,axisLabel:{fontSize:8,interval:'auto'}},yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(0)+'%';}}},series:series});
+  c.setOption({tooltip:{trigger:'axis'},legend:{data:windows.map(function(w){return w.name;}),top:0,left:0,textStyle:{fontSize:8}},grid:BL.grid({top:22,bottom:36}),dataZoom:BL.dataZoom(),xAxis:{type:'category',data:xDates,axisLabel:{fontSize:8,interval:'auto'}},yAxis:{type:'value',scale:true,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(2)+'%';}}},series:series});
 }
 
 function tsStreaksRender(trades){
@@ -363,8 +363,8 @@ function tsCommentary(d,sortino){
   else if(s.win_rate>=45)tradeItems.push('Win rate <b>'+s.win_rate+'%</b> — di sekitar 50/50, strategy bergantung pada payoff ratio');
   else tradeItems.push('Win rate <b style="color:var(--rd)">'+s.win_rate+'%</b> rendah — perlu average win yang jauh lebih besar dari average loss untuk profitable');
 
-  if(s.payoff_ratio>=2)tradeItems.push('Payoff ratio <b style="color:var(--gn)">'+s.payoff_ratio.toFixed(1)+'x</b> — winner jauh lebih besar dari loser');
-  else if(s.payoff_ratio<1)tradeItems.push('Payoff ratio <b style="color:var(--rd)">'+s.payoff_ratio.toFixed(1)+'x</b> — average loss lebih besar dari average win, berbahaya');
+  if(s.payoff_ratio>=2)tradeItems.push('Payoff ratio <b style="color:var(--gn)">'+s.payoff_ratio.toFixed(2)+'x</b> — winner jauh lebih besar dari loser');
+  else if(s.payoff_ratio<1)tradeItems.push('Payoff ratio <b style="color:var(--rd)">'+s.payoff_ratio.toFixed(2)+'x</b> — average loss lebih besar dari average win, berbahaya');
 
   if(s.profit_factor>=2)tradeItems.push('Profit factor <b style="color:var(--gn)">'+s.profit_factor.toFixed(2)+'</b> kuat');
   else if(s.profit_factor<1)tradeItems.push('Profit factor <b style="color:var(--rd)">'+s.profit_factor.toFixed(2)+'</b> — total loss > total profit');
@@ -390,7 +390,7 @@ function tsCommentary(d,sortino){
 
   // ── Sizing Guidance ──
   if(kelly>0&&kelly<50){
-    h+='<p style="margin:0 0 8px"><b>Position Sizing:</b> Kelly Criterion suggest <b>'+kelly.toFixed(1)+'%</b> of capital per trade. Praktisnya gunakan half-Kelly (<b>'+Math.round(kelly/2)+'%</b>) untuk lebih konservatif.</p>';
+    h+='<p style="margin:0 0 8px"><b>Position Sizing:</b> Kelly Criterion suggest <b>'+kelly.toFixed(2)+'%</b> of capital per trade. Praktisnya gunakan half-Kelly (<b>'+Math.round(kelly/2)+'%</b>) untuk lebih konservatif.</p>';
   }else if(kelly<=0){
     h+='<p style="margin:0 0 8px"><b>Position Sizing:</b> Kelly Criterion <b style="color:var(--rd)">negatif</b> — secara matematis, strategy ini tidak layak di-bet. Perbaiki edge sebelum deploy modal.</p>';
   }

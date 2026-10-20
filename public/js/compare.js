@@ -289,9 +289,9 @@ function cmpDrawChart(chartEl,dates,series,absMap,flowSeries,corrAbsMap){
     // Left Y-axis: first item absolute price
     // Right Y-axis: second item absolute price
     var cmpYFmt=function(v){
-      if(Math.abs(v)>=1e9)return(v/1e9).toFixed(1)+'B';
-      if(Math.abs(v)>=1e6)return(v/1e6).toFixed(1)+'M';
-      if(Math.abs(v)>=1e3)return(v/1e3).toFixed(1)+'K';
+      if(Math.abs(v)>=1e9)return(v/1e9).toFixed(2)+'B';
+      if(Math.abs(v)>=1e6)return(v/1e6).toFixed(2)+'M';
+      if(Math.abs(v)>=1e3)return(v/1e3).toFixed(2)+'K';
       return v.toFixed(v<100?2:0);
     };
 
@@ -322,7 +322,7 @@ function cmpDrawChart(chartEl,dates,series,absMap,flowSeries,corrAbsMap){
     gIdx=1;
   }else{
     // ═══ NORMALIZED MODE (default) ═══
-    yAxes.push({type:'value',gridIndex:0,axisLabel:{fontSize:8,formatter:function(v){return(v>0?'+':'')+v.toFixed(1)+'%';}},splitLine:{lineStyle:{color:'#1e2836',type:'dashed'}}});
+    yAxes.push({type:'value',gridIndex:0,axisLabel:{fontSize:8,formatter:function(v){return(v>0?'+':'')+v.toFixed(2)+'%';}},splitLine:{lineStyle:{color:'#1e2836',type:'dashed'}}});
 
     cmpList.forEach(function(item,ci){
       var key=cmpItemKey(item),clr=cmpColors[ci%8];
@@ -395,7 +395,7 @@ function cmpDrawChart(chartEl,dates,series,absMap,flowSeries,corrAbsMap){
 
     grids.push({left:55,right:60,top:corrTop,bottom:corrBottom});
     xAxes.push({type:'category',data:dates,gridIndex:gIdx,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}});
-    yAxes.push({type:'value',gridIndex:gIdx,min:-1,max:1,splitNumber:4,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(1);}},splitLine:{lineStyle:{color:'#1e2836',type:'dashed'}}});
+    yAxes.push({type:'value',gridIndex:gIdx,min:-1,max:1,splitNumber:4,axisLabel:{fontSize:8,formatter:function(v){return v.toFixed(2);}},splitLine:{lineStyle:{color:'#1e2836',type:'dashed'}}});
     gIdx++;
   }
 
@@ -412,7 +412,7 @@ function cmpDrawChart(chartEl,dates,series,absMap,flowSeries,corrAbsMap){
         var sn=p.seriesName||'';
         if(sn.indexOf('ρ ')===0){
           var color=v>0.7?'#22c55e':v>0.3?'#f59e0b':v>-0.3?'#888':v>-0.7?'#f97316':'#ef4444';
-          h+='<div style="display:flex;align-items:center;gap:4px;font-size:10px"><span style="width:8px;height:8px;border-radius:50%;background:'+p.color+'"></span>'+sn+'<span style="font-weight:700;margin-left:auto;color:'+color+'">'+v.toFixed(3)+'</span></div>';
+          h+='<div style="display:flex;align-items:center;gap:4px;font-size:10px"><span style="width:8px;height:8px;border-radius:50%;background:'+p.color+'"></span>'+sn+'<span style="font-weight:700;margin-left:auto;color:'+color+'">'+v.toFixed(2)+'</span></div>';
         }else if(sn.indexOf('F.Net')>=0){
           h+='<div style="display:flex;align-items:center;gap:4px;font-size:10px"><span style="width:8px;height:8px;border-radius:50%;background:'+p.color+'"></span>'+sn+'<span style="font-weight:700;margin-left:auto">'+BL.fmtRp(v)+'</span></div>';
         }else if(cmpDualAxis&&cmpList.length===2){
@@ -469,7 +469,7 @@ function cmpRenderSummary(sumEl,allData,dates,absMap){
         var v=c.corr;
         var color=v===null?'var(--t3)':v>0.7?'#22c55e':v>0.3?'#f59e0b':v>-0.3?'var(--t2)':v>-0.7?'#f97316':'#ef4444';
         var bg=v===null?'var(--bgH)':v>0.7?'rgba(34,197,94,0.08)':v<-0.3?'rgba(239,68,68,0.08)':'var(--bgH)';
-        var label=v===null?'N/A':v.toFixed(3);
+        var label=v===null?'N/A':v.toFixed(2);
         var interp=v===null?'':v>0.7?'Strong +':v>0.3?'Moderate +':v>-0.3?'Weak':v>-0.7?'Moderate −':'Strong −';
         sh+='<div style="padding:6px 10px;border-radius:6px;border:1px solid var(--b1);background:'+bg+';min-width:120px;text-align:center">';
         sh+='<div style="font-size:9px;color:var(--t3);margin-bottom:2px"><span style="color:'+cmpColors[c.ci%8]+';font-weight:700">'+esc(c.a)+'</span> × <span style="color:'+cmpColors[c.cj%8]+';font-weight:700">'+esc(c.b)+'</span></div>';
@@ -498,7 +498,7 @@ function cmpRenderSummary(sumEl,allData,dates,absMap){
     sh+='<div class="cmp-summary-card"'+clickAttr+'>';
     sh+='<div class="cmp-sc-head"><span class="cmp-sc-dot" style="background:'+cmpColors[ci%8]+'"></span><span style="font-size:8px;padding:1px 5px;border-radius:3px;background:'+ct.bg+';color:'+ct.color+';font-weight:600">'+ct.icon+'</span><span class="cmp-sc-code">'+esc(item.name)+'</span></div>';
     sh+='<div class="cmp-sc-pct '+cls+'">'+(pct>0?'+':'')+pct.toFixed(2)+'%</div>';
-    if(item.type==='ticker')sh+='<div class="cmp-sc-detail">'+f.close.toLocaleString()+' → '+l.close.toLocaleString()+'</div>';
+    if(item.type==='ticker')sh+='<div class="cmp-sc-detail">'+f.close.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+' → '+l.close.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
     else{sh+='<div class="cmp-sc-detail">Avg '+Math.round(f.close).toLocaleString()+' → '+Math.round(l.close).toLocaleString();if(l.tickers)sh+=' · '+l.tickers+' stocks';sh+='</div>';}
     sh+='<div class="cmp-sc-detail '+fnetCls+'">F.Net: '+fmtRp(totalFnet)+'</div></div>';
   });

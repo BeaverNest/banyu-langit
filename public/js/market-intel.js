@@ -107,7 +107,7 @@ async function loadMIOverview() {
     h += mfCard('Adv / Dec', adv+' / '+dec, adv>dec?'var(--gn)':'var(--rd)');
     h += mfCard('Foreign Net', fmtRp(totalFNet), totalFNet>=0?'var(--gn)':'var(--rd)');
     h += mfCard('Total Value', fmtRp(totalVal), 'var(--bl)');
-    h += mfCard('Bid/Offer', (bidRatio*100).toFixed(1)+'%', bidRatio>0.55?'var(--gn)':bidRatio<0.45?'var(--rd)':'var(--am)');
+    h += mfCard('Bid/Offer', (bidRatio*100).toFixed(2)+'%', bidRatio>0.55?'var(--gn)':bidRatio<0.45?'var(--rd)':'var(--am)');
     h += mfCard('Frequency', fmtRp(totalFreq), 'var(--t1)');
     h += '</div>';
 

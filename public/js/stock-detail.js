@@ -180,7 +180,7 @@ function sdTabFinancials(d) {
   var cur = d.current || {};
   var h = '';
 
-  function pc(v) { return v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%'; }
+  function pc(v) { return v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%'; }
   function cl(v) { return v == null ? 'var(--t3)' : (v > 0 ? 'var(--gn)' : v < 0 ? 'var(--rd)' : 'var(--t2)'); }
   function num(v, dg) { return v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: dg == null ? 0 : dg }); }
   function spark(vals, color) {
@@ -188,7 +188,7 @@ function sdTabFinancials(d) {
     if (v.length < 2) return '';
     var mn = Math.min.apply(null, v), mx = Math.max.apply(null, v), rg = (mx - mn) || 1;
     var pts = v.map(function (y, i) {
-      return (i / (v.length - 1) * 100).toFixed(1) + ',' + (26 - ((y - mn) / rg) * 22).toFixed(1);
+      return (i / (v.length - 1) * 100).toFixed(2) + ',' + (26 - ((y - mn) / rg) * 22).toFixed(2);
     }).join(' ');
     return '<svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%;height:24px;display:block;margin-top:3px">' +
       '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.8" vector-effect="non-scaling-stroke"/></svg>';
@@ -244,7 +244,7 @@ function sdTabFinancials(d) {
     h += '<tr><td class="al" style="color:var(--t2)">' + q[gi].label + '</td>' +
       '<td class="ar" style="color:' + cl(rv) + ';font-family:var(--fm)">' + pc(rv) + '</td>' +
       '<td class="ar" style="color:' + cl(pf) + ';font-family:var(--fm)">' + pc(pf) + '</td>' +
-      '<td class="ar" style="color:var(--t2);font-family:var(--fm)">' + (q[gi].eps ? q[gi].eps.toFixed(0) : '—') + '</td>' +
+      '<td class="ar" style="color:var(--t2);font-family:var(--fm)">' + (q[gi].eps ? q[gi].eps.toFixed(2) : '—') + '</td>' +
       '<td class="ar" style="color:' + cl(dRoe) + ';font-family:var(--fm)">' + (dRoe == null ? '—' : (dRoe > 0 ? '+' : '') + dRoe.toFixed(2) + ' pp') + '</td>' +
       '<td class="ar" style="color:' + cl(-dDer) + ';font-family:var(--fm)">' + (dDer == null ? '—' : (dDer > 0 ? '+' : '') + dDer.toFixed(2)) + '</td></tr>';
   }
@@ -554,7 +554,7 @@ function sdTabAnalysis(d) {
     stg.ma.forEach(function(m) {
       var color = m.above ? '#22c55e' : '#ef4444';
       var label = m.key.toUpperCase().replace('MA','');
-      h += '<span><span style="color:var(--t3);font-size:11px">MA' + label + '</span> <span style="font-weight:700;font-family:var(--fm);color:' + color + '">' + (m.dist_pct > 0 ? '+' : '') + m.dist_pct.toFixed(1) + '%</span> <span style="color:var(--t3);font-family:var(--fm)">' + (m.value || 0).toLocaleString() + '</span></span>';
+      h += '<span><span style="color:var(--t3);font-size:11px">MA' + label + '</span> <span style="font-weight:700;font-family:var(--fm);color:' + color + '">' + (m.dist_pct > 0 ? '+' : '') + m.dist_pct.toFixed(2) + '%</span> <span style="color:var(--t3);font-family:var(--fm)">' + (m.value || 0).toLocaleString() + '</span></span>';
     });
     h += '</div>';
   }
@@ -636,9 +636,9 @@ function sdTabAnalysis(d) {
     var lo = d.stats.low_52w, hi = d.stats.peak_52w, px = d.current.close;
     var pos = hi > lo ? Math.max(0, Math.min(100, (px - lo) / (hi - lo) * 100)) : 0;
     h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:5px"><span style="font-weight:700;color:var(--t1);font-size:11px">POSISI RENTANG 52 MINGGU</span><span>' + pos.toFixed(0) + '% dari low</span></div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:5px"><span style="font-weight:700;color:var(--t1);font-size:11px">POSISI RENTANG 52 MINGGU</span><span>' + pos.toFixed(2) + '% dari low</span></div>';
     h += '<div style="position:relative;height:10px;background:linear-gradient(90deg,#ef4444 0%,#f59e0b 50%,#22c55e 100%);border-radius:5px;opacity:.75">';
-    h += '<div style="position:absolute;left:' + pos.toFixed(1) + '%;top:-4px;width:3px;height:18px;background:#fff;border-radius:2px;transform:translateX(-1px)"></div></div>';
+    h += '<div style="position:absolute;left:' + pos.toFixed(2) + '%;top:-4px;width:3px;height:18px;background:#fff;border-radius:2px;transform:translateX(-1px)"></div></div>';
     h += '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);font-family:var(--fm);margin-top:4px"><span>' + lo.toLocaleString() + '</span><span>' + px.toLocaleString() + '</span><span>' + hi.toLocaleString() + '</span></div>';
     if (d.stats.drawdown_from_peak != null) {
       h += '<div style="font-size:10px;color:var(--t3);margin-top:3px">Drawdown dari peak ' + d.stats.drawdown_from_peak + '% · ' + (d.stats.pct_from_low || 0) + '% di atas low · ATR ' + (d.stats.atr || 0) + ' · vol ' + (d.stats.volatility_ann || 0) + '%</div>';
@@ -700,7 +700,7 @@ function sdTabOwnership(d) {
     h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:12px">';
     h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
     h += '<div style="font-size:11px;font-weight:700;color:var(--t1)">OWNERSHIP <span style="font-weight:400;color:var(--t3)">per kategori investor · KSEI</span></div>';
-    h += '<div style="font-size:9px;color:var(--t3);font-family:var(--fm)">' + esc(own.snapshot_date) + ' · basis ' + (own.listed_shares || 0).toLocaleString() + ' saham' + (own.scripless_pct != null ? ' · tercatat KSEI ' + Number(own.scripless_pct).toFixed(1) + '%' : '') + '</div>';
+    h += '<div style="font-size:9px;color:var(--t3);font-family:var(--fm)">' + esc(own.snapshot_date) + ' · basis ' + (own.listed_shares || 0).toLocaleString() + ' saham' + (own.scripless_pct != null ? ' · tercatat KSEI ' + Number(own.scripless_pct).toFixed(2) + '%' : '') + '</div>';
     h += '</div>';
 
     h += '<div style="display:grid;grid-template-columns:minmax(360px,42%) 1fr;gap:14px">';
@@ -832,7 +832,7 @@ function sdTabFlow(d) {
   h += kpi('INTENSITAS 20D', intens == null ? '—' : (intens >= 0 ? '+' : '') + intens.toFixed(2) + '%', 'net asing ÷ nilai', ic);
   h += kpi('AVG TRADE 20D', avgTrade == null ? '—' : fmtRp(avgTrade), 'nilai ÷ frekuensi');
   h += kpi('TURNOVER 20D', turnover == null ? '—' : turnover.toFixed(2) + '%', 'volume ÷ saham tradeable');
-  h += kpi('PARTISIPASI ASING', forPart == null ? '—' : forPart.toFixed(1) + '%', 'estimasi, 2 sisi transaksi');
+  h += kpi('PARTISIPASI ASING', forPart == null ? '—' : forPart.toFixed(2) + '%', 'estimasi, 2 sisi transaksi');
   h += '</div>';
 
   if (ff.accum_streak > 0) h += '<div style="font-size:11px;color:var(--gn);font-weight:600;margin-bottom:6px">Accumulating ' + ff.accum_streak + ' hari berturut-turut</div>';
@@ -874,7 +874,7 @@ function sdTabFlow(d) {
     h += '<td class="ar ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
     h += '<td class="ar ' + (fv > 0 ? 'up' : fv < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + fmtRp(fv) + '</td>';
     h += '<td class="ar ' + (cumArr[i] > 0 ? 'up' : cumArr[i] < 0 ? 'dn' : '') + '" style="font-family:var(--fm)">' + fmtRp(cumArr[i]) + '</td>';
-    h += '<td class="ar" style="font-family:var(--fm);color:' + (br == null ? 'var(--t3)' : br >= 55 ? 'var(--gn)' : br <= 45 ? 'var(--rd)' : 'var(--t2)') + '">' + (br == null ? '—' : br.toFixed(1)) + '</td>';
+    h += '<td class="ar" style="font-family:var(--fm);color:' + (br == null ? 'var(--t3)' : br >= 55 ? 'var(--gn)' : br <= 45 ? 'var(--rd)' : 'var(--t2)') + '">' + (br == null ? '—' : br.toFixed(2)) + '</td>';
     h += '<td class="ar" style="font-family:var(--fm);color:var(--t3)">' + fmtRp(val) + '</td></tr>';
   });
   h += '</tbody></table></div>';
@@ -947,7 +947,7 @@ function sdDrawPriceChartClean(d) {
           if (p.seriesType === 'candlestick' && p.data) {
             h += '<div style="font-size:10px">O:' + (p.data[1]||0).toLocaleString() + ' H:' + (p.data[4]||0).toLocaleString() + ' L:' + (p.data[3]||0).toLocaleString() + ' C:' + (p.data[2]||0).toLocaleString() + '</div>';
           } else if (p.seriesName && p.seriesName.indexOf('MA') === 0 && p.value != null) {
-            h += '<div style="font-size:9px;color:' + p.color + '">' + p.seriesName + ': ' + p.value.toLocaleString() + '</div>';
+            h += '<div style="font-size:9px;color:' + p.color + '">' + p.seriesName + ': ' + p.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>';
           }
         });
         return h;
@@ -1244,18 +1244,18 @@ function sdCommentary(d) {
   // Fundamental
   items = [];
   var perVal = fu.live_per || fu.per || 0;
-  if (perVal > 0 && perVal < 10) items.push('PER <b style="color:var(--gn)">' + perVal.toFixed(1) + 'x</b> — murah');
-  else if (perVal > 20) items.push('PER <b style="color:var(--rd)">' + perVal.toFixed(1) + 'x</b> — premium');
-  if (fu.roe && fu.roe > 15) items.push('ROE <b style="color:var(--gn)">' + fu.roe.toFixed(1) + '%</b>');
+  if (perVal > 0 && perVal < 10) items.push('PER <b style="color:var(--gn)">' + perVal.toFixed(2) + 'x</b> — murah');
+  else if (perVal > 20) items.push('PER <b style="color:var(--rd)">' + perVal.toFixed(2) + 'x</b> — premium');
+  if (fu.roe && fu.roe > 15) items.push('ROE <b style="color:var(--gn)">' + fu.roe.toFixed(2) + '%</b>');
   if (fu.der && fu.der > 2) items.push('DER <b style="color:var(--rd)">' + fu.der.toFixed(2) + '</b> — leverage tinggi');
-  if (fu.eps_trailing && fu.eps_trailing < 0) items.push('<b style="color:var(--rd)">Perusahaan merugi</b> (EPS ' + fu.eps_trailing.toFixed(0) + ')');
+  if (fu.eps_trailing && fu.eps_trailing < 0) items.push('<b style="color:var(--rd)">Perusahaan merugi</b> (EPS ' + fu.eps_trailing.toFixed(2) + ')');
   if (items.length) h += '<p style="margin:0 0 8px"><b>Fundamental:</b> ' + items.join('. ') + '.</p>';
 
   // Ownership & Dividend
   var ownData = d.ownership;
   if (ownData) {
     items = [];
-    items.push('Foreign ownership <b>' + ownData.foreign_pct.toFixed(1) + '%</b>');
+    items.push('Foreign ownership <b>' + ownData.foreign_pct.toFixed(2) + '%</b>');
     if (items.length) h += '<p style="margin:0 0 8px"><b>Ownership:</b> ' + items.join('. ') + '.</p>';
   }
   var divH = d.dividend_history;

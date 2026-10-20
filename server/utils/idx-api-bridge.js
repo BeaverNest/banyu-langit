@@ -163,34 +163,38 @@ function importIndexSummary(targetDb, options = {}) {
   }
 }
 
-function importFinancialRatios(targetDb) {
-  const idxDb = openIdxDb();
-  try {
-    const rows = idxDb.prepare(`SELECT * FROM financial_ratio`).all();
-    if (!rows.length) return { rows: 0 };
-
-    const upsert = targetDb.prepare(`INSERT INTO idx_fundamental(snapshot_month,code,name,sector,subsector,industry,subindustry,per,pbv,roe,roa,der,npm,mkt_cap,total_rev)
-      VALUES(@snapshot_month,@code,@name,@sector,@subsector,@industry,@subindustry,@per,@pbv,@roe,@roa,@der,@npm,@mkt_cap,@total_rev)
-      ON CONFLICT(snapshot_month,code) DO UPDATE SET name=excluded.name,sector=excluded.sector,subsector=excluded.subsector,industry=excluded.industry,subindustry=excluded.subindustry,per=excluded.per,pbv=excluded.pbv,roe=excluded.roe,roa=excluded.roa,der=excluded.der,npm=excluded.npm,mkt_cap=excluded.mkt_cap,total_rev=excluded.total_rev`);
-
-    let count = 0;
-    targetDb.transaction(() => {
-      for (const r of rows) {
-        if (!r.code) continue;
-        const sm = r.year && r.month ? `${r.year}-${String(r.month).padStart(2, '0')}` : new Date().toISOString().slice(0, 7);
-        upsert.run({
-          snapshot_month: sm, code: String(r.code || '').trim(),
-          name: String(r.stock_name || r.name || '').trim(),
-          sector: String(r.sector || '').trim(), subsector: String(r.sub_sector || '').trim(),
-          industry: String(r.industry || '').trim(), subindustry: String(r.sub_industry || '').trim(),
-          per: r.per || 0, pbv: r.price_bv || r.pbv || 0, roe: r.roe || 0, roa: r.roa || 0,
-          der: r.de_ratio || r.der || 0, npm: r.npm || 0, mkt_cap: 0, total_rev: r.sales || r.total_rev || 0
-        });
-        count++;
-      }
-    })();
-    return { rows: count };
-  } finally { idxDb.close(); }
+/**
+ * @deprecated DO NOT USE — replaced by importFinancialRatiosFull().
+ *
+ * It was wrong twice over, and both defects were silent:
+ *   1. Target table: it wrote to `idx_fundamental` (keyed `(snapshot_month, code)`),
+ *      not to `financial_ratios` (keyed `(code, period)`).
+ *   2. Month key: it read `r.year` / `r.month`, columns that DO NOT EXIST in IDX-API's
+ *      `financial_ratio` table (cols: id, code, name, sector, sub_sector, industry,
+ *      sub_industry, period, assets, liabilities, equity, sales, ebt, profit, eps,
+ *      book_value, per, pbv, der, roa, roe, npm). So the expression always fell through
+ *      to the current month and all 19,373 quarterly rows were handed the SAME
+ *      `snapshot_month`. Under `ON CONFLICT(snapshot_month, code)` they collapsed to
+ *      ~1,000 rows of mixed quarterly vintages — while clobbering the correct
+ *      stock_screener snapshot for that month and leaving orphan rows for codes that
+ *      are not in the screener.
+ *   Its `rows` also counted rows PROCESSED, so `{"ok":true,"rows":19373}` was a false
+ *   success signal: it reported work that had not landed where the caller expected.
+ *
+ * Kept as an inert stub (not deleted) so the existing callers — `import-all` and
+ * deno-proxy's `runBridgeImport` — cannot pollute `idx_fundamental` again, and so no
+ * caller crashes with a TypeError. `idx_fundamental`'s current-month snapshot is owned
+ * by importStockScreener() (stock_screener is the correct source for it).
+ */
+function importFinancialRatios(_targetDb) {
+  console.warn('[bridge] importFinancialRatios() is DEPRECATED and no longer writes anything. ' +
+    'Use importFinancialRatiosFull() (→ financial_ratios, keyed (code, period)) for quarterly ' +
+    'ratios; idx_fundamental is owned by importStockScreener().');
+  return {
+    rows: 0, changes: 0, persisted: 0, inserted: 0,
+    deprecated: true, replaced_by: 'importFinancialRatiosFull',
+    note: 'no-op: previous behaviour wrote quarterly rows into idx_fundamental under the current month'
+  };
 }
 
 function importStockScreener(targetDb) {
@@ -365,7 +369,8 @@ function bulkImport(targetDb, srcTable, upsertSql, mapFn) {
     if (!total) return { rows: 0 };
 
     const stmt = targetDb.prepare(upsertSql);
-    let count = 0;
+    let count = 0;      // rows passed to the upsert (attempted writes)
+    let changes = 0;    // rows the engine actually reported as written (insert OR update)
     let offset = 0;
 
     while (offset < total) {
@@ -376,7 +381,8 @@ function bulkImport(targetDb, srcTable, upsertSql, mapFn) {
         for (const r of rows) {
           const mapped = mapFn(r);
           if (!mapped) continue;
-          stmt.run(mapped);
+          const info = stmt.run(mapped);
+          changes += info?.changes || 0;
           count++;
         }
       })();
@@ -385,7 +391,9 @@ function bulkImport(targetDb, srcTable, upsertSql, mapFn) {
       if (total > CHUNK_SIZE) console.log(`[bridge] ${srcTable}: ${count}/${total} rows imported`);
     }
 
-    return { rows: count };
+    // `rows` = attempted, `changes` = written. Callers that report "success" from `rows`
+    // alone cannot tell "processed but not stored" from "stored" — return both.
+    return { rows: count, changes };
   } finally {
     idxDb.close();
   }
@@ -614,26 +622,134 @@ function importTradeSummary(targetDb) {
     r => { const td = epochToDate(r.date); return { summary_id: r.id || '', trade_date: td || '', volume: r.volume || 0, value: r.value || 0, frequency: r.frequency || 0 }; });
 }
 
+/**
+ * Import financial_ratio → financial_ratios (quarterly, keyed (code, period)).
+ *
+ * Returns processed vs actually-persisted counts so "ok" can never mean
+ * "processed but not stored":
+ *   rows      — rows attempted (legacy field, kept for callers)
+ *   changes   — rows the engine reported written (insert OR update)
+ *   persisted — alias of `changes` (handoff contract name)
+ *   inserted  — new rows this run added to financial_ratios (target count delta)
+ *   total     — financial_ratios row count after the import
+ * A healthy idempotent re-run is rows=19373, inserted=0, total=19373.
+ */
 function importFinancialRatiosFull(targetDb) {
-  return bulkImport(targetDb, 'financial_ratio',
+  const countRows = () => targetDb.prepare('SELECT COUNT(*) AS c FROM financial_ratios').get().c;
+  const before = countRows();
+  const res = bulkImport(targetDb, 'financial_ratio',
     `INSERT INTO financial_ratios(code,name,sector,sub_sector,industry,sub_industry,period,assets,liabilities,equity,sales,ebt,profit,eps,book_value,per,pbv,der,roa,roe,npm)
      VALUES(@code,@name,@sector,@sub_sector,@industry,@sub_industry,@period,@assets,@liabilities,@equity,@sales,@ebt,@profit,@eps,@book_value,@per,@pbv,@der,@roa,@roe,@npm)
      ON CONFLICT(code,period) DO UPDATE SET name=excluded.name,assets=excluded.assets,liabilities=excluded.liabilities,equity=excluded.equity,sales=excluded.sales,ebt=excluded.ebt,profit=excluded.profit,eps=excluded.eps,book_value=excluded.book_value,per=excluded.per,pbv=excluded.pbv,der=excluded.der,roa=excluded.roa,roe=excluded.roe,npm=excluded.npm`,
     r => { if (!r.code) return null; return { code: r.code, name: r.name || '', sector: r.sector || '', sub_sector: r.sub_sector || '', industry: r.industry || '', sub_industry: r.sub_industry || '', period: epochToDate(r.period) || '', assets: r.assets || 0, liabilities: r.liabilities || 0, equity: r.equity || 0, sales: r.sales || 0, ebt: r.ebt || 0, profit: r.profit || 0, eps: r.eps || 0, book_value: r.book_value || 0, per: r.per || 0, pbv: r.pbv || 0, der: r.der || 0, roa: r.roa || 0, roe: r.roe || 0, npm: r.npm || 0 }; });
+
+  const total = countRows();
+  // `changes` is absent when the source table is empty (bulkImport returns {rows:0} early).
+  return { ...res, persisted: res.changes ?? res.rows, inserted: total - before, total };
+}
+
+// ═══ Date-window helpers for stock_price_history (epoch ms at 00:00 UTC) ═══
+const DAY_MS = 86400000;
+const WIB_OFFSET_MS = 7 * 3600000;
+
+/** 'YYYY-MM-DD' → epoch ms of that WIB trading day's start (importStockSummary's convention). */
+function wibDayStart(day) {
+  const d = new Date(String(day).slice(0, 10) + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return null;
+  return d.getTime() - WIB_OFFSET_MS;
 }
 
 /**
- * Import stock_price_history → idx_daily (~1.5yrs backfill of daily OHLCV).
+ * Resolve the date window for an incremental stock_price_history import.
+ *
+ * Self-healing rule, not a fixed "last N days":
+ *   to   = MAX(date) in stock_price_history            (source frontier)
+ *   from = MAX(trade_date) in idx_daily − overlapDays  (target frontier)
+ * A target that is already current only re-pulls the overlap tail (upstream
+ * revises the last sessions); a target that fell behind closes the entire gap in
+ * one call, because `from` follows the target's own frontier.
+ *
+ * Explicit `date` / `from`+`to` override the rule; `full` bypasses it entirely.
+ * Returns { from, to, start, end } with start === null meaning "no date filter".
+ */
+function resolvePriceWindow(idxDb, targetDb, options = {}) {
+  const src = idxDb.prepare('SELECT MIN(date) AS mn, MAX(date) AS mx FROM stock_price_history').get();
+  if (!src || !src.mn) throw new Error('stock_price_history is empty in IDX-API');
+  const srcFirst = epochToDate(src.mn);
+  const srcLast = epochToDate(src.mx);
+
+  const single = options.date ? String(options.date).slice(0, 10) : null;
+  if (single) {
+    const s = wibDayStart(single);
+    if (s === null) throw new Error(`Invalid date "${options.date}" (expected YYYY-MM-DD)`);
+    return { from: single, to: single, start: s, end: s + DAY_MS };
+  }
+
+  const explicitFrom = options.from ? String(options.from).slice(0, 10) : null;
+  const explicitTo = options.to ? String(options.to).slice(0, 10) : null;
+  if (explicitFrom || explicitTo) {
+    const from = explicitFrom || srcFirst;
+    const to = explicitTo || srcLast;
+    const s = wibDayStart(from), e = wibDayStart(to);
+    if (s === null || e === null) throw new Error(`Invalid from/to ("${from}".."${to}"; expected YYYY-MM-DD)`);
+    if (e < s) throw new Error(`from (${from}) must not be after to (${to})`);
+    return { from, to, start: s, end: e + DAY_MS };
+  }
+
+  const overlapDays = Number.isFinite(Number(options.overlapDays)) ? Math.max(0, Number(options.overlapDays)) : 7;
+  const tgt = targetDb.prepare('SELECT MAX(trade_date) AS mx FROM idx_daily').get();
+  const end = wibDayStart(srcLast) + DAY_MS;
+  let start = wibDayStart(srcFirst);
+  if (tgt && tgt.mx) {
+    const tgtStart = wibDayStart(tgt.mx);
+    if (tgtStart !== null) start = Math.max(start, tgtStart - overlapDays * DAY_MS);
+  }
+  // Target is at or ahead of the source frontier: still refresh the last source day.
+  if (start >= end) start = wibDayStart(srcLast);
+  return { from: epochToDate(start), to: srcLast, start, end };
+}
+
+/**
+ * Import stock_price_history → idx_daily (daily OHLCV series).
  * Source cols: code,date(ms),open,high,low,close,previous,volume,value,frequency,
  * foreign_buy,foreign_sell. Names filled from company_profile.
  * On conflict only price/volume/foreign are updated, preserving existing
  * bid/offer/listed_shares/name set by the stock_summary import.
+ *
+ * TWO MODES — the default is deliberately the cheap one:
+ *   'incremental' (default) — bounded date window around the target's frontier.
+ *   'full'                  — every source row (1,382,240 rows on 2026-10-14,
+ *                             17.9s measured). Opt-in only.
+ * The default MUST stay incremental: this function is called from
+ * POST /sync/import-all, which runs daily. A full run there would re-upsert
+ * 1.38M rows a day for zero new information.
+ *
+ * Source `date` is epoch ms at 00:00 UTC of the trading day (verified: 0 of
+ * 1,382,240 rows off-midnight), so epochToDate() renders it exactly as the WIB
+ * trading day and no two rows can collide on (trade_date, code).
+ *
+ * Options: { full|mode:'full', from, to, date, overlapDays }
+ * Returns: { rows, inserted, total, mode, from, to }
+ *   rows     — rows upserted this run (attempted == stored: any throw aborts)
+ *   inserted — net NEW rows in idx_daily (count delta); a pure value refresh is 0,
+ *              which is the honest signal that the run added nothing
+ *   total    — idx_daily row count after the run
  */
-function importStockPriceHistory(targetDb) {
+function importStockPriceHistory(targetDb, options = {}) {
   const idxDb = openIdxDb();
   try {
-    const total = idxDb.prepare(`SELECT COUNT(*) as c FROM stock_price_history`).get()?.c || 0;
-    if (!total) return { rows: 0, message: 'No stock_price_history data' };
+    const src = idxDb.prepare(`SELECT COUNT(*) as c FROM stock_price_history`).get() || {};
+    if (!src.c) return { rows: 0, message: 'No stock_price_history data' };
+
+    const mode = (options.full || options.mode === 'full') ? 'full' : 'incremental';
+    const win = mode === 'full'
+      ? { from: epochToDate(idxDb.prepare('SELECT MIN(date) AS mn FROM stock_price_history').get().mn),
+          to: epochToDate(idxDb.prepare('SELECT MAX(date) AS mx FROM stock_price_history').get().mx),
+          start: null, end: null }
+      : resolvePriceWindow(idxDb, targetDb, options);
+
+    const countRows = () => targetDb.prepare('SELECT COUNT(*) AS c FROM idx_daily').get().c;
+    const before = countRows();
 
     const nameMap = {};
     try {
@@ -646,9 +762,19 @@ function importStockPriceHistory(targetDb) {
       VALUES(@trade_date,@code,@name,@prev_close,@open_price,@high,@low,@close,@change,@volume,@value,@frequency,@foreign_buy,@foreign_sell)
       ON CONFLICT(trade_date,code) DO UPDATE SET prev_close=excluded.prev_close,open_price=excluded.open_price,high=excluded.high,low=excluded.low,close=excluded.close,change=excluded.change,volume=excluded.volume,value=excluded.value,frequency=excluded.frequency,foreign_buy=excluded.foreign_buy,foreign_sell=excluded.foreign_sell`);
 
+    const windowWhere = win.start === null ? '' : ' WHERE date >= ? AND date < ?';
+    const windowParams = win.start === null ? [] : [win.start, win.end];
+    const windowTotal = idxDb.prepare(`SELECT COUNT(*) AS c FROM stock_price_history${windowWhere}`).get(...windowParams).c;
+    if (!windowTotal) {
+      console.log(`[bridge] stock_price_history ${mode} ${win.from}..${win.to}: window empty, nothing to do`);
+      return { rows: 0, inserted: 0, total: before, mode, from: win.from, to: win.to };
+    }
+
     let count = 0, offset = 0;
-    while (offset < total) {
-      const rows = idxDb.prepare(`SELECT * FROM stock_price_history LIMIT ${CHUNK_SIZE} OFFSET ${offset}`).all();
+    while (offset < windowTotal) {
+      // LIMIT/OFFSET over the FILTERED window: the incremental path is normally a
+      // single chunk; only the opt-in full run pays the repeated-scan cost.
+      const rows = idxDb.prepare(`SELECT * FROM stock_price_history${windowWhere} LIMIT ${CHUNK_SIZE} OFFSET ${offset}`).all(...windowParams);
       if (!rows.length) break;
       targetDb.transaction(() => {
         for (const r of rows) {
@@ -667,9 +793,13 @@ function importStockPriceHistory(targetDb) {
         }
       })();
       offset += rows.length;
-      if (total > CHUNK_SIZE) console.log(`[bridge] stock_price_history: ${count}/${total} rows imported`);
+      if (windowTotal > CHUNK_SIZE) console.log(`[bridge] stock_price_history ${win.from}..${win.to}: ${count}/${windowTotal} rows imported`);
     }
-    return { rows: count };
+
+    const total = countRows();
+    const inserted = total - before;
+    console.log(`[bridge] stock_price_history ${mode} ${win.from}..${win.to}: rows=${count} inserted=${inserted} total=${total}`);
+    return { rows: count, inserted, total, mode, from: win.from, to: win.to };
   } finally { idxDb.close(); }
 }
 

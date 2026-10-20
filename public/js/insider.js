@@ -157,9 +157,9 @@ function insGoStock(code){
         var forPct=holders.filter(function(h){return h.lf==='A'||h.lf==='F';}).reduce(function(a,h){return a+h.pct;},0);
         html+='<div class="ov-stats" style="border-radius:10px;border:1px solid var(--b2);margin-bottom:12px">';
         html+='<div class="ov-stat"><div class="ov-stat-num">'+holders.length+'</div><div class="ov-stat-lbl">Holders</div></div>';
-        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:var(--bl)">'+tp.toFixed(1)+'%</div><div class="ov-stat-lbl">Insider</div></div>';
-        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:'+(ff<20?'var(--rd)':ff<40?'var(--am)':'var(--gn)')+'">'+ff.toFixed(1)+'%</div><div class="ov-stat-lbl">Free Float</div></div>';
-        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:var(--am)">'+forPct.toFixed(1)+'%</div><div class="ov-stat-lbl">Foreign</div></div>';
+        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:var(--bl)">'+tp.toFixed(2)+'%</div><div class="ov-stat-lbl">Insider</div></div>';
+        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:'+(ff<20?'var(--rd)':ff<40?'var(--am)':'var(--gn)')+'">'+ff.toFixed(2)+'%</div><div class="ov-stat-lbl">Free Float</div></div>';
+        html+='<div class="ov-stat"><div class="ov-stat-num" style="color:var(--am)">'+forPct.toFixed(2)+'%</div><div class="ov-stat-lbl">Foreign</div></div>';
         html+='</div>';
 
         // Analysis text
@@ -170,9 +170,9 @@ function insGoStock(code){
         html+='<b style="color:var(--t1)">'+holders.length+'</b> pemegang tercatat: '+corpH+' corporate, '+indH+' individual. ';
         if(topH)html+='Terbesar: <b style="color:var(--t1)">'+esc(topH.investor)+'</b> ('+topH.pct.toFixed(2)+'%). ';
         if(forPct>0)html+='Foreign ownership: <b style="color:var(--am)">'+forPct.toFixed(2)+'%</b>. ';
-        if(ff<15)html+='<span style="color:var(--rd)">⚠ Very low liquidity — free float hanya '+ff.toFixed(1)+'%</span>';
-        else if(ff<25)html+='<span style="color:var(--am)">Free float terbatas ('+ff.toFixed(1)+'%)</span>';
-        else if(ff>60)html+='<span style="color:var(--gn)">Likuiditas tinggi — free float '+ff.toFixed(1)+'%</span>';
+        if(ff<15)html+='<span style="color:var(--rd)">⚠ Very low liquidity — free float hanya '+ff.toFixed(2)+'%</span>';
+        else if(ff<25)html+='<span style="color:var(--am)">Free float terbatas ('+ff.toFixed(2)+'%)</span>';
+        else if(ff>60)html+='<span style="color:var(--gn)">Likuiditas tinggi — free float '+ff.toFixed(2)+'%</span>';
         html+='</div>';
 
         // Pie + table layout
@@ -183,7 +183,7 @@ function insGoStock(code){
         // Pie chart
         if(pd.length){
           html+='<div class="ins-pie-wrap"><div>'+drawPie(pd,90)+'</div><div class="ins-pie-legend">';
-          pd.forEach(function(p){html+='<div class="leg-row"><span class="leg-dot" style="background:'+p.color+'"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">'+esc(p.label)+'</span><span class="leg-pct">'+p.pct.toFixed(1)+'%</span></div>';});
+          pd.forEach(function(p){html+='<div class="leg-row"><span class="leg-dot" style="background:'+p.color+'"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">'+esc(p.label)+'</span><span class="leg-pct">'+p.pct.toFixed(2)+'%</span></div>';});
           html+='</div></div>';
         }
         // Table
@@ -322,7 +322,7 @@ function drawNetwork(data,mode,entryId){
 
   // Link labels (percentage)
   var linkLabel=g.append('g').selectAll('text').data(data.links.filter(function(d){return d.pct>=2;})).join('text')
-    .text(function(d){return d.pct.toFixed(1)+'%';})
+    .text(function(d){return d.pct.toFixed(2)+'%';})
     .attr('font-size',8).attr('fill','var(--t3)').attr('text-anchor','middle').attr('font-family','var(--fm)');
 
   // Nodes
@@ -387,13 +387,13 @@ function drawNetwork(data,mode,entryId){
       if(groups)h+='<div class="net-tip-row"><b>Group:</b> '+esc(groups)+'</div>';
       h+='<div class="net-tip-row"><b>Shareholders:</b> '+conns.length+'</div>';
       var totalPct=conns.reduce(function(s,l){return s+l.pct;},0);
-      h+='<div class="net-tip-row"><b>Tracked ownership:</b> '+totalPct.toFixed(1)+'%</div>';
+      h+='<div class="net-tip-row"><b>Tracked ownership:</b> '+totalPct.toFixed(2)+'%</div>';
       if(conns.length){
         h+='<div class="net-tip-divider"></div><div class="net-tip-links">';
         conns.sort(function(a,b){return b.pct-a.pct;}).slice(0,5).forEach(function(l){
           var sid=typeof l.source==='object'?l.source.id:l.source;
           var inv=data.nodes.find(function(n){return n.id===(sid===d.id?(typeof l.target==='object'?l.target.id:l.target):sid);});
-          if(inv)h+='<span>'+esc(inv.label.substring(0,20))+' '+l.pct.toFixed(1)+'%</span>';
+          if(inv)h+='<span>'+esc(inv.label.substring(0,20))+' '+l.pct.toFixed(2)+'%</span>';
         });
         h+='</div>';
       }
@@ -406,7 +406,7 @@ function drawNetwork(data,mode,entryId){
         conns.sort(function(a,b){return b.pct-a.pct;}).slice(0,6).forEach(function(l){
           var tid=typeof l.target==='object'?l.target.id:l.target;
           var stk=data.nodes.find(function(n){return n.id===(tid===d.id?(typeof l.source==='object'?l.source.id:l.source):tid);});
-          if(stk)h+='<span>'+esc(stk.label)+' '+l.pct.toFixed(1)+'%</span>';
+          if(stk)h+='<span>'+esc(stk.label)+' '+l.pct.toFixed(2)+'%</span>';
         });
         h+='</div>';
       }
@@ -563,4 +563,4 @@ async function chkIns(){
   }catch{insHome();}
 }
 
-function drawPie(data,r){const cx=r,cy=r,tot=data.reduce((s,d)=>s+d.pct,0);if(!tot)return'';let sa=-Math.PI/2;let p='';data.forEach(d=>{const sl=d.pct/tot*2*Math.PI;const ea=sa+sl;const x1=cx+r*Math.cos(sa),y1=cy+r*Math.sin(sa),x2=cx+r*Math.cos(ea),y2=cy+r*Math.sin(ea);p+='<path d="M'+cx+','+cy+' L'+x1+','+y1+' A'+r+','+r+' 0 '+(sl>Math.PI?1:0)+',1 '+x2+','+y2+' Z" fill="'+d.color+'" stroke="var(--bg1)" stroke-width="2"/>'; sa=ea;});p+='<circle cx="'+cx+'" cy="'+cy+'" r="'+(r*.55)+'" fill="var(--bg1)"/>';const ff=data.find(d=>d.label==='Free Float');if(ff)p+='<text x="'+cx+'" y="'+(cy-6)+'" text-anchor="middle" fill="var(--t2)" font-size="10" font-family="var(--fm)">Free Float</text><text x="'+cx+'" y="'+(cy+12)+'" text-anchor="middle" fill="var(--t1)" font-size="16" font-weight="700" font-family="var(--fm)">'+ff.pct.toFixed(1)+'%</text>';return'<svg width="'+(r*2)+'" height="'+(r*2)+'" viewBox="0 0 '+(r*2)+' '+(r*2)+'">'+p+'</svg>';}
+function drawPie(data,r){const cx=r,cy=r,tot=data.reduce((s,d)=>s+d.pct,0);if(!tot)return'';let sa=-Math.PI/2;let p='';data.forEach(d=>{const sl=d.pct/tot*2*Math.PI;const ea=sa+sl;const x1=cx+r*Math.cos(sa),y1=cy+r*Math.sin(sa),x2=cx+r*Math.cos(ea),y2=cy+r*Math.sin(ea);p+='<path d="M'+cx+','+cy+' L'+x1+','+y1+' A'+r+','+r+' 0 '+(sl>Math.PI?1:0)+',1 '+x2+','+y2+' Z" fill="'+d.color+'" stroke="var(--bg1)" stroke-width="2"/>'; sa=ea;});p+='<circle cx="'+cx+'" cy="'+cy+'" r="'+(r*.55)+'" fill="var(--bg1)"/>';const ff=data.find(d=>d.label==='Free Float');if(ff)p+='<text x="'+cx+'" y="'+(cy-6)+'" text-anchor="middle" fill="var(--t2)" font-size="10" font-family="var(--fm)">Free Float</text><text x="'+cx+'" y="'+(cy+12)+'" text-anchor="middle" fill="var(--t1)" font-size="16" font-weight="700" font-family="var(--fm)">'+ff.pct.toFixed(2)+'%</text>';return'<svg width="'+(r*2)+'" height="'+(r*2)+'" viewBox="0 0 '+(r*2)+' '+(r*2)+'">'+p+'</svg>';}

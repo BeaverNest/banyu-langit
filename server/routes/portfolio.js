@@ -1,5 +1,9 @@
 const express = require('express');
 const { db, latestIdxDate } = require('../db');
+const { registerSqlAdjust } = require('../utils/price-adjust');
+
+// ca_adj(close|high|low, code, trade_date) — harga terkoreksi aksi korporasi.
+registerSqlAdjust(db);
 
 const router = express.Router();
 
@@ -165,20 +169,21 @@ router.get('/kelly', (req, res) => {
     if (td) {
       const quote = db.prepare('SELECT * FROM idx_daily WHERE code=? AND trade_date=?').get(code, td);
       if (quote) {
-        // Calculate ATR(14)
-        const hist = db.prepare('SELECT high, low, close FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 15').all(code);
+        // Calculate ATR(14) — ca_adj: ATR adalah besaran harga, harus satu basis
+        // (split di dalam 15 sesi terakhir membuat TR melompat 5x).
+        const hist = db.prepare('SELECT high, low, close, ca_adj(high, code, trade_date) AS ah, ca_adj(low, code, trade_date) AS al, ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 15').all(code);
         let atr = 0;
         if (hist.length >= 2) {
           const trs = [];
           for (let i = 0; i < hist.length - 1; i++) {
-            const tr = Math.max(hist[i].high - hist[i].low, Math.abs(hist[i].high - hist[i + 1].close), Math.abs(hist[i].low - hist[i + 1].close));
+            const tr = Math.max(hist[i].ah - hist[i].al, Math.abs(hist[i].ah - hist[i + 1].ac), Math.abs(hist[i].al - hist[i + 1].ac));
             trs.push(tr);
           }
           atr = Math.round(trs.reduce((s, v) => s + v, 0) / trs.length);
         }
 
-        // MA levels
-        const closes = db.prepare('SELECT close FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 200').all(code).map(r => r.close);
+        // MA levels (basis harga terkoreksi yang sama dengan chart/skoring)
+        const closes = db.prepare('SELECT ca_adj(close, code, trade_date) AS ac FROM idx_daily WHERE code=? ORDER BY trade_date DESC LIMIT 200').all(code).map(r => r.ac);
         const ma20 = closes.length >= 20 ? Math.round(closes.slice(0, 20).reduce((s, v) => s + v, 0) / 20) : null;
         const ma50 = closes.length >= 50 ? Math.round(closes.slice(0, 50).reduce((s, v) => s + v, 0) / 50) : null;
         const ma200 = closes.length >= 200 ? Math.round(closes.slice(0, 200).reduce((s, v) => s + v, 0) / 200) : null;

@@ -222,6 +222,10 @@ db.exec(`
     low REAL DEFAULT 0,
     close REAL DEFAULT 0,
     volume REAL DEFAULT 0,
+    -- Asal baris, mis. 'investing/8849', 'yahoo', 'fred/DFII10', 'tradingeconomics/snapshot'.
+    -- Satu code = satu sumber: label ini yang membuat pencampuran sumber terdeteksi,
+    -- bukan tersembunyi (lihat POST /custom/replace).
+    source TEXT,
     UNIQUE(trade_date, code)
   );
   CREATE INDEX IF NOT EXISTS idx_cohlc_code ON custom_ohlc(code);
@@ -883,6 +887,21 @@ try {
   // ("belum dinilai"), supaya baris yang sengaja tidak dinilai bisa dibedakan dari 'ok'.
   // Nilai: ok | source_flat | invariant_fail | missing_source | dropped_price_only.
   if (!coCols.includes('ohlc_state')) db.exec("ALTER TABLE custom_ohlc ADD COLUMN ohlc_state TEXT");
+  // session = penanda SESI BURSA per bar (kanban t_4acc7bf7). Nilai: 'regular' | 'weekend'.
+  // Bar Sabtu/Minggu memang ada di data: sumber (investing/yahoo) menerbitkan bar Minggu untuk
+  // sesi elektronik futures (CL/HG/NG) dan kadang bar Minggu untuk indeks/valas sebagai artefak
+  // agregasi. Sisi baca yang menghitung jendela (ret_5d/ret_20d, chg_5d/chg_20d, MA) memakai
+  // sesi REGULER saja supaya "5 hari" = 5 sesi bursa, bukan 5 baris — bar akhir pekan pernah
+  // menggeser jendela itu (temuan eko t_b4e96142).
+  // VIRTUAL + GENERATED dari trade_date: selalu konsisten dengan barisnya, tak bisa lupa diisi
+  // oleh penulis baru (rail/yahoo/CSV), dan tidak menambah byte per baris.
+  // Cek pakai table_xinfo: kolom generated TIDAK muncul di table_info (hidden=2), jadi cek
+  // dengan table_info membuat ALTER dicoba ulang tiap boot ("duplicate column name").
+  const coXCols = db.prepare("PRAGMA table_xinfo(custom_ohlc)").all().map(c => c.name);
+  if (!coXCols.includes('session')) {
+    db.exec("ALTER TABLE custom_ohlc ADD COLUMN session TEXT GENERATED ALWAYS AS " +
+            "(CASE WHEN strftime('%w', trade_date) IN ('0','6') THEN 'weekend' ELSE 'regular' END) VIRTUAL");
+  }
 } catch (e) { console.error('Migration:', e.message); }
 
 // ohlc_mode = mode render seri (candle | price_only) — hasil gerbang per-seri,
@@ -908,6 +927,25 @@ try {
   if (!ctCols3.includes('lag_basis')) db.exec("ALTER TABLE custom_tickers ADD COLUMN lag_basis TEXT");
   if (!ctCols3.includes('lag_declared_at')) db.exec('ALTER TABLE custom_tickers ADD COLUMN lag_declared_at TEXT');
 } catch (e) { console.error('Migration custom_tickers.lag:', e.message); }
+
+// Metadata satuan per seri (kanban t_19f4f0d4). Dipakai monitor lintas aset: satu tabel untuk
+// SEMUA seri, jadi blok UI tidak boleh menebak apakah perubahan harga masuk akal dihitung
+// sebagai persen.
+//   unit       = satuan LEVEL seri ('%', 'pp', 'USD', 'index', 'Rp tn', 'USD bn', 'USD/t', ...).
+//   value_kind = bagaimana perubahan dihitung:
+//                'price' -> perubahan relatif (%), level > 0, perkalian bermakna
+//                'rate'  -> perubahan ADDITIF dalam percentage point (pp): 5,75% -> 6,00% = +0,25 pp.
+//                           Persen-dari-persen pada suku bunga/inflasi adalah angka tanpa arti.
+//                'level' -> perubahan additif dalam `unit` (mis. cadangan devisa USD bn).
+//                NULL    -> belum dideklarasikan: UI menampilkan perubahan absolut + penanda
+//                           "satuan?" dan seri itu MASUK daftar coverage. Tidak ditebak.
+// Nilainya TIDAK di-seed di sini (alasan sama dengan expected_lag_sessions: deklarasi manual
+// harus terlihat di review, bukan menyesuaikan diri sendiri). Seed: server/scripts/seed_series_meta.js
+try {
+  const ctCols4 = db.prepare('PRAGMA table_info(custom_tickers)').all().map(c => c.name);
+  if (!ctCols4.includes('unit')) db.exec('ALTER TABLE custom_tickers ADD COLUMN unit TEXT');
+  if (!ctCols4.includes('value_kind')) db.exec('ALTER TABLE custom_tickers ADD COLUMN value_kind TEXT');
+} catch (e) { console.error('Migration custom_tickers.unit:', e.message); }
 
 // ═══ Helper functions ═══
 function latestSnap() {

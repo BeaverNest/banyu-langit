@@ -479,7 +479,7 @@
     if(_data&&_data.altCustom)badge+='<button class="cp-badge" id="cp-alt-series" style="cursor:pointer;border:1px solid #2196F3;background:transparent;color:#2196F3" title="'+_e(_data.altCustom.name||'')+'">komoditas ▸</button>';
     if(_data&&_data.custom&&_data.altStock)badge+='<button class="cp-badge" id="cp-alt-stock" style="cursor:pointer;border:1px solid #888;background:transparent;color:#aaa" title="kembali ke seri saham IDX">◂ saham</button>';
     var roll=_data?_rolloverNote(_data.meta):'';
-    el.innerHTML=badge+'<span class="cp-price">'+c.toLocaleString(undefined,{maximumFractionDigits:0})+'</span>'+
+    el.innerHTML=badge+'<span class="cp-price">'+c.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span>'+
       '<span class="cp-change '+cls+'">'+ar+(chg>0?'+':'')+chg.toFixed(2)+'%</span>'+
       '<span style="color:var(--t3);font-size:var(--font-xs)">'+(last.trade_date||'')+'</span>'+
       (roll?'<span title="'+_e(roll)+'" style="color:#FFAB00;font-size:var(--font-xs);cursor:help">ⓘ rollover</span>':'');
@@ -543,7 +543,7 @@
       position:'right',
       splitLine:{lineStyle:{color:C.gridSub,type:'dashed'}},
       axisLabel:{color:C.text,fontSize:10,inside:false,
-        formatter:function(v){return v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?v.toLocaleString():v%1===0?v.toFixed(0):v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}},
+        formatter:function(v){return v>=1e6?(v/1e6).toFixed(2)+'M':v>=1000?v.toLocaleString():v%1===0?v.toFixed(0):v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}},
       axisLine:{show:false}});
 
     // ── Main chart series (Candlestick or Bloomberg Area) ──
@@ -556,7 +556,7 @@
         markLine:{symbol:'none',data:[{
           yAxis:lastClose,
           lineStyle:{color:lastBull?C.bull:C.bear,width:1,type:'dashed'},
-          label:{formatter:lastClose.toLocaleString(),position:'end',
+          label:{formatter:lastClose.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}),position:'end',
             backgroundColor:lastBull?C.bull:C.bear,color:'#fff',fontSize:10,
             padding:[2,6],borderRadius:2}
         }],silent:true,animation:false}
@@ -567,11 +567,11 @@
       var peak=0,maxDD=0;
       for(var di=0;di<closes.length;di++){if(closes[di]>peak)peak=closes[di];var dd=peak>0?(closes[di]-peak)/peak*100:0;if(dd<maxDD)maxDD=dd;}
       var statsHtml='<span style="color:#fff;font-size:11px;font-weight:700">'+_code+'</span>';
-      statsHtml+=' <span style="color:#888;font-size:10px">Last</span> <span style="color:#fff;font-size:11px">'+lastClose.toLocaleString()+'</span>';
+      statsHtml+=' <span style="color:#888;font-size:10px">Last</span> <span style="color:#fff;font-size:11px">'+lastClose.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span>';
       statsHtml+=' <span style="color:#888;font-size:10px">High</span> <span style="color:#26A69A;font-size:11px">'+allH.toLocaleString()+'</span>';
       statsHtml+=' <span style="color:#888;font-size:10px">Low</span> <span style="color:#EF5350;font-size:11px">'+allL.toLocaleString()+'</span>';
       statsHtml+=' <span style="color:#888;font-size:10px">Avg</span> <span style="color:#FFAB00;font-size:11px">'+allAvg.toLocaleString()+'</span>';
-      statsHtml+=' <span style="color:#888;font-size:10px">DD</span> <span style="color:#EF5350;font-size:11px">'+maxDD.toFixed(1)+'%</span>';
+      statsHtml+=' <span style="color:#888;font-size:10px">DD</span> <span style="color:#EF5350;font-size:11px">'+maxDD.toFixed(2)+'%</span>';
     } else if(mode==='line'){
       // ── Seri price_only: GARIS dari `close` ──
       // Candle tidak mungkin digambar: server men-null-kan seluruh open/high/low (TIN 493/493,
@@ -579,7 +579,7 @@
       var markLinesL=[{
         yAxis:lastClose,
         lineStyle:{color:lastBull?C.bull:C.bear,width:1,type:'dashed'},
-        label:{formatter:lastClose.toLocaleString(),position:'end',
+        label:{formatter:lastClose.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}),position:'end',
           backgroundColor:lastBull?C.bull:C.bear,color:'#fff',fontSize:10,
           padding:[2,6],borderRadius:2}
       }];
@@ -596,7 +596,7 @@
       markLines.push({
         yAxis:lastClose,
         lineStyle:{color:lastBull?C.bull:C.bear,width:1,type:'dashed'},
-        label:{formatter:lastClose.toLocaleString(),position:'end',
+        label:{formatter:lastClose.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}),position:'end',
           backgroundColor:lastBull?C.bull:C.bear,color:'#fff',fontSize:10,
           padding:[2,6],borderRadius:2}
       });
@@ -750,7 +750,7 @@
     // Stats overlay graphic for Bloomberg area mode
     var graphicItems=graphic.length?graphic:[];
     if(_chartStyle==='area'&&typeof statsHtml!=='undefined'){
-      graphicItems.push({type:'text',left:65,top:22,style:{text:_code+' | Last '+lastClose.toLocaleString()+' | High '+Math.max.apply(null,closes).toLocaleString()+' | Low '+Math.min.apply(null,closes.filter(function(v){return v>0})).toLocaleString()+' | Avg '+Math.round(closes.reduce(function(s,v){return s+v},0)/closes.length).toLocaleString(),fill:'#aaa',fontSize:11,fontFamily:'IBM Plex Mono'},z:100});
+      graphicItems.push({type:'text',left:65,top:22,style:{text:_code+' | Last '+lastClose.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+' | High '+Math.max.apply(null,closes).toLocaleString()+' | Low '+Math.min.apply(null,closes.filter(function(v){return v>0})).toLocaleString()+' | Avg '+Math.round(closes.reduce(function(s,v){return s+v},0)/closes.length).toLocaleString(),fill:'#aaa',fontSize:11,fontFamily:'IBM Plex Mono'},z:100});
     }
     _inst.setOption({
       animation:false,backgroundColor:C.bg,
@@ -793,7 +793,7 @@
             var dd=params.find(function(p){return p.seriesName==='Drawdown';});
             var h='<div style="margin-bottom:3px"><b style="font-size:12px">'+_code+'</b> <span style="color:#888;font-size:10px">'+d+'</span></div>';
             if(cp&&cp.data)h+='<div style="font-size:12px;font-weight:700;color:#fff">'+Number(cp.data).toLocaleString()+'</div>';
-            if(dd&&dd.data!==null&&dd.data!==undefined)h+='<div style="font-size:10px;color:#EF5350;margin-top:2px">DD '+Number(dd.data).toFixed(1)+'%</div>';
+            if(dd&&dd.data!==null&&dd.data!==undefined)h+='<div style="font-size:10px;color:#EF5350;margin-top:2px">DD '+Number(dd.data).toFixed(2)+'%</div>';
             params.forEach(function(p){
               if(p.seriesName==='Vol'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)h+='<div style="font-size:10px;color:#888;margin-top:2px">Vol '+_fN(vv)+'</div>';}
               if(p.seriesName==='F.Net'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)h+='<div style="font-size:10px;color:'+(vv>=0?C.bull:C.bear)+';margin-top:2px">F.Net '+_fN(vv)+'</div>';}
@@ -824,7 +824,7 @@
             if(p.seriesName==='MACD'&&p.data!==null){h+='<div style="font-size:10px;color:#2196F3;margin-top:2px">MACD '+p.data+'</div>';}
             if(p.seriesName==='Signal'&&p.data!==null){h+='<div style="font-size:10px;color:#FF9800">Sig '+p.data+'</div>';}
             if(p.seriesName==='Freq'){var vv=typeof p.data==='object'?p.data.value:p.data;if(vv)h+='<div style="font-size:10px;color:#FF9800;margin-top:2px">Freq '+_fN(vv)+'</div>';}
-            if(p.seriesName==='RSI'&&p.data!==null){var rv=typeof p.data==='number'?p.data:0;var rc=rv>=70?C.bear:rv<=30?C.bull:'#AB47BC';h+='<div style="font-size:10px;color:'+rc+';margin-top:2px">'+_e(_ind.rsi.label)+' '+rv.toFixed(1)+'</div>';}
+            if(p.seriesName==='RSI'&&p.data!==null){var rv=typeof p.data==='number'?p.data:0;var rc=rv>=70?C.bear:rv<=30?C.bull:'#AB47BC';h+='<div style="font-size:10px;color:'+rc+';margin-top:2px">'+_e(_ind.rsi.label)+' '+rv.toFixed(2)+'</div>';}
           });
           // Catatan rollover juga di mode candle (STEEL_HRC tetap candle: 31,3% bar datar).
           var crn=_rolloverNote(_data.meta);
@@ -837,7 +837,7 @@
         label:{backgroundColor:'#1a1a2e',color:C.textBright,fontSize:10,formatter:function(p){
           if(p.axisDimension==='y'){
             var v=p.value;
-            return v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?Math.round(v).toLocaleString():v.toFixed(0);
+            return v>=1e6?(v/1e6).toFixed(2)+'M':v>=1000?Math.round(v).toLocaleString():v.toFixed(0);
           }
           return p.value;
         }}
@@ -888,9 +888,9 @@
 
   // ═══ HELPERS ═══
   function $i(id){return document.getElementById(id);}
-  function _fN(v){if(!v)return'0';var a=Math.abs(v),sg=v<0?'-':'';if(a>=1e12)return sg+(a/1e12).toFixed(2)+'T';if(a>=1e9)return sg+(a/1e9).toFixed(2)+'B';if(a>=1e6)return sg+(a/1e6).toFixed(2)+'M';if(a>=1e3)return sg+(a/1e3).toFixed(1)+'K';return v.toLocaleString();}
+  function _fN(v){if(!v)return'0';var a=Math.abs(v),sg=v<0?'-':'';if(a>=1e12)return sg+(a/1e12).toFixed(2)+'T';if(a>=1e9)return sg+(a/1e9).toFixed(2)+'B';if(a>=1e6)return sg+(a/1e6).toFixed(2)+'M';if(a>=1e3)return sg+(a/1e3).toFixed(2)+'K';return v.toLocaleString();}
   function _fmtAxisVal(v){if(!v)return'';var a=Math.abs(v);if(a>=1e12)return(v/1e12).toFixed(0)+'T';if(a>=1e9)return(v/1e9).toFixed(0)+'B';if(a>=1e6)return(v/1e6).toFixed(0)+'M';if(a>=1e3)return(v/1e3).toFixed(0)+'K';return'';}
-  function _fmtPrice(v){if(!v)return'0';return v>=1000&&v%1===0?Math.round(v).toLocaleString():v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+  function _fmtPrice(v){if(!v)return'0';return v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
   function _e(s){return typeof s==='string'?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):String(s||'');}
 
   // ═══ RESIZE ALL BL ECHARTS INSTANCES ═══

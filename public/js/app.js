@@ -102,7 +102,7 @@ async function loadMktOverview(){
     var d=await fetch('/api/market/overview').then(function(r){return r.json()});
     if(d.error)throw new Error(d.error);
     function num(v,dec){if(v==null||isNaN(v))return '—';return Number(v).toLocaleString(undefined,{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0});}
-    function pc(v){if(v==null||isNaN(v))return '—';return (v>0?'+':'')+Number(v).toFixed(1)+'%';}
+    function pc(v){if(v==null||isNaN(v))return '—';return (v>0?'+':'')+Number(v).toFixed(2)+'%';}
     function cls(v){return v==null?'':(v>0?'up':v<0?'dn':'');}
     var h='';
 
@@ -155,9 +155,9 @@ document.addEventListener('keydown',function(e){
   // / = Focus search
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
 
-  // 1-6 = Tab switch
-  if(e.key>='1'&&e.key<='6'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['mkt','idx','diary','analysis','pf','ins'];
+  // 1-4 = Tab switch
+  if(e.key>='1'&&e.key<='4'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    var tabNames=['mkt','idx','diary','analysis'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }
@@ -180,7 +180,7 @@ document.addEventListener('keydown',function(e){
   // ? = Help
   if(e.key==='?'){
     showT('Keyboard Shortcuts',
-      '/ Search · 1-6 Tabs · C Compose · W Watchlist · S Sidebar · T Theme · D Density · Esc Close');
+      '/ Search · 1-4 Tabs · C Compose · W Watchlist · S Sidebar · T Theme · D Density · Esc Close');
     e.preventDefault();
   }
 

@@ -19,12 +19,12 @@ async function delW(id){try{await fetch(`/api/watchlist/${id}`,{method:'DELETE'}
 async function loadAl(){try{const r=await fetch('/api/alerts');const al=await r.json();
   var el=$('alst');if(!el)return;
   if(!al.length){el.innerHTML='<div class="we" style="padding:8px 10px;font-size:10px">No alerts.</div>';return;}
-  el.innerHTML=al.map(a=>`<div class="ai ${a.triggered?'fd':''}" style="padding:5px 10px;gap:4px"><span class="acd" style="font-size:10px;min-width:80px">${esc(a.symbol)} ${a.condition==='above'?'≥':'≤'} ${a.price.toLocaleString()}</span><span class="ant" style="font-size:9px">${esc(a.note)}</span><span class="ast ${a.triggered?'fi':'ac'}" style="font-size:8px;padding:1px 4px">${a.triggered?'🔔':'●'}</span><button class="ax" onclick="event.stopPropagation();delAl('${a.id}')" style="font-size:9px">✕</button></div>`).join('');}catch{}}
+  el.innerHTML=al.map(a=>`<div class="ai ${a.triggered?'fd':''}" style="padding:5px 10px;gap:4px"><span class="acd" style="font-size:10px;min-width:80px">${esc(a.symbol)} ${a.condition==='above'?'≥':'≤'} ${a.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span><span class="ant" style="font-size:9px">${esc(a.note)}</span><span class="ast ${a.triggered?'fi':'ac'}" style="font-size:8px;padding:1px 4px">${a.triggered?'🔔':'●'}</span><button class="ax" onclick="event.stopPropagation();delAl('${a.id}')" style="font-size:9px">✕</button></div>`).join('');}catch{}}
 async function addAl(){const s=$('as').value.trim(),c=$('ac').value,p=$('ap').value,n=$('an').value;if(!s||!p)return;try{await fetch('/api/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:s,condition:c,price:p,note:n})});$('as').value='';$('ap').value='';$('an').value='';await loadAl();}catch{}}
 async function delAl(id){try{await fetch(`/api/alerts/${id}`,{method:'DELETE'});await loadAl();}catch{}}
 
 // ALERT CHECK
-async function chkAl(){try{const r=await fetch('/api/alerts/check');const tr=await r.json();tr.forEach(a=>{showT(`🔔 ${a.symbol}`,`Hit ${a.triggeredPrice?.toLocaleString()} (${a.condition} ${a.price.toLocaleString()})${a.note?' — '+a.note:''}`);});if(tr.length){await loadAl();await loadN();}}catch{}}
+async function chkAl(){try{const r=await fetch('/api/alerts/check');const tr=await r.json();tr.forEach(a=>{showT(`🔔 ${a.symbol}`,`Hit ${a.triggeredPrice?.toLocaleString()} (${a.condition} ${a.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})${a.note?' — '+a.note:''}`);});if(tr.length){await loadAl();await loadN();}}catch{}}
 
 // NOTIFICATIONS
 async function loadN(){try{const r=await fetch('/api/notifications');const n=await r.json();const ur=n.filter(x=>!x.read).length;$('bdg').textContent=ur;$('bdg').classList.toggle('v',ur>0);
