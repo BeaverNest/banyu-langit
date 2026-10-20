@@ -200,10 +200,10 @@ function mrRenderRegimeBar(regime) {
     h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(s.score) + '">'
       + (s.score === null ? '—' : mrNum(s.score))
       + ' <span style="font-size:9px;font-weight:400;color:var(--t2)">' + esc(s.band_label || '') + '</span></div>';
-    h += '<div style="font-size:9px;color:var(--t3)">acuan <b style="color:var(--t2)">' + esc(s.as_of || '—') + '</b>'
-      + (s.age_days === null || s.age_days === undefined ? '' : ' · ' + s.age_days + ' hr')
-      + (st.t === 'umur tak terukur' ? '' : ' · <span style="color:' + st.c + '">' + st.t + '</span>')
-      + '</div>';
+    var meta = ['acuan <b style="color:var(--t2)">' + esc(s.as_of || '—') + '</b>'];
+    if (s.age_days !== null && s.age_days !== undefined) meta.push(s.age_days + ' hr');
+    if (st.t !== 'umur tak terukur') meta.push('<span style="color:' + st.c + '">' + st.t + '</span>');
+    h += '<div style="font-size:9px;color:var(--t3)">' + meta.join(' · ') + '</div>';
     if (s.score === null) {
       h += '<div style="font-size:9px;color:var(--am)">' + esc(s.reason || 'skor tidak dihitung') + '</div>';
     } else {
@@ -254,10 +254,13 @@ var MR_FREQ_SHORT = { D: 'D', W: 'W', M: 'M', Q: 'Q', Y: 'Y' };
 var MR_FREQ_TEXT = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan', Y: 'tahunan' };
 var MR_UNIT_SHORT = { sesi: 'D', minggu: 'W', bulan: 'M', kuartal: 'Q', tahun: 'Y' };
 
-// Satu definisi status baris — HARUS sama dengan bucketing coverageOf() di server
-// (no_series -> excess -> by_source -> na/aged), supaya penanda baris dan strip coverage tidak
-// pernah berbeda cerita.
+// Status baris: DIBACA DARI SERVER (`it.status`), bukan dihitung ulang di sini.
+// Server mengirim satu status eksklusif per seri dan memakai field yang sama untuk hitungan
+// coverage (cross-asset.js), jadi penanda baris dan strip tidak mungkin berbeda cerita —
+// cacat review r1 (8 baris ⏸ vs strip "0 seri basi") berasal dari dua implementasi ambang basi.
+// Derivasi lokal di bawah hanya cadangan bila payload lama tanpa `status`.
 function mrRowState(it) {
+  if (it.status) return it.status === 'no_series' ? 'missing' : it.status;
   if (it.no_series) return 'missing';
   if (it.state === 'excess') return 'stale';
   if (it.state === 'by_source') return 'delayed';
