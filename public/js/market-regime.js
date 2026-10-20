@@ -306,12 +306,19 @@ function mrRenderMonitor(mon) {
     var parts = {};
     items.forEach(function (it) {
       var isPct = it.kind === 'price';
-      var key = (it.freq || 'D');
+      // KUNCI = kadens + JENIS NILAI, bukan kadens saja. Commit 571f156 sempat memakai kadens
+      // saja; akibatnya tabel harian yang diawali seri harga (DXY/VIX) menampung US10Y/REAL10Y/
+      // HYOAS (kind 'rate') dan mencetak selisih poin sebagai "%" — "-0.06%" untuk 6 bp.
+      // Blok per kelas aset tetap satu (commodity digabung di atas); yang dipisah hanya
+      // sub-tabel yang semantik kolomnya berbeda.
+      var key = (it.freq || 'D') + '|' + (isPct ? 'pct' : 'delta');
       (parts[key] = parts[key] || []).push(it);
     });
-    h += '<div style="margin:12px 0 4px;font-size:10px;font-weight:700;color:var(--t1)">' + esc(g.label || g.category)
-      + ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri'
-      + ' · ' + esc(g.windows || '') + '</span></div>';
+    var domFreq = items[0].freq || 'D';
+    h += '<div style="margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1);'
+      + 'font-size:10px;font-weight:700;color:var(--t1)">' + esc(g.label || g.category)
+      + ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri · '
+      + esc(MR_FREQ_WORD[domFreq] || domFreq) + '</span></div>';
     Object.keys(parts).sort().forEach(function (key) {
       var rows = parts[key];
       var first = rows[0];
@@ -321,7 +328,10 @@ function mrRenderMonitor(mon) {
       var sfx = MR_UNIT_SHORT[unitWord] || MR_FREQ_SHORT[first.freq] || 'D';
       var caps = lags.map(function (l) { return (isPct ? '' : 'Δ') + l + sfx; });
       if (Object.keys(parts).length > 1) {
-        h += '<div style="font-size:9px;color:var(--t3);margin:2px 0">' + esc(MR_FREQ_WORD[first.freq] || first.freq || '') + '</div>';
+        // Sub-judul hanya muncul bila satu kelas aset punya lebih dari satu sub-tabel; jenis
+        // nilai ditandai Δ supaya dua sub-tabel berkadens sama tidak tampak identik.
+        var subLbl = (MR_FREQ_WORD[first.freq] || first.freq || '') + (isPct ? '' : ' · Δ selisih');
+        h += '<div style="font-size:9px;color:var(--t3);margin:2px 0">' + esc(subLbl) + '</div>';
       }
       h += mrMonitorTable(rows, caps, isPct, unitWord);
     });
@@ -359,8 +369,20 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
     else if (st === 'delayed') mark = ' <span style="color:var(--t3)" title="sumber ini memang terbit terlambat ' + (it.lag_sessions || 0) + ' sesi (wajar ≤ ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ')">·</span>';
 
     var unitTag = it.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.unit) + ')</span>' : '';
-    h += '<tr class="mr-row" data-state="' + st + '" style="border-bottom:1px solid var(--b1)">';
-    h += '<td style="padding:3px 6px;font-family:var(--f)">' + esc(it.name || it.code) + mark + unitTag + '</td>';
+    // as-of per baris (DoD3) TANPA kolom: kolom as-of & sumber dihapus dua kali oleh commit
+    // 8fc4904/571f156 (pemangkasan teks). Tanggal dicetak hanya pada baris yang BUKAN 'fresh' —
+    // baris fresh bertanggal sesi rujukan yang tertulis di header — dan tanggal + sumber + umur
+    // selalu tersedia di title baris, jadi tidak ada baris yang tanggalnya tak bisa dicek.
+    var asofNote = (st !== 'fresh' && it.as_of)
+      ? ' <span style="color:var(--t3);font-size:9px">· ' + esc(it.as_of)
+        + (it.age_days != null ? ' (' + it.age_days + ' hr)' : '') + '</span>'
+      : '';
+    var rowTitle = (it.name || it.code) + ': bar terakhir ' + (it.as_of || '—')
+      + (it.age_days != null ? ' · umur ' + it.age_days + ' hari' : '')
+      + (it.ref_date ? ' · rujukan sesi ' + it.ref_date : '')
+      + (it.source ? ' · sumber ' + it.source : '');
+    h += '<tr class="mr-row" data-state="' + st + '" data-asof="' + esc(it.as_of || '') + '" style="border-bottom:1px solid var(--b1)">';
+    h += '<td style="padding:3px 6px;font-family:var(--f)" title="' + esc(rowTitle) + '">' + esc(it.name || it.code) + mark + unitTag + asofNote + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null || it.last === undefined ? '' : it.last) + '">' + lastCell + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 == null ? '' : it.chg_1) + '">' + mrMonChg(it.chg_1, isPct, neutral) + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_5 == null ? '' : it.chg_5) + '">' + mrMonChg(it.chg_5, isPct, neutral) + '</td>';
@@ -402,7 +424,7 @@ function mrSortTable(th) {
 // ═══ 3a. Likuiditas: SRBI & JISDOR ═══
 function mrRenderLiquidity(liq) {
   if (!liq || !liq.items || !liq.items.length) return '<div style="color:var(--t3);font-size:11px">SRBI/JISDOR tidak tersedia.</div>';
-  var h = '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Likuiditas domestik '
+  var h = '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Likuiditas domestik '
     + '<span style="font-weight:400;color:var(--t3)">· seri bulanan · terakhir ' + esc(liq.as_of || '—') + '</span></div>';
   h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
   h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
@@ -466,7 +488,7 @@ function mrRenderCurveTo(box, d) {
     return;
   }
   var cov = d.coverage || { present: 0, total: 0 };
-  var h = '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Kurva SUN '
+  var h = '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Kurva SUN '
     + '<span style="font-weight:400;color:var(--t3)">· ' + cov.present + '/' + cov.total + ' tenor</span></div>';
   h += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-bottom:6px;font-size:10px;color:var(--t3)">';
   h += '<span>sumber: <b style="color:var(--t2)">' + esc(d.source || 'investing') + '</b></span>';
@@ -654,7 +676,7 @@ function mrRenderInternals(it) {
   // Sektor
   var sec = it.sectors;
   if (sec && (sec.top || sec.bottom)) {
-    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Rotasi sektor '
+    h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Rotasi sektor '
       + '<span style="font-weight:400;color:var(--t3)">· sama bobot (equal weight) · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
     h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
     h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
@@ -686,7 +708,7 @@ function mrRenderInternals(it) {
   var o = it.ownership;
   if (o) {
     var old = (o.age_days || 0) > 90;
-    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Konsentrasi kepemilikan &ge;1% '
+    h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Konsentrasi kepemilikan &ge;1% '
       + '<span style="font-weight:400;color:' + (old ? 'var(--am)' : 'var(--t3)') + '">· periode ' + esc(o.period_date || '—')
       + ' (' + (o.age_days == null ? '—' : o.age_days) + ' hari) · ' + (o.codes || 0) + ' emiten · ' + (o.holders || 0) + ' pemegang tercatat</span></div>';
     h += '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">HHI median <b>' + mrNum(o.hhi_median) + '</b>'
