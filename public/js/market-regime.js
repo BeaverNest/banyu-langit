@@ -326,7 +326,7 @@ function mrRenderMonitor(mon) {
       var unitWord = (first.window && first.window.unit) || 'sesi';
       var lags = (first.window && first.window.lags) || [1, 5, 20];
       var sfx = MR_UNIT_SHORT[unitWord] || MR_FREQ_SHORT[first.freq] || 'D';
-      var caps = lags.map(function (l) { return (isPct ? '' : 'Δ') + l + sfx; });
+      var caps = lags.map(function (l) { return l + sfx; });
       if (Object.keys(parts).length > 1) {
         // Sub-judul hanya muncul bila satu kelas aset punya lebih dari satu sub-tabel; jenis
         // nilai ditandai Δ supaya dua sub-tabel berkadens sama tidak tampak identik.
@@ -347,11 +347,11 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>';
   caps.forEach(function (c) {
-    h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
-      + c + (isPct ? '' : ' <span style="font-weight:400">(' + esc(unitWord) + ')</span>') + '</th>';
+    h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)"'
+      + (isPct ? '' : ' title="perubahan dalam ' + esc(unitWord) + '"') + '>' + c + '</th>';
   });
   h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
-    + (isPct ? 'YTD' : 'Δ YTD') + '</th>'
+    + 'YTD</th>'
     + '</tr>';
 
   rows.forEach(function (it) {
