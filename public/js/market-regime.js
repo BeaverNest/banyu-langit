@@ -369,16 +369,13 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
     else if (st === 'aged') mark = ' <span style="color:var(--am)" title="umur data melewati kadens seri ini dan lag-nya belum dideklarasikan — bukan angka hari ini">◔</span>';
     else if (st === 'delayed') mark = ' <span style="color:var(--t3)" title="sumber ini memang terbit terlambat ' + (it.lag_sessions || 0) + ' sesi (wajar ≤ ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ')">·</span>';
 
-    var unitTag = it.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.unit) + ')</span>' : '';
+    var unitTag = '';   // satuan hanya di tooltip, bukan di sebelah nama
     // as-of per baris (DoD3) TANPA kolom: kolom as-of & sumber dihapus dua kali oleh commit
     // 8fc4904/571f156 (pemangkasan teks). Tanggal dicetak hanya bila baris BUKAN 'fresh' DAN
     // tanggalnya berbeda dari sesi rujukan (baris bersesi rujukan sudah bertanggal di header);
     // tanggal + sumber + umur selalu ada di title baris, jadi tidak ada baris yang tak bisa dicek.
     var needsDate = st !== 'fresh' && it.as_of && it.as_of !== it.ref_date;
-    var asofNote = needsDate
-      ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.as_of)
-        + (it.age_days != null ? ' · ' + it.age_days + ' hr' : '') + ')</span>'
-      : '';
+    var asofNote = '';  // tanggal/umur hanya di tooltip baris
     var rowTitle = (it.name || it.code) + ': bar terakhir ' + (it.as_of || '—')
       + (it.age_days != null ? ' · umur ' + it.age_days + ' hari' : '')
       + (it.ref_date ? ' · rujukan sesi ' + it.ref_date : '')
@@ -461,7 +458,7 @@ function mrRenderLiquidity(liq) {
     var d1 = (x.chg_1 === null || x.chg_1 === undefined) ? '—'
       : '<span style="color:' + (neutralLiq ? 'var(--t3)' : mrColor(x.chg_1)) + '">' + mrSigned(x.chg_1, x.chg_1_unit === '%' ? '%' : '') + '</span>';
     h += '<tr class="mr-liq" data-state="' + st + '" style="border-bottom:1px solid var(--b1)">'
-      + '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.label) + (x.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(x.unit) + ')</span>' : '') + '</td>'
+      + '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.label) + '</td>'
       + '<td style="padding:3px 6px;text-align:right">' + lvl + '</td>'
       + '<td style="padding:3px 6px;text-align:right">' + d1 + '</td>'
       + '<td style="padding:3px 6px">' + stTxt + '</td></tr>';
