@@ -676,7 +676,9 @@ function mrRenderInternals(it) {
   if (sec && (sec.top || sec.bottom)) {
     h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Rotasi sektor '
       + '<span style="font-weight:400;color:var(--t3)">· sama bobot (equal weight) · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
-    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+    h += '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
+      + '<colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%">'
+      + '<col style="width:16%"><col style="width:10%"><col style="width:26%"></colgroup>';
     h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
       + '<th style="text-align:left;padding:3px 6px;font-weight:600">Sektor</th>'
       + '<th style="text-align:right;padding:3px 6px;font-weight:600">1D</th>'
@@ -690,14 +692,14 @@ function mrRenderInternals(it) {
       var x = pair[1];
       var click = x.cp_sector ? ' onclick="mrGoSector(\'' + esc(x.cp_sector) + '\')" style="cursor:pointer;color:var(--bl)"' : '';
       h += '<tr style="border-bottom:1px solid var(--b1)">'
-        + '<td style="padding:3px 6px"' + click + '>' + pair[0] + ' ' + esc(x.sector) + '</td>'
+        + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"' + click + ' title="' + esc(x.sector || '') + '">' + pair[0] + ' ' + esc(x.sector) + '</td>'
         + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_1d) + '">' + mrSigned(x.chg_1d, '%') + '</td>'
         + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_20d) + '">' + mrSigned(x.chg_20d, '%') + '</td>'
         + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.rs_vs_ihsg_1d) + '">' + mrSigned(x.rs_vs_ihsg_1d, '%') + '</td>'
         + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + (x.members || 0) + '</td>'
-        + '<td style="padding:3px 6px">' + (x.top_stocks || []).map(function (t) {
+        + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (x.top_stocks || []).map(function (t) {
           return '<span class="code" onclick="sdOpenTicker(\'' + esc(t) + '\')" style="cursor:pointer;font-size:10px;font-weight:600;margin-right:4px">' + esc(t) + '</span>';
-        }).join('') + '</td></tr>';
+        }).join('<span style="color:var(--t3)"> · </span>') + '</td></tr>';
     });
     h += '</table>';
   }
