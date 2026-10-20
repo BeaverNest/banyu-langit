@@ -222,7 +222,18 @@ function pullContext(db) {
   }
   // Terbaru dulu. `id` monoton naik -> tie-break yang pasti, tidak bergantung presisi detik.
   for (const k of Object.keys(byCode)) {
-    byCode[k].sort((a, b) => (a.pulled_at === b.pulled_at ? b.id - a.id : (a.pulled_at < b.pulled_at ? 1 : -1)));
+    const sorted = byCode[k].sort((a, b) => (a.pulled_at === b.pulled_at ? b.id - a.id : (a.pulled_at < b.pulled_at ? 1 : -1)));
+    // SATU TARIKAN PER HARI (kanban t_7acb39ba, temuan sena): burst/retry pada hari yang sama
+    // bukan bukti "sumber berhenti terbit". Tanpa dedupe ini, 10 tarikan dalam 27 detik membuat
+    // COAL/CPO/TIN tampak beku 10-12 tarikan dan alarm sumber-berhenti menyala palsu.
+    // Ambil baris TERAKHIR tiap hari (sorted terbaru dulu -> kemunculan pertama per tanggal).
+    const seenDay = new Set();
+    byCode[k] = sorted.filter(r => {
+      const day = String(r.pulled_at || '').slice(0, 10);
+      if (seenDay.has(day)) return false;
+      seenDay.add(day);
+      return true;
+    });
   }
 
   const lastDate = {};
