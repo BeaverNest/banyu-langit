@@ -65,8 +65,8 @@ function renderMR(el) {
   h += mrPipelineBadge(d.pipeline);
   h += '</div>';
 
-  // ── 1. Regime bar ──
-  h += mrSection('1', '🎛 Regime', mrRenderRegimeBar(d.regime));
+  // ── 1. Regime bar: tidak ditampilkan (permintaan owner 20 Okt 2026 — dinilai tidak jelas).
+  // Data skor tetap ada di payload /api/idx/cross-asset (field `regime`).
 
   // ── strip narasi harian ──
   h += mrSection('·', '📌 Berubah hari ini', mrRenderChanged(d.changed_today));
