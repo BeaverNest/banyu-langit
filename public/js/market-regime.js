@@ -1,9 +1,29 @@
-// ═══ MARKET REGIME — Top-Down Framework ═══
-// Level 1: Global Sentiment (custom tickers: global_index)
-// Level 2: Commodity Cycle (custom tickers: commodity → linked_sector)
-// Level 3: IDX Market (IHSG trend, breadth, foreign flow)
-// Level 4: Sector Ranking (relative strength, foreign flow)
-// Level 5: Decision Matrix (aggregate verdict)
+// ═══ MARKET REGIME — monitor lintas aset + drill-down (kanban t_19f4f0d4) ═══
+//
+// Halaman ini dibangun dari SATU payload: GET /api/idx/cross-asset.
+// Tidak ada endpoint kedua untuk fakta yang sama. Sebelumnya halaman memanggil
+// /api/idx/monitor, /api/idx/regime-score, /api/idx/internals-extra DAN /api/idx/cross-asset;
+// dua implementasi skor regime menghasilkan angka berbeda pada sesi yang sama (review sena
+// t_95ab7fa9 butir 1). Ketiga endpoint kembar itu sudah dihapus dari routes/idx.js.
+//
+// Struktur (5 lapis + 1 strip narasi):
+//   1. Regime bar         — 4 skor, tiap skor membawa tanggal acuan + status kesegaran
+//   ·  Berubah hari ini   — 3-5 baris narasi
+//   2. Monitor lintas aset — satu baris per seri `custom_tickers`; data baru = baris baru
+//   3. Kurva & likuiditas  — 11 tenor SUN (Δ1D/1W/1M) + slope + SRBI/JISDOR
+//   4. Internals IDX       — breadth, foreign flow, tape, sektor, konsentrasi ≥1%
+//   5. Coverage            — seri basi/hilang/terlambat, bernama + umur
+//   6. Hot News            — dipertahankan: feed headline, bukan kartu data (tidak ada di monitor)
+//
+// ATURAN KESEGARAN: UI TIDAK PERNAH menghitung sendiri ambang basi. Satu-satunya sumber adalah
+// server/utils/series-freshness.js yang hasilnya sudah menempel di tiap baris (`state`, `aged`,
+// `age_days`) dan di `coverage`. Versi sebelumnya memakai ambang hari lokal (D 5 / W 12 / M 45 /
+// Q 130) di UI sementara server memakai ambang per seri — akibatnya 8 baris bertanda ⏸ tampil
+// bersama strip "0 seri basi" (DoD5 FAIL). Sekarang strip dan penanda baris membaca field yang
+// SAMA, jadi mustahil berbeda.
+//
+// ATURAN FORMAT: 2 desimal untuk semua nilai yang ditampilkan (rumah: public/js).
+// Tidak ada tombol refresh: halaman menyebut kapan server membaca DB (generated_at).
 
 var mrData = null;
 var mrLoading = false;
@@ -19,81 +39,67 @@ async function mrFetch(el) {
   if (mrLoading) return;
   mrLoading = true;
   try {
-    var r = await fetch('/api/idx/market-regime');
-    mrData = await r.json();
-    if (mrData.error) { el.innerHTML = '<div class="ne" style="color:var(--rd)">' + mrData.error + '</div>'; return; }
+    var r = await fetch('/api/idx/cross-asset');
+    var d = await r.json();
+    if (!d || d.ok === false) {
+      el.innerHTML = '<div class="ne" style="color:var(--rd)">' + esc((d && d.error) || 'payload gagal dimuat') + '</div>';
+      mrLoading = false; return;
+    }
+    mrData = d;
     renderMR(el);
-  } catch (e) { el.innerHTML = '<div class="ne" style="color:var(--rd)">Error: ' + e.message + '</div>'; }
+  } catch (e) {
+    el.innerHTML = '<div class="ne" style="color:var(--rd)">Error: ' + esc(e.message) + '</div>';
+  }
   mrLoading = false;
 }
 
 function renderMR(el) {
-  if (!mrData) return;
-  var d = mrData;
+  var d = mrData; if (!d) return;
   var h = '<div style="padding:12px;font-family:var(--f)">';
 
-  // Header
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+  // ── Header ──
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
   h += '<span style="font-weight:700;font-size:14px">🌐 Market Regime</span>';
-  if (d.date) h += '<span style="font-size:10px;color:var(--t3)">' + d.date + '</span>';
-  // Sinyal sistem "pipeline data berhenti" (kanban t_c6c01360, keputusan t_243d21ae §D3).
-  // Baris-level, bukan panel baru: sumbernya ctx.pipeline yang diteruskan summarize(), jadi
-  // SEMUA panel kesegaran memakai sinyal yang sama — badge ini hanya rumah tampilannya di sini.
-  h += mrPipelineBadge(d.commodity_freshness && d.commodity_freshness.pipeline);
+  h += '<span style="font-size:10px;color:var(--t3)">sesi rujukan <b style="color:var(--t2)">' + esc(d.ref_date || '—') + '</b>'
+    + ' (' + esc(d.ref_source || '—') + ')</span>';
+  h += '<span style="font-size:10px;color:var(--t3)">dibaca ' + esc(mrClock(d.generated_at)) + ' oleh server</span>';
+  h += mrPipelineBadge(d.pipeline);
   h += '</div>';
 
-  // ═══ Regime bar (t_19f4f0d4) ═══
-  h += mrSection('-', '🎛 Regime', '<div id="mr-regimebar"><div style="color:var(--t3);font-size:11px">Menghitung skor...</div></div>');
+  // ── 1. Regime bar ──
+  h += mrSection('1', '🎛 Regime', mrRenderRegimeBar(d.regime));
 
-  // ═══ Level 0: Monitor lintas aset (kanban t_19f4f0d4) ═══
-  // Satu tabel untuk semua seri; data baru = baris baru, bukan blok UI baru.
-  h += mrSection('0', '📋 Monitor Lintas Aset', '<div id="mr-monitor-box"><div style="color:var(--t3);font-size:11px">Memuat monitor...</div></div>');
+  // ── strip narasi harian ──
+  h += mrSection('·', '📌 Berubah hari ini', mrRenderChanged(d.changed_today));
 
-  // ═══ Level 1: Global Sentiment ═══
-  h += mrSection('1', '🌍 Global Sentiment', mrRenderGlobal(d.global));
+  // ── 2. Monitor lintas aset ──
+  h += mrSection('2', '📋 Monitor lintas aset', mrRenderMonitor(d.monitor));
 
-  // ═══ Level 1.5: Macro Signals ═══
-  h += mrSection('1.5', '📊 Macro Signals', mrRenderMacro(d.macro_signals));
+  // ── 3. Kurva & likuiditas ──
+  h += mrSection('3', '📐 Kurva &amp; likuiditas',
+    '<div id="mr-liq-box">' + mrRenderLiquidity(d.liquidity) + '</div>'
+    + '<div style="border-top:1px solid var(--b1);margin:10px 0 8px"></div>'
+    + '<div id="mr-curve-box"></div>');
 
-  // ═══ Level 2: Commodity Cycle ═══
-  h += mrSection('2', '📦 Commodity Cycle', mrRenderCommodity(d.commodities));
+  // ── 4. Internals IDX ──
+  h += mrSection('4', '🇮🇩 Internals IDX', mrRenderInternals(d.internals));
 
-  // ═══ Level 2.5: Kurva Imbal Hasil SUN — 11 tenor (kanban t_b042b106) ═══
-  // Endpoint terpisah (/api/idx/yield-curve) supaya kurva punya satu kontrak sendiri dan
-  // payload market-regime tidak makin berat; panel mengisinya setelah render.
-  h += mrSection('2.5', '📐 Kurva Imbal Hasil SUN', '<div id="mr-curve-box"><div style="color:var(--t3);font-size:11px">Memuat kurva...</div></div>');
+  // ── 5. Coverage ──
+  h += mrSection('5', '🧭 Coverage — apa yang tidak kita punya', mrRenderCoverage(d.coverage));
 
-  // ═══ Level 3: IDX Market Regime ═══
-  h += mrSection('3', '🇮🇩 IDX Market', mrRenderIDX(d.idx));
-
-  // ═══ Level 3.5: Internals (sektor + konsentrasi kepemilikan) ═══
-  h += mrSection('3.5', '🔎 Internals', '<div id="mr-internals-box"><div style="color:var(--t3);font-size:11px">Memuat internals...</div></div>');
-
-  // ═══ Level 4: Sector Ranking ═══
-  h += mrSection('4', '🏢 Sector Ranking', mrRenderSectors(d.sectors));
-
-  // ═══ Level 5: Decision Matrix ═══
-  h += mrSection('5', '🎯 Decision Matrix', mrRenderDecision(d));
-
-  // ═══ Level 6: Hot News ═══
+  // ── 6. Hot News (dipertahankan) ──
   h += mrSection('6', '📰 Hot News', '<div id="mr-news"><div style="color:var(--t3);font-size:11px">⏳ Loading headlines...</div></div>');
 
   h += '</div>';
   el.innerHTML = h;
 
-  // Render charts after DOM is ready
-  setTimeout(function() { mrDrawCharts(d); }, 100);
-  // Kurva imbal hasil: fetch sendiri (endpoint terpisah)
-  setTimeout(function() { mrLoadCurve(); }, 0);
-  setTimeout(function() { mrLoadMonitor(); }, 0);
-  setTimeout(function() { mrLoadRegimeBar(); }, 0);
-  setTimeout(function() { mrLoadInternals(); }, 0);
-  // Fetch news
-  setTimeout(function() { mrRenderNews('mr-news'); }, 200);
+  // Kurva: data sudah ada di payload, tidak ada fetch kedua.
+  setTimeout(function () { mrRenderCurveTo($('mr-curve-box'), d.curve); }, 0);
+  setTimeout(function () { mrRenderNews('mr-news'); }, 200);
 }
 
 // Badge baris-level sinyal "pipeline data berhenti" (kanban t_c6c01360).
-// Sumber: ctx.pipeline -> summarize().pipeline (server/utils/series-freshness.js). Ambang yang
+// Sumber: ctx.pipeline -> payload.pipeline (server/utils/series-freshness.js). Ambang yang
 // SUDAH DIPUTUSKAN (§D3), jangan diubah di sini:
 //   elapsed 1 -> catatan netral var(--t3) "sesi terakhir belum masuk", TANPA badge
 //   elapsed >=2 -> badge amber var(--am) "⚠ pipeline data berhenti N sesi"
@@ -136,56 +142,323 @@ function mrSection(num, title, content) {
     '<div style="padding:10px 12px">' + content + '</div></div>';
 }
 
-// ═══ Kurva Imbal Hasil SUN (11 tenor) — kanban t_b042b106 ═══
-// Data diambil dari /api/idx/yield-curve (server yang memilih SATU tanggal untuk seluruh
-// kurva + menghitung slope). Panel TIDAK menghitung slope sendiri dan tidak pernah mengambil
-// bar terdekat untuk tenor yang tertinggal: yang tidak punya bar di tanggal kurva ditulis "—"
-// beserta tanggal bar terakhirnya.
-var mrCurve = null;
-var mrCurveLoading = false;
+// ═══ Format angka — 2 desimal (aturan rumah), tidak ada cabang ">=1000 dibulatkan" ═══
+function mrNum(v) {
+  if (v === null || v === undefined || v === '' || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function mrSigned(v, suffix) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  var n = Number(v);
+  return (n > 0 ? '+' : '') + n.toFixed(2) + (suffix || '');
+}
+function mrColor(v) {
+  if (v === null || v === undefined || isNaN(v) || Number(v) === 0) return 'var(--t2)';
+  return Number(v) > 0 ? 'var(--gn)' : 'var(--rd)';
+}
+function mrRpTn(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (Number(v) > 0 ? '+' : '') + (Number(v) / 1e12).toFixed(2) + ' T';
+}
+function mrClock(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' })
+      + ' WIB';
+  } catch (e) { return String(iso); }
+}
 
-function mrLoadCurve(force) {
-  var box = $('mr-curve-box'); if (!box) return;
-  if (mrCurve && !force) { mrRenderCurve(box, mrCurve); return; }
-  if (mrCurveLoading) return;
-  mrCurveLoading = true;
-  box.innerHTML = '<div style="color:var(--t3);font-size:11px">Memuat kurva...</div>';
-  fetch('/api/idx/yield-curve').then(function(r) { return r.json(); }).then(function(d) {
-    mrCurveLoading = false;
-    if (d && d.error) { box.innerHTML = '<div style="color:var(--rd);font-size:11px">Kurva: ' + esc(d.error) + '</div>'; return; }
-    mrCurve = d;
-    mrRenderCurve(box, d);
-  }).catch(function(e) {
-    mrCurveLoading = false;
-    box.innerHTML = '<div style="color:var(--rd);font-size:11px">Kurva: ' + esc(e.message) + '</div>';
+// ═══ 1. Regime bar: 4 skor dari payload.regime ═══
+// Tidak ada skor komposit di sini. Komposit = rata-rata berbobot 4 skor heterogen; bobotnya
+// TIDAK diputuskan di kartu mana pun, jadi menampilkannya berarti mengarang asumsi diam-diam
+// (versi sebelumnya menampilkannya dan angkanya bentrok dengan endpoint kembar: 24 vs 62,91).
+// Yang ditampilkan: 4 skor + label band dari server + tanggal acuan + status kesegaran.
+function mrScoreColor(v) {
+  if (v === null || v === undefined) return 'var(--t3)';
+  return v >= 67 ? 'var(--gn)' : v >= 45 ? 'var(--am)' : v >= 33 ? 'var(--or, #f97316)' : 'var(--rd)';
+}
+
+var MR_STATUS_TEXT = {
+  fresh:       { t: 'segar',           c: 'var(--gn)' },
+  stale:       { t: 'basi',            c: 'var(--rd)' },
+  aged:        { t: 'umur lewat kadens', c: 'var(--am)' },
+  unmeasured:  { t: 'umur tak terukur', c: 'var(--t3)' },
+  unavailable: { t: 'tidak terukur',   c: 'var(--t3)' }
+};
+
+function mrRenderRegimeBar(regime) {
+  if (!regime || !regime.length) return '<div style="color:var(--t3);font-size:11px">Skor regime belum tersedia.</div>';
+  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch">';
+  regime.forEach(function (s) {
+    var st = MR_STATUS_TEXT[s.status] || MR_STATUS_TEXT.unavailable;
+    var comps = (s.components || []).map(function (c) {
+      return esc(c.label) + ' ' + mrNum(c.value) + (c.unit === '%' ? '%' : '') + ' (' + esc(c.as_of || '—') + ')';
+    }).join(' · ');
+    var miss = (s.missing || []).map(function (m) { return esc(m.label); }).join(', ');
+    h += '<div class="mr-score" data-id="' + esc(s.id) + '" style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:210px;flex:1"'
+      + ' title="' + esc(s.method || '') + '">';
+    h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.label) + '</div>';
+    h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(s.score) + '">'
+      + (s.score === null ? '—' : mrNum(s.score))
+      + ' <span style="font-size:9px;font-weight:400;color:var(--t2)">' + esc(s.band_label || '') + '</span></div>';
+    h += '<div style="font-size:9px;color:var(--t3)">acuan <b style="color:var(--t2)">' + esc(s.as_of || '—') + '</b>'
+      + (s.age_days === null || s.age_days === undefined ? '' : ' · ' + s.age_days + ' hr')
+      + ' · <span style="color:' + st.c + '">' + st.t + '</span>'
+      + ' · cakupan bobot ' + (s.coverage === null ? '—' : mrNum(s.coverage) + '%') + '</div>';
+    if (s.score === null) {
+      h += '<div style="font-size:9px;color:var(--am)">' + esc(s.reason || 'skor tidak dihitung') + '</div>';
+    } else {
+      h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">' + comps + '</div>';
+      if (miss) h += '<div style="font-size:9px;color:var(--am)">tanpa komponen: ' + miss + '</div>';
+    }
+    h += '</div>';
   });
+  h += '</div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">Skor 0-100 deskriptif — bukan ramalan dan bukan sinyal beli/jual. '
+    + 'Ambang label: &ge;67 mendukung · 45-67 campuran · 33-45 campuran-lemah · &lt;33 menekan '
+    + '(server/utils/regime-score.js; anchor tiap komponen ada di berkas itu, bukan tersembunyi di UI). '
+    + 'Tanggal acuan = komponen TERTUA yang dipakai, jadi skor tidak pernah tampil lebih segar dari inputnya.</div>';
+  return h;
 }
 
+// ═══ strip "berubah hari ini" — 3-5 baris ═══
+// Satuan menempel pada FIELD yang benar, bukan pada baris: `value` = level/harga (bukan persen),
+// `delta` = pergerakan dalam %. Versi pertama memberi '%' pada level IHSG ("4,996.61%") dan
+// mengalikan ulang nilai yang sudah dalam Rp triliun ("-0.00 T").
+function mrRenderChanged(list) {
+  if (!list || !list.length) return '<div style="color:var(--t3);font-size:11px">Tidak ada pergerakan segar untuk sesi ini.</div>';
+  var fmtValue = function (x) {
+    if (x.unit === 'Rp tn') return mrSigned(x.value, ' T');      // nilai SUDAH dalam triliun
+    if (x.unit === 'x') return mrNum(x.value) + 'x';
+    if (x.unit === 'pct') return x.kind === 'breadth' ? mrNum(x.value) + '%' : mrNum(x.value);
+    return mrNum(x.value);
+  };
+  var h = '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  list.slice(0, 6).forEach(function (x) {
+    var c = x.tone === 'up' ? 'var(--gn)' : x.tone === 'down' ? 'var(--rd)' : 'var(--t2)';
+    var val = fmtValue(x);
+    var dlt = (x.delta === null || x.delta === undefined) ? ''
+      : ' <span style="color:' + mrColor(x.delta) + '">' + mrSigned(x.delta, '%') + '</span>';
+    h += '<span style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:3px 8px;font-size:10px">'
+      + '<span style="color:var(--t3)">' + esc(x.label) + '</span> '
+      + '<b style="font-family:var(--fm);color:' + c + '">' + esc(val) + '</b>' + dlt
+      + ' <span style="font-size:9px;color:var(--t3)">' + esc(x.as_of || '') + '</span></span>';
+  });
+  h += '</div>';
+  return h;
+}
+
+// ═══ 2. Monitor lintas aset ═══
+// Kelompok = payload.monitor.groups (array dari server, urutannya ditentukan server). TIDAK ADA
+// daftar kategori yang di-hardcode di sini: kategori baru (mis. `credit`) langsung dirender —
+// itu inti DoD2. Satu tabel per (kadens, jenis perubahan): baris bulanan tidak boleh duduk di
+// bawah label kolom harian, dan seri rate tidak boleh diberi label "%" (salah satunya adalah
+// cacat review t_95ab7fa9 butir 4).
+var MR_FREQ_SHORT = { D: 'D', W: 'W', M: 'M', Q: 'Q', Y: 'Y' };
+var MR_FREQ_TEXT = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan', Y: 'tahunan' };
+var MR_UNIT_SHORT = { sesi: 'D', minggu: 'W', bulan: 'M', kuartal: 'Q', tahun: 'Y' };
+
+// Satu definisi status baris — HARUS sama dengan bucketing coverageOf() di server
+// (no_series -> excess -> by_source -> na/aged), supaya penanda baris dan strip coverage tidak
+// pernah berbeda cerita.
+function mrRowState(it) {
+  if (it.no_series) return 'missing';
+  if (it.state === 'excess') return 'stale';
+  if (it.state === 'by_source') return 'delayed';
+  if (it.state === 'na' && it.aged) return 'aged';
+  if (it.state === 'na') return 'unmeasured';
+  return 'fresh';
+}
+
+function mrMonChg(v, isPct, neutral) {
+  if (v === null || v === undefined || isNaN(v)) return '<span style="color:var(--t3)">—</span>';
+  var c = neutral ? 'var(--t3)' : mrColor(v);      // baris basi: netral, bukan merah/hijau
+  return '<span style="color:' + c + '">' + mrSigned(v, isPct ? '%' : '') + '</span>';
+}
+
+function mrRenderMonitor(mon) {
+  if (!mon || !mon.groups || !mon.groups.length) {
+    return '<div style="color:var(--t3);font-size:11px">Tidak ada seri di custom_tickers.</div>';
+  }
+  var nRows = 0;
+  mon.groups.forEach(function (g) { nRows += (g.items || []).length; });
+
+  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">'
+    + nRows + ' seri dari <b style="color:var(--t2)">custom_tickers</b> · ' + (mon.groups.length) + ' kelas aset · '
+    + 'baris = instrumen, jadi seri baru cukup menambah baris. Klik header kolom untuk mengurutkan. '
+    + 'Kolom <b style="color:var(--t2)">as-of</b> = tanggal acuan data, bukan tanggal hari ini; seri yang basi '
+    + 'ditandai ⏸ dan angkanya ditulis netral (tidak diwarnai seperti pergerakan hari ini).</div>';
+
+  mon.groups.forEach(function (g) {
+    var items = g.items || [];
+    if (!items.length) return;
+    // Partisi per kadens + jenis perubahan. `window.lags`/`window.unit` datang dari baris itu
+    // sendiri (server), bukan dari baris pertama grup.
+    var parts = {};
+    items.forEach(function (it) {
+      var isPct = it.kind === 'price';
+      var key = (it.freq || 'D') + '|' + (isPct ? 'pct' : 'delta');
+      (parts[key] = parts[key] || []).push(it);
+    });
+    h += '<div style="margin:12px 0 4px;font-size:10px;font-weight:700;color:var(--t1)">' + esc(g.label || g.category)
+      + ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri'
+      + ' · ' + esc(g.windows || '') + '</span></div>';
+    Object.keys(parts).sort().forEach(function (key) {
+      var rows = parts[key];
+      var first = rows[0];
+      var isPct = first.kind === 'price';
+      var unitWord = (first.window && first.window.unit) || 'sesi';
+      var lags = (first.window && first.window.lags) || [1, 5, 20];
+      var sfx = MR_UNIT_SHORT[unitWord] || MR_FREQ_SHORT[first.freq] || 'D';
+      var caps = lags.map(function (l) { return (isPct ? '' : 'Δ') + l + sfx; });
+      h += mrMonitorTable(rows, caps, isPct, unitWord);
+    });
+  });
+  return h;
+}
+
+function mrMonitorTable(rows, caps, isPct, unitWord) {
+  var h = '<table class="mr-mon" style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>';
+  caps.forEach(function (c) {
+    h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
+      + c + (isPct ? '' : ' <span style="font-weight:400">(' + esc(unitWord) + ')</span>') + '</th>';
+  });
+  h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
+    + (isPct ? 'YTD' : 'Δ YTD') + '</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">%ile 1Y</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">as-of</th>'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">sumber</th></tr>';
+
+  rows.forEach(function (it) {
+    var st = mrRowState(it);
+    var neutral = (st === 'stale' || st === 'aged' || st === 'missing');
+    var lastCell, mark = '';
+    if (it.last === null || it.last === undefined) {
+      // Aturan lama dipertahankan: level seri 'excess' TIDAK ditulis sebagai angka terkini.
+      lastCell = '<span style="color:var(--t2)" title="bar terakhir '
+        + esc(it.as_of || '—') + ' bernilai ' + mrNum(it.last_bar_value) + ' — bukan sesi ' + esc(it.ref_date || '') + '">—</span>';
+    } else {
+      lastCell = mrNum(it.last);
+    }
+    if (st === 'stale') mark = ' <span style="color:var(--am)" title="sumber tidak menerbitkan bar untuk ' + (it.excess_sessions || it.lag_sessions || 0) + ' sesi terakhir (ambang ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ' sesi); retry tidak menolong">⏸</span>';
+    else if (st === 'aged') mark = ' <span style="color:var(--am)" title="umur data melewati kadens seri ini dan lag-nya belum dideklarasikan — bukan angka hari ini">◔</span>';
+    else if (st === 'delayed') mark = ' <span style="color:var(--t3)" title="sumber ini memang terbit terlambat ' + (it.lag_sessions || 0) + ' sesi (wajar ≤ ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ')">·</span>';
+
+    var unitTag = it.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.unit) + ')</span>' : '';
+    h += '<tr class="mr-row" data-state="' + st + '" style="border-bottom:1px solid var(--b1)">';
+    h += '<td style="padding:3px 6px;font-family:var(--f)">' + esc(it.name || it.code) + mark + unitTag + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null || it.last === undefined ? '' : it.last) + '">' + lastCell + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 == null ? '' : it.chg_1) + '">' + mrMonChg(it.chg_1, isPct, neutral) + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_5 == null ? '' : it.chg_5) + '">' + mrMonChg(it.chg_5, isPct, neutral) + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_20 == null ? '' : it.chg_20) + '">' + mrMonChg(it.chg_20, isPct, neutral) + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_ytd == null || it.n_bars < 2 ? '' : it.chg_ytd) + '">'
+      + (it.n_bars < 2 ? '<span style="color:var(--t3)" title="seri baru punya 1 bar: YTD tidak bermakna">—</span>' : mrMonChg(it.chg_ytd, isPct, neutral)) + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right;color:var(--t2)" data-v="' + (it.pctile_1y == null ? '' : it.pctile_1y) + '">'
+      + (it.pctile_1y == null ? '—' : mrNum(it.pctile_1y) + '%') + '</td>';
+    h += '<td style="padding:3px 6px;text-align:right;color:var(--t3)" data-v="' + esc(it.as_of || '') + '">'
+      + esc(it.as_of || '—')
+      + (it.age_days ? ' <span style="font-size:9px">' + ' \u00b7 ' + it.age_days + ' hr</span>' : '') + '</td>';
+    h += '<td style="padding:3px 6px;color:var(--t3);font-family:var(--f);font-size:9px">' + esc(it.source || '—') + '</td>';
+    h += '</tr>';
+  });
+  h += '</table>';
+  return h;
+}
+
+function mrSortTable(th) {
+  var table = th.closest('table'); if (!table) return;
+  var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
+  var asc = th.getAttribute('data-asc') !== '1';
+  th.setAttribute('data-asc', asc ? '1' : '0');
+  var body = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(function (r) { return r.querySelector('td'); });
+  body.sort(function (a, b) {
+    var ca = a.children[idx], cb = b.children[idx];
+    var rawA = ca ? ca.getAttribute('data-v') : null;
+    var rawB = cb ? cb.getAttribute('data-v') : null;
+    var va = rawA === null || rawA === '' ? NaN : parseFloat(rawA);
+    var vb = rawB === null || rawB === '' ? NaN : parseFloat(rawB);
+    // Kolom teks (as-of, sumber, instrumen): bandingkan sebagai string ISO/nama.
+    if (isNaN(va) && isNaN(vb)) {
+      var sa = ca ? (ca.textContent || '') : '', sb = cb ? (cb.textContent || '') : '';
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    if (isNaN(va)) return 1;
+    if (isNaN(vb)) return -1;
+    return asc ? va - vb : vb - va;
+  });
+  body.forEach(function (r) { table.appendChild(r); });
+}
+
+// ═══ 3a. Likuiditas: SRBI & JISDOR ═══
+function mrRenderLiquidity(liq) {
+  if (!liq || !liq.items || !liq.items.length) return '<div style="color:var(--t3);font-size:11px">SRBI/JISDOR tidak tersedia.</div>';
+  var h = '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Likuiditas domestik '
+    + '<span style="font-weight:400;color:var(--t3)">· seri bulanan · terakhir ' + esc(liq.as_of || '—') + '</span></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Seri</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600">Level</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600">Δ1 periode</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600">as-of</th>'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">status</th></tr>';
+  liq.items.forEach(function (x) {
+    if (x.missing) {
+      h += '<tr class="mr-liq" data-state="missing" style="border-bottom:1px solid var(--b1)">'
+        + '<td style="padding:3px 6px">' + esc(x.label) + ' <span style="color:var(--am)">hilang dari custom_tickers</span></td>'
+        + '<td style="padding:3px 6px;text-align:right">—</td><td style="padding:3px 6px;text-align:right">—</td>'
+        + '<td style="padding:3px 6px;text-align:right">—</td><td style="padding:3px 6px">—</td></tr>';
+      return;
+    }
+    var st = x.stale ? 'stale' : (x.state === 'na' ? 'unmeasured' : 'fresh');
+    var stTxt = x.stale ? '<span style="color:var(--rd)">basi</span>'
+      : x.state === 'na' ? '<span style="color:var(--t3)">umur tak terukur</span>'
+      : '<span style="color:var(--gn)">segar</span>';
+    var lvl = (x.last === null || x.last === undefined)
+      ? '<span style="color:var(--t2)" title="bar terakhir ' + mrNum(x.last_bar_value) + ' pada ' + esc(x.as_of || '') + '">—</span>'
+      : mrNum(x.last);
+    var d1 = (x.chg_1 === null || x.chg_1 === undefined) ? '—'
+      : '<span style="color:' + (x.stale ? 'var(--t3)' : mrColor(x.chg_1)) + '">' + mrSigned(x.chg_1, x.chg_1_unit === '%' ? '%' : '') + '</span>';
+    h += '<tr class="mr-liq" data-state="' + st + '" style="border-bottom:1px solid var(--b1)">'
+      + '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.label) + (x.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(x.unit) + ')</span>' : '') + '</td>'
+      + '<td style="padding:3px 6px;text-align:right">' + lvl + '</td>'
+      + '<td style="padding:3px 6px;text-align:right">' + d1 + '</td>'
+      + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + esc(x.as_of || '—')
+      + (x.age_days ? ' <span style="font-size:9px">' + ' \u00b7 ' + x.age_days + ' hr</span>' : '') + '</td>'
+      + '<td style="padding:3px 6px">' + stTxt + '</td></tr>';
+  });
+  h += '</table>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">' + esc(liq.note || '') + '</div>';
+  return h;
+}
+
+// ═══ 3b. Kurva imbal hasil SUN — 11 tenor, hari ini vs 1W vs 1M ═══
+// Data: payload.curve (satudata, satu tanggal untuk seluruh kurva). UI tidak menghitung slope
+// dan tidak mengambil bar terdekat untuk tenor yang tertinggal: yang tidak punya bar di tanggal
+// kurva ditulis "—" beserta tanggal bar terakhirnya.
 function mrFmtBp(v) {
-  if (v === null || v === undefined) return '—';
-  return (v > 0 ? '+' : '') + v.toFixed(2);
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v > 0 ? '+' : '') + Number(v).toFixed(2);
 }
 
-function mrRenderCurve(box, d) {
-  if (!d || !d.tenors || !d.tenors.length) {
-    box.innerHTML = '<div style="color:var(--t3);font-size:11px">Tidak ada seri tenor SUN.</div>';
+function mrRenderCurveTo(box, d) {
+  if (!box) return;
+  if (!d || d.available === false || !d.tenors || !d.tenors.length) {
+    box.innerHTML = '<div style="color:var(--t3);font-size:11px">Kurva tidak tersedia'
+      + (d && d.error ? ': ' + esc(d.error) : ' (tidak ada seri tenor SUN di custom_ohlc)') + '.</div>';
     return;
   }
   var cov = d.coverage || { present: 0, total: 0 };
-  var h = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-bottom:6px;font-size:10px;color:var(--t3)">';
-  h += '<span>Sumber: <b style="color:var(--t2)">' + esc(d.source || 'investing') + '</b></span>';
+  var h = '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Kurva SUN '
+    + '<span style="font-weight:400;color:var(--t3)">· ' + cov.present + '/' + cov.total + ' tenor</span></div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-bottom:6px;font-size:10px;color:var(--t3)">';
+  h += '<span>sumber: <b style="color:var(--t2)">' + esc(d.source || 'investing') + '</b></span>';
   h += '<span>tanggal kurva: <b style="color:var(--t1)" id="mr-curve-date">' + esc(d.as_of || '—') + '</b></span>';
-  h += '<span>' + cov.present + '/' + cov.total + ' tenor pada tanggal ini</span>';
   if (d.is_latest === false && d.latest_date) {
-    // Kurva sengaja lebih tua dari bar terbaru supaya tidak mencampur sesi — katakan, jangan diam.
     h += '<span style="color:var(--am)">bar terbaru ' + esc(d.latest_date) + ' — kurva diambil dari sesi sebelumnya agar satu tanggal</span>';
   }
-  // Kesegaran TANGGAL KURVA (kanban t_4648c065). `is_latest` di atas hanya bilang "tidak ada
-  // bar yang lebih baru di DB": kalau rail berhenti TOTAL, latest_date ikut basi, is_latest
-  // tetap true, dan dulu tidak ada satu pun penanda. `freshness` mengukur umur sesi dengan
-  // aturan yang sama seperti seri lain (server/utils/series-freshness.js): lag sesi terhadap
-  // sesi rujukan vs `expected_lag_sessions` per seri di custom_tickers. Kurva TIDAK
-  // disembunyikan — hanya diberi badge.
   var fr = d.freshness || null;
   if (fr && fr.state === 'excess') {
     var lagTxt = (fr.lag_capped ? '≥ ' : '') + fr.lag_sessions;
@@ -198,76 +471,56 @@ function mrRenderCurve(box, d) {
       + ' sesi (deklarasi ' + esc(fr.threshold_code || '') + ' di custom_tickers)">'
       + '⚠ kurva tertinggal ' + lagTxt + ' sesi</span>';
   } else if (fr && fr.state === 'by_source' && fr.lag_sessions > 0) {
-    // Masih di dalam kebiasaan sumber: sebut netral (tanggal + jumlah sesi), jangan pakai
-    // kata "basi"/merah. Ini pembeda yang sama dengan panel seri lain ('by_source').
     h += '<span id="mr-curve-delayed" data-state="by_source" data-lag="' + fr.lag_sessions + '"'
       + ' style="color:var(--am)">sumber terlambat ' + fr.lag_sessions + ' sesi (wajar ≤ '
       + fr.expected_lag_sessions + ')</span>';
   } else if (!fr || fr.state === 'na') {
-    // Keadaan 'na' = TIDAK DIUKUR: tidak ada tenor yang mendeklarasikan expected_lag_sessions
-    // (`fr.state==='na'`), atau konteks sesi tidak tersedia sama sekali (`fr===null`). Panel dulu
-    // DIAM di keadaan ini, sehingga "tidak diukur" tak bisa dibedakan dari "segar": kalau baris
-    // custom_tickers.expected_lag_sessions untuk ID10Y di-NULL-kan (sengaja / re-seed), proteksi
-    // hilang tanpa satu pun sinyal dan `is_latest=true` kembali jadi satu-satunya penanda (cacat
-    // lama). Karena itu ditulis eksplisit — netral (var(--t3)), BUKAN badge merah: 'na' bukan
-    // tuduhan basi, hanya keterangan bahwa umurnya tidak diukur. Kurva tetap ditampilkan.
+    // 'na' = TIDAK DIUKUR: jangan diam (dulu tak bisa dibedakan dari "segar"), jangan juga
+    // dituduh basi. Netral, dengan sebab yang benar.
     var naCause = fr ? 'undeclared' : 'no_context';
-    var naTxt = fr
-      ? 'kesegaran kurva tidak diukur (tenor belum dideklarasikan)'
+    var naTxt = fr ? 'kesegaran kurva tidak diukur (tenor belum dideklarasikan)'
       : 'kesegaran kurva tidak diukur (konteks sesi tidak tersedia)';
-    // Sebab KETIGA (kanban t_c6c01360): pipeline data berhenti / kalender sesi kedaluwarsa.
-    // Di dua keadaan itu server sengaja menurunkan kurva ke 'na' (lag null) karena lag-nya tidak
-    // diketahui — menulis "tenor belum dideklarasikan" di sini akan menunjuk sebab yang salah.
-    if (fr && fr.lag_basis === 'pipeline_stopped') {
-      naCause = 'pipeline_stopped';
-      naTxt = 'kesegaran kurva tidak diukur (pipeline data berhenti)';
-    } else if (fr && fr.lag_basis === 'calendar_stale') {
-      naCause = 'calendar_stale';
-      naTxt = 'kesegaran kurva tidak diukur (kalender sesi kedaluwarsa)';
-    }
-    h += '<span id="mr-curve-untracked" data-state="na" data-cause="' + naCause + '"'
-      + ' style="color:var(--t3)">' + naTxt + '</span>';
+    if (fr && fr.lag_basis === 'pipeline_stopped') { naCause = 'pipeline_stopped'; naTxt = 'kesegaran kurva tidak diukur (pipeline data berhenti)'; }
+    else if (fr && fr.lag_basis === 'calendar_stale') { naCause = 'calendar_stale'; naTxt = 'kesegaran kurva tidak diukur (kalender sesi kedaluwarsa)'; }
+    h += '<span id="mr-curve-untracked" data-state="na" data-cause="' + naCause + '" style="color:var(--t3)">' + naTxt + '</span>';
   }
   if (d.anchor_fallback) h += '<span style="color:var(--am)">cakupan tanggal terbaik &lt; ' + (d.min_coverage || 0) + ' tenor</span>';
   h += '</div>';
 
-  // Slope (dihitung server, tanda wajib tampil: negatif = inversi)
+  // Slope (dihitung server; tanda wajib tampil: negatif = inversi)
   h += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
-  (d.slopes || []).forEach(function(s) {
+  (d.slopes || []).forEach(function (s) {
     if (s.bp === null || s.bp === undefined) {
       h += '<span style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:3px 8px;font-size:10px;color:var(--t3)" title="salah satu tenor tidak punya bar di tanggal kurva">' + esc(s.id) + ' —</span>';
       return;
     }
     var col = s.bp > 0 ? 'var(--gn)' : s.bp < 0 ? 'var(--rd)' : 'var(--t2)';
-    var note = s.inverted ? ' · INVERSI' : '';
     h += '<span style="background:var(--bg1);border:1px solid ' + (s.inverted ? 'var(--rd)' : 'var(--b1)') + ';border-radius:4px;padding:3px 8px;font-size:10px;color:var(--t2)"'
       + ' title="' + esc(s.long_tenor + ' (' + s.long + ') − ' + s.short_tenor + ' (' + s.short + ') = ' + s.pp + ' pp pada ' + d.as_of) + '">'
-      + esc(s.id) + ' <b style="font-family:var(--fm);color:' + col + '">' + mrFmtBp(s.bp) + ' bp' + note + '</b></span>';
+      + esc(s.id) + ' <b style="font-family:var(--fm);color:' + col + '">' + mrFmtBp(s.bp) + ' bp' + (s.inverted ? ' · INVERSI' : '') + '</b></span>';
   });
   h += '</div>';
 
   h += '<div id="mr-curve-chart" style="height:200px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
 
-  // Tabel tenor / yield / Δ1d / Δ20 sesi
-  // "sesi" bukan "hari": Δ20 = selisih terhadap bar ke-20 seri tenor itu sendiri (≈4 minggu
-  // bursa, bisa ~28 hari kalender). Label lama tanpa satuan ("20d") bisa dibaca 20 hari kalender.
   h += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">';
   h += '<tr style="border-bottom:1px solid var(--b2)">';
-  ['Tenor', 'Yield (%)', 'Δ1d (bp)', 'Δ20 sesi (bp)', 'Bar'].forEach(function(t, i) {
-    h += '<th style="text-align:' + (i === 0 || i === 4 ? 'left' : 'right') + ';padding:4px 8px;color:var(--t3);font-size:9px">' + t + '</th>';
+  ['Tenor', 'Yield (%)', 'Δ1D (bp)', 'Δ1W (bp)', 'Δ1M (20 sesi, bp)', 'Bar'].forEach(function (t, i) {
+    h += '<th style="text-align:' + (i === 0 || i === 5 ? 'left' : 'right') + ';padding:4px 8px;color:var(--t3);font-size:9px">' + t + '</th>';
   });
   h += '</tr>';
-  d.tenors.forEach(function(t) {
+  d.tenors.forEach(function (t) {
     var on = t.on_curve !== false && t.close !== null && t.close !== undefined;
-    var cellYield = on
-      ? '<b style="font-family:var(--fm)">' + t.close.toFixed(2) + '</b>'
+    var cellYield = on ? '<b style="font-family:var(--fm)">' + mrNum(t.close) + '</b>'
       : '<span style="color:var(--am)" title="tidak ada bar pada ' + esc(d.as_of || '') + '">— <span style="font-size:9px">' + esc(t.date || 'tanpa bar') + '</span></span>';
-    var c1 = on && t.chg_1d_bp !== null ? (t.chg_1d_bp > 0 ? 'color:var(--rd)' : t.chg_1d_bp < 0 ? 'color:var(--gn)' : '') : '';
-    var c20 = on && t.chg_20d_bp !== null ? (t.chg_20d_bp > 0 ? 'color:var(--rd)' : t.chg_20d_bp < 0 ? 'color:var(--gn)' : '') : '';
+    var c1 = on && t.chg_1d_bp != null ? (t.chg_1d_bp > 0 ? 'color:var(--rd)' : t.chg_1d_bp < 0 ? 'color:var(--gn)' : '') : '';
+    var c5 = on && t.chg_5d_bp != null ? (t.chg_5d_bp > 0 ? 'color:var(--rd)' : t.chg_5d_bp < 0 ? 'color:var(--gn)' : '') : '';
+    var c20 = on && t.chg_20d_bp != null ? (t.chg_20d_bp > 0 ? 'color:var(--rd)' : t.chg_20d_bp < 0 ? 'color:var(--gn)' : '') : '';
     h += '<tr style="border-bottom:1px solid var(--b1)">';
     h += '<td style="padding:4px 8px;font-weight:600">' + esc(t.tenor) + '</td>';
     h += '<td style="padding:4px 8px;text-align:right">' + cellYield + '</td>';
     h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c1 + '">' + (on ? mrFmtBp(t.chg_1d_bp) : '—') + '</td>';
+    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c5 + '">' + (on ? mrFmtBp(t.chg_5d_bp) : '—') + '</td>';
     h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20 + '">' + (on ? mrFmtBp(t.chg_20d_bp) : '—') + '</td>';
     h += '<td style="padding:4px 8px;font-size:9px;color:' + (on ? 'var(--t3)' : 'var(--am)') + '">' + esc(on ? t.date : (t.date || '—')) + '</td>';
     h += '</tr>';
@@ -275,12 +528,12 @@ function mrRenderCurve(box, d) {
   h += '</table>';
   if (d.behind && d.behind.length) {
     h += '<div style="font-size:9px;color:var(--am);margin-top:4px">Tidak ikut tergambar (bar lebih baru dari tanggal kurva): '
-      + d.behind.map(function(b) { return esc(b.tenor) + ' ' + esc(b.date); }).join(', ') + '</div>';
+      + d.behind.map(function (b) { return esc(b.tenor) + ' ' + esc(b.date); }).join(', ') + '</div>';
   }
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). Δ1d/Δ20 sesi dihitung dari bar seri tenor itu sendiri. '
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Yield = %, Δ dalam basis poin (1 bp = 0,01 pp). '
+    + 'Δ1D/Δ1W/Δ1M dihitung dari bar seri tenor itu sendiri (1W = 5 sesi, 1M = 20 sesi bursa). '
     + 'Slope negatif = inversi. Tidak ada slope yang disimpan sebagai seri baru. '
-    + 'Kesegaran kurva: umur tanggal kurva dihitung dalam SESI bursa terhadap sesi rujukan (max frontier rail, idx_daily) '
-    + 'lalu dibandingkan dengan ambang <b>expected_lag_sessions</b> per seri di custom_tickers — aturan yang sama dengan panel seri lain.</div>';
+    + 'Kesegaran kurva memakai aturan yang sama dengan seri lain (series-freshness.js).</div>';
   box.innerHTML = h;
 
   mrDrawCurve(d);
@@ -290,28 +543,29 @@ function mrDrawCurve(d) {
   var el = $('mr-curve-chart'); if (!el) return;
   var c = BL.init(el, 'mr-curve');
   if (!c) return;
-  var labels = (d.tenors || []).map(function(t) { return t.tenor; });
-  var vals = (d.tenors || []).map(function(t) { return (t.on_curve !== false && t.close !== null) ? t.close : null; });
-  var known = vals.filter(function(v) { return v !== null; });
+  var labels = (d.tenors || []).map(function (t) { return t.tenor; });
+  var vals = (d.tenors || []).map(function (t) { return (t.on_curve !== false && t.close !== null) ? t.close : null; });
+  var known = vals.filter(function (v) { return v !== null; });
   var pad = known.length ? Math.max(0.05, (Math.max.apply(null, known) - Math.min.apply(null, known)) * 0.25) : 0.5;
   c.setOption({
     tooltip: {
       trigger: 'axis', textStyle: { fontSize: 9 },
-      formatter: function(ps) {
+      formatter: function (ps) {
         var p = ps[0];
         var t = (d.tenors || [])[p.dataIndex] || {};
         var s = '<b>' + esc(t.tenor || '') + '</b> · ' + esc(d.as_of || '') + '<br/>';
         if (p.value === null || p.value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
-        return s + p.value.toFixed(2) + '% · Δ1d ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ20 sesi ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+        return s + mrNum(p.value) + '% · Δ1D ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ1W ' + mrFmtBp(t.chg_5d_bp)
+          + ' bp · Δ1M ' + mrFmtBp(t.chg_20d_bp) + ' bp';
       }
     },
-    grid: BL.grid({ top: 14, bottom: 22, left: 42, right: 12 }),
+    grid: BL.grid({ top: 14, bottom: 22, left: 46, right: 12 }),
     xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 8 } },
     yAxis: {
       type: 'value', scale: true,
       min: known.length ? Math.min.apply(null, known) - pad : null,
       max: known.length ? Math.max.apply(null, known) + pad : null,
-      axisLabel: { fontSize: 8, formatter: function(v) { return v.toFixed(2) + '%'; } },
+      axisLabel: { fontSize: 8, formatter: function (v) { return Number(v).toFixed(2) + '%'; } },
       splitLine: { lineStyle: { color: '#1e2836', type: 'dashed' } }
     },
     series: [{
@@ -322,12 +576,10 @@ function mrDrawCurve(d) {
       markPoint: {
         symbolSize: 34,
         label: { fontSize: 8, color: '#e0e6ed' },
-        // Titik yang dianotasi = pasangan slope 10Y−3Y. Pilih lewat LABEL tenor ('10Y','3Y'),
-        // JANGAN lewat `months`: di payload satuannya BULAN, jadi 10Y = 120 dan 3Y = 36 —
-        // versi lama memakai angka tahun (10 dan 3) sehingga bubblenya menempel di 3M dan
-        // titik 10Y tidak pernah dapat anotasi (cacat review t_b042b106 r1).
-        data: ['10Y', '3Y'].map(function(tenorLabel) {
-          var t = (d.tenors || []).filter(function(x) {
+        // Anotasi = pasangan slope 10Y−3Y. Pilih lewat LABEL tenor, JANGAN lewat `months`
+        // (10Y = 120 bulan, bukan 10) — cacat review t_b042b106 r1.
+        data: ['10Y', '3Y'].map(function (tenorLabel) {
+          var t = (d.tenors || []).filter(function (x) {
             return x.tenor === tenorLabel && x.close !== null && x.close !== undefined && x.on_curve !== false;
           })[0];
           if (!t) return null;
@@ -340,315 +592,191 @@ function mrDrawCurve(d) {
   }, true);
 }
 
-// ═══ Level 1: Global ═══
-function mrRenderGlobal(g) {
-  if (!g || !g.length) return '<span style="color:var(--t3)">No global data. Add tickers with category=global_index in EOD Fetcher.</span>';
-  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  g.forEach(function(item) {
-    var chg = item.chg_pct || 0;
-    var cls = chg > 0 ? 'color:var(--gn)' : chg < 0 ? 'color:var(--rd)' : 'color:var(--t2)';
-    var trend5 = item.chg_5d || 0;
-    var trend20 = item.chg_20d || 0;
-    var signal = trend20 > 3 ? '🟢' : trend20 < -3 ? '🔴' : '🟡';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:140px;flex:1">';
-    h += '<div style="font-size:10px;color:var(--t3);margin-bottom:2px">' + signal + ' ' + esc(item.name || item.code) + '</div>';
-    h += '<div style="font-size:18px;font-weight:700;font-family:var(--fm);' + cls + '">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">Price: ' + (item.close || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">5D: <span style="' + (trend5 > 0 ? 'color:var(--gn)' : trend5 < 0 ? 'color:var(--rd)' : '') + '">' + (trend5 > 0 ? '+' : '') + trend5.toFixed(2) + '%</span>';
-    h += ' · 20D: <span style="' + (trend20 > 0 ? 'color:var(--gn)' : trend20 < 0 ? 'color:var(--rd)' : '') + '">' + (trend20 > 0 ? '+' : '') + trend20.toFixed(2) + '%</span></div>';
-    h += '</div>';
-  });
-  h += '</div>';
+// ═══ 4. Internals IDX ═══
+function mrRenderInternals(it) {
+  if (!it || !it.as_of) return '<div style="color:var(--t3);font-size:11px">Internals IDX tidak tersedia.</div>';
+  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">sesi <b style="color:var(--t2)">' + esc(it.as_of)
+    + '</b> · jendela ' + (it.sessions || 0) + ' sesi (dari ' + esc(it.window_from || '—') + ') · harga di-MA memakai harga terkoreksi aksi korporasi</div>';
 
-  // Aggregate signal
-  var bullCount = g.filter(function(x) { return (x.chg_20d || 0) > 3; }).length;
-  var bearCount = g.filter(function(x) { return (x.chg_20d || 0) < -3; }).length;
-  var total = g.length;
-  var verdict = bullCount > total / 2 ? '🟢 Risk-On' : bearCount > total / 2 ? '🔴 Risk-Off' : '🟡 Caution';
-  h += '<div style="margin-top:8px;padding:6px 10px;background:rgba(84,112,198,0.06);border-radius:4px;font-size:11px"><b>Global:</b> ' + verdict + ' (' + bullCount + ' bullish, ' + bearCount + ' bearish, ' + (total - bullCount - bearCount) + ' neutral)</div>';
-  return h;
-}
+  // IHSG + foreign flow + tape + breadth: tabel dua kolom supaya sejajar
+  var ihsg = it.ihsg || {}, br = it.breadth || {}, ff = it.foreign_flow || {}, tp = it.tape || {};
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Blok</th>'
+    + '<th style="text-align:right;padding:3px 6px;font-weight:600">Nilai</th>'
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Rincian</th></tr>';
 
-// ═══ Level 1.5: Macro Signals ═══
-function mrRenderMacro(ms) {
-  if (!ms || !ms.signals || !ms.signals.length) return '<span style="color:var(--t3)">No macro signals. Upload VIX, DXY, US10Y, BDI, USDIDR via Custom Tickers.</span>';
-  var sigs = ms.signals;
-  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:6px;margin-bottom:8px">';
-  sigs.forEach(function(s) {
-    var bg = s.bear > 0 ? 'rgba(239,68,68,0.06)' : s.bull > 0 ? 'rgba(34,197,94,0.06)' : 'rgba(148,163,184,0.04)';
-    var border = s.bear > 0 ? 'var(--rd)' : s.bull > 0 ? 'var(--gn)' : 'var(--b2)';
-    h += '<div style="background:' + bg + ';border:1px solid ' + border + '33;border-radius:6px;padding:8px 10px">';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
-    h += '<span style="font-size:10px;font-weight:700;color:var(--t1)">' + s.emoji + ' ' + esc(s.code) + '</span>';
-    h += '<span style="font-size:14px;font-weight:700;font-family:var(--fm);color:var(--t1)">' + (typeof s.value === 'number' ? s.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-') + '</span>';
-    h += '</div>';
-    h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.detail) + '</div>';
-    if (s.bull > 0) h += '<div style="font-size:8px;color:var(--gn);margin-top:2px">+' + s.bull + ' bull point' + (s.bull > 1 ? 's' : '') + '</div>';
-    if (s.bear > 0) h += '<div style="font-size:8px;color:var(--rd);margin-top:2px">+' + s.bear + ' bear point' + (s.bear > 1 ? 's' : '') + '</div>';
-    h += '</div>';
-  });
-  h += '</div>';
+  var regimeTxt = ihsg.regime === 'bull' ? 'bull' : ihsg.regime === 'mild_bull' ? 'mild bull'
+    : ihsg.regime === 'bear' ? 'bear' : ihsg.regime === 'mild_bear' ? 'mild bear' : 'sideways';
+  h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">IHSG</td>'
+    + '<td style="padding:3px 6px;text-align:right"><b>' + mrNum(ihsg.level) + '</b> '
+    + '<span style="color:' + (ihsg.regime === 'bull' || ihsg.regime === 'mild_bull' ? 'var(--gn)' : ihsg.regime === 'bear' || ihsg.regime === 'mild_bear' ? 'var(--rd)' : 'var(--t2)') + '">' + regimeTxt + '</span></td>'
+    + '<td style="padding:3px 6px;color:var(--t3)">1D <span style="color:' + mrColor(ihsg.chg_1d) + '">' + mrSigned(ihsg.chg_1d, '%') + '</span>'
+    + ' · 5D <span style="color:' + mrColor(ihsg.chg_5d) + '">' + mrSigned(ihsg.chg_5d, '%') + '</span>'
+    + ' · 20D <span style="color:' + mrColor(ihsg.chg_20d) + '">' + mrSigned(ihsg.chg_20d, '%') + '</span>'
+    + ' · ' + esc(ihsg.date || '') + '</td></tr>';
 
-  // Summary bar
-  var totalBull = ms.bull_points || 0, totalBear = ms.bear_points || 0;
-  var verdict = totalBear > totalBull + 1 ? '🔴 Macro Headwind' : totalBull > totalBear + 1 ? '🟢 Macro Tailwind' : '🟡 Macro Mixed';
-  var vColor = totalBear > totalBull + 1 ? 'var(--rd)' : totalBull > totalBear + 1 ? 'var(--gn)' : 'var(--am)';
-  h += '<div style="padding:5px 10px;background:rgba(84,112,198,0.06);border-radius:4px;font-size:11px">';
-  h += '<b style="color:' + vColor + '">' + verdict + '</b>';
-  h += ' <span style="color:var(--t3)">(' + totalBull + ' bull · ' + totalBear + ' bear)</span></div>';
-  return h;
-}
+  h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">Foreign net</td>'
+    + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(ff.net_today) + '">' + mrRpTn(ff.net_today) + '</td>'
+    + '<td style="padding:3px 6px;color:var(--t3)">5D <span style="color:' + mrColor(ff.net_5d) + '">' + mrRpTn(ff.net_5d) + '</span>'
+    + ' · 20D <span style="color:' + mrColor(ff.net_20d) + '">' + mrRpTn(ff.net_20d) + '</span>'
+    + ' · dari idx_daily per saham (' + (ff.sessions || 0) + ' sesi)</td></tr>';
 
-// ═══ Level 2: Commodity ═══
-function mrRenderCommodity(cmds) {
-  if (!cmds || !cmds.length) return '<span style="color:var(--t3)">No commodity data. Add tickers with category=commodity in EOD Fetcher.</span>';
-  var h = '<table style="width:100%;border-collapse:collapse;font-size:11px">';
-  h += '<tr style="border-bottom:1px solid var(--b2)">';
-  h += '<th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Commodity</th>';
-  h += '<th style="text-align:right;padding:4px 8px;color:var(--t3);font-size:9px">Price</th>';
-  h += '<th style="text-align:right;padding:4px 8px;color:var(--t3);font-size:9px">5D</th>';
-  h += '<th style="text-align:right;padding:4px 8px;color:var(--t3);font-size:9px">20D</th>';
-  h += '<th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Trend</th>';
-  h += '<th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Linked Sector</th>';
-  h += '</tr>';
-  cmds.forEach(function(c) {
-    var pts = c.points || 0;
-    var thin = pts > 0 && pts < 6;                 // histori belum cukup untuk hitung 5D/20D
-    var stale = c.stale === true;                  // 'excess': di luar kebiasaan sumber (t_b234606a)
-    var bySource = c.state === 'by_source';        // sumber memang lambat — netral, tanpa kata "basi"
-    var chg5v = thin ? null : (c.chg_5d || 0);
-    var chg20v = thin ? null : (c.chg_20d || 0);
-    var chg5 = chg5v === null ? 0 : chg5v, chg20 = chg20v === null ? 0 : chg20v;
-    var trend = thin ? '⚪ histori ' + pts + ' titik' : (chg20 > 5 ? '🟢 ▲ Up' : chg20 < -5 ? '🔴 ▼ Down' : chg20 > 2 ? '🟡 ↗ Mild Up' : chg20 < -2 ? '🟡 ↘ Mild Down' : '⚪ → Flat');
-    // Harga seri basi TIDAK ditulis sebagai level: TIN 15 Okt di bawah sesi 19 Okt akan
-    // terbaca "timah tidak bergerak 2 hari", padahal kita tidak punya bar-nya. Levelnya
-    // tetap tersedia di title supaya bisa diperiksa.
-    var priceCell = stale
-      ? '<span style="color:var(--t2)" title="bar terakhir ' + esc(c.date || '') + ' (level ' + (c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2}) + ') — bukan sesi ' + esc(c.ref_date || '') + '">—</span>'
-        + ' <span style="font-size:9px;color:var(--am);white-space:nowrap" title="sumber tidak menerbitkan bar untuk ' + (c.lag_sessions || 0) + ' sesi terakhir; retry tidak menolong">⏸ basi ' + esc(shortDay(c.stale_date || c.date)) + '</span>'
-      : ((c.close || 0).toLocaleString(undefined, {maximumFractionDigits: 2})
-        + (bySource
-          ? ' <span style="font-size:9px;color:var(--t3);white-space:nowrap" title="ekspektasi sumber ini ' + (c.expected_lag_sessions == null ? '?' : c.expected_lag_sessions) + ' sesi">sumber lag ' + (c.lag_sessions || 0) + ' sesi (' + esc(shortDay(c.stale_date || c.date)) + ')</span>'
-          : ''));
-    // by_source juga diredam: angkanya dari bar sesi lama, jadi tidak boleh diwarnai seperti
-    // pergerakan hari ini — bedanya, di sini tidak ada kata "basi" dan tidak ada banner ⏸.
-    var dimStale = (stale || bySource) ? 'color:var(--t3);' : '';
-    // Baris basi: 5D/20D tetap dihitung dari bar terakhir seri itu, tapi diwarnai netral —
-    // warnanya tidak boleh mengklaim pergerakan "sampai hari ini".
-    var c5style = stale ? dimStale : (chg5 > 0 ? 'color:var(--gn);' : chg5 < 0 ? 'color:var(--rd);' : '');
-    var c20style = stale ? dimStale : (chg20 > 0 ? 'color:var(--gn);' : chg20 < 0 ? 'color:var(--rd);' : '');
-    h += '<tr style="border-bottom:1px solid var(--b1)' + (stale ? ';opacity:.85' : '') + '">';
-    h += '<td style="padding:4px 8px;font-weight:600;color:var(--bl)">' + esc(c.name || c.code) + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm)">' + priceCell + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c5style + '">' + (chg5v === null ? '—' : (chg5 > 0 ? '+' : '') + chg5.toFixed(2) + '%') + '</td>';
-    h += '<td style="padding:4px 8px;text-align:right;font-family:var(--fm);' + c20style + '">' + (chg20v === null ? '—' : (chg20 > 0 ? '+' : '') + chg20.toFixed(2) + '%') + '</td>';
-    h += '<td style="padding:4px 8px;font-size:10px">' + trend + '</td>';
-    h += '<td style="padding:4px 8px;font-size:10px;color:var(--t3)">' + esc(c.linked_sector || '-') + '</td>';
-    h += '</tr>';
-  });
-  h += '</table>';
-  return h;
-}
+  h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">Nilai transaksi</td>'
+    + '<td style="padding:3px 6px;text-align:right">' + mrNum(tp.value_ratio) + 'x MA20</td>'
+    + '<td style="padding:3px 6px;color:var(--t3)">' + mrRpTn(tp.value_today) + ' vs MA20 ' + mrRpTn(tp.value_ma20)
+    + ' · naik ' + (tp.advancers || 0) + ' / turun ' + (tp.decliners || 0)
+    + ' · ARA ' + (tp.ara || 0) + ' ARB ' + (tp.arb || 0) + ' · ' + (tp.members || 0) + ' emiten</td></tr>';
 
-// ═══ Level 3: IDX ═══
-function mrRenderIDX(idx) {
-  if (!idx) return '<span style="color:var(--t3)">No IDX data available.</span>';
-  var h = '<div style="display:flex;gap:12px;flex-wrap:wrap">';
-
-  // IHSG card
-  var ihsg = idx.ihsg || {};
-  var regime = ihsg.regime || 'unknown';
-  var regimeColor = regime === 'bull' ? 'var(--gn)' : regime === 'bear' ? 'var(--rd)' : regime === 'mild_bull' ? 'var(--gn)' : regime === 'mild_bear' ? 'var(--rd)' : 'var(--t2)';
-  var regimeLabel = regime === 'bull' ? '🟢 BULL' : regime === 'bear' ? '🔴 BEAR' : regime === 'mild_bull' ? '🟢 Mild Bull' : regime === 'mild_bear' ? '🔴 Mild Bear' : '🟡 Sideways';
-  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:10px 14px;min-width:180px">';
-  h += '<div style="font-size:10px;color:var(--t3)">IHSG Composite</div>';
-  h += '<div style="font-size:22px;font-weight:700;font-family:var(--fm)">' + (ihsg.level || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</div>';
-  h += '<div style="font-size:12px;font-weight:700;color:' + regimeColor + '">' + regimeLabel + '</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">5D: ' + (ihsg.chg_5d > 0 ? '+' : '') + (ihsg.chg_5d || 0).toFixed(2) + '% · 20D: ' + (ihsg.chg_20d > 0 ? '+' : '') + (ihsg.chg_20d || 0).toFixed(2) + '%</div>';
-  h += '</div>';
-
-  // Foreign Flow card
-  var ff = idx.foreign_flow || {};
-  var fnetColor = (ff.net_20d || 0) > 0 ? 'var(--gn)' : 'var(--rd)';
-  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:10px 14px;min-width:180px">';
-  h += '<div style="font-size:10px;color:var(--t3)">Foreign Flow (20D)</div>';
-  h += '<div style="font-size:18px;font-weight:700;font-family:var(--fm);color:' + fnetColor + '">' + fmtRp(ff.net_20d || 0) + '</div>';
-  h += '<div style="font-size:9px;color:var(--t3)">Today: ' + fmtRp(ff.net_today || 0) + '</div>';
-  h += '<div style="font-size:9px;color:var(--t3)">5D: ' + fmtRp(ff.net_5d || 0) + '</div>';
-  h += '</div>';
-
-  // Breadth card
-  var br = idx.breadth || {};
-  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:10px 14px;min-width:180px">';
-  h += '<div style="font-size:10px;color:var(--t3)">Market Breadth</div>';
-  h += '<div style="font-size:10px;margin-top:4px">Above MA20: <b style="color:' + ((br.pct_above_ma20 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma20 || 0).toFixed(2) + '%</b></div>';
-  h += '<div style="font-size:10px">Above MA50: <b style="color:' + ((br.pct_above_ma50 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma50 || 0).toFixed(2) + '%</b></div>';
-  h += '<div style="font-size:10px">Above MA200: <b style="color:' + ((br.pct_above_ma200 || 0) > 50 ? 'var(--gn)' : 'var(--rd)') + '">' + (br.pct_above_ma200 || 0).toFixed(2) + '%</b></div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">New High: ' + (br.new_high || 0) + ' · New Low: ' + (br.new_low || 0) + '</div>';
-  h += '</div>';
-
-  // Breadth chart placeholder
-  h += '<div id="mr-breadth-chart" style="flex:1;min-width:250px;height:140px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
-
-  h += '</div>';
-  return h;
-}
-
-// ═══ Level 4: Sectors ═══
-function mrRenderSectors(sectors) {
-  if (!sectors || !sectors.length) return '<span style="color:var(--t3)">No sector data.</span>';
-  var h = '<table style="width:100%;border-collapse:collapse;font-size:11px">';
-  h += '<tr style="border-bottom:1px solid var(--b2)">';
-  h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:9px">Sector</th>';
-  h += '<th style="text-align:right;padding:5px 8px;color:var(--t3);font-size:9px">1D</th>';
-  h += '<th style="text-align:right;padding:5px 8px;color:var(--t3);font-size:9px">20D</th>';
-  h += '<th style="text-align:right;padding:5px 8px;color:var(--t3);font-size:9px">RS vs IHSG</th>';
-  h += '<th style="text-align:right;padding:5px 8px;color:var(--t3);font-size:9px">F.Net 20D</th>';
-  h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:9px">Signal</th>';
-  h += '<th style="text-align:left;padding:5px 8px;color:var(--t3);font-size:9px">Top Stocks</th>';
-  h += '</tr>';
-  sectors.forEach(function(s) {
-    var chg = s.chg_pct || 0;
-    var chg20 = s.chg_20d || 0;
-    var rs = s.rs_vs_ihsg || 0;
-    var fnet = s.fnet_20d || 0;
-    var signal = rs > 2 && fnet > 0 ? '🟢 Strong' : rs > 0 && fnet > 0 ? '🟢 Favor' : rs < -2 && fnet < 0 ? '🔴 Avoid' : rs < 0 && fnet < 0 ? '🔴 Weak' : '🟡 Neutral';
-    // Clickable sector → navigate to Market Intelligence Stock List
-    var sectorClick = s.cp_sector ? ' onclick="mrGoSector(\'' + esc(s.cp_sector) + '\')" style="cursor:pointer;color:var(--bl)"' : '';
-    h += '<tr style="border-bottom:1px solid var(--b1)">';
-    h += '<td style="padding:5px 8px;font-weight:600"' + sectorClick + '>' + esc(s.sector.replace('IDX Sector ', '')) + '</td>';
-    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (chg > 0 ? 'color:var(--gn)' : chg < 0 ? 'color:var(--rd)' : '') + '">' + (chg > 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
-    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);font-weight:600;' + (chg20 > 0 ? 'color:var(--gn)' : chg20 < 0 ? 'color:var(--rd)' : '') + '">' + (chg20 > 0 ? '+' : '') + chg20.toFixed(2) + '%</td>';
-    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (rs > 0 ? 'color:var(--gn)' : rs < 0 ? 'color:var(--rd)' : '') + '">' + (rs > 0 ? '+' : '') + rs.toFixed(2) + '%</td>';
-    h += '<td style="padding:5px 8px;text-align:right;font-family:var(--fm);' + (fnet > 0 ? 'color:var(--gn)' : fnet < 0 ? 'color:var(--rd)' : '') + '">' + fmtRp(fnet) + '</td>';
-    h += '<td style="padding:5px 8px;font-size:10px">' + signal + '</td>';
-    h += '<td style="padding:5px 8px">';
-    if (s.top_stocks && s.top_stocks.length) {
-      h += s.top_stocks.map(function(t) { return '<span class="code" onclick="sdOpenTicker(\'' + esc(t) + '\')" style="cursor:pointer;font-size:11px;font-weight:600;margin-right:4px">' + esc(t) + '</span>'; }).join('');
-    }
-    h += '</td></tr>';
-  });
-  h += '</table>';
-  return h;
-}
-
-// ═══ Level 5: Decision Matrix ═══
-function mrRenderDecision(d) {
-  var signals = [];
-  var bullPoints = 0, bearPoints = 0;
-
-  // Macro Signals (P0 Sprint 13) — inject bull/bear from macro engine
-  if (d.macro_signals && d.macro_signals.signals && d.macro_signals.signals.length) {
-    var mb = d.macro_signals.bull_points || 0;
-    var mr = d.macro_signals.bear_points || 0;
-    bullPoints += mb; bearPoints += mr;
-    var macroVerdict = mr > mb + 1 ? '🔴 Headwind' : mb > mr + 1 ? '🟢 Tailwind' : '🟡 Mixed';
-    signals.push({ level: 'Macro', signal: macroVerdict, detail: mb + ' bull / ' + mr + ' bear points' });
-  }
-
-  // Global
-  if (d.global && d.global.length) {
-    var gBull = d.global.filter(function(x) { return (x.chg_20d || 0) > 3; }).length;
-    var gBear = d.global.filter(function(x) { return (x.chg_20d || 0) < -3; }).length;
-    var gTotal = d.global.length;
-    if (gBull > gTotal / 2) { signals.push({ level: 'Global', signal: '🟢 Risk-On', detail: gBull + '/' + gTotal + ' bullish' }); bullPoints += 2; }
-    else if (gBear > gTotal / 2) { signals.push({ level: 'Global', signal: '🔴 Risk-Off', detail: gBear + '/' + gTotal + ' bearish' }); bearPoints += 2; }
-    else { signals.push({ level: 'Global', signal: '🟡 Mixed', detail: 'No clear direction' }); }
-  }
-
-  // Commodity — check if majority trending up
-  if (d.commodities && d.commodities.length) {
-    var cUp = d.commodities.filter(function(x) { return (x.chg_20d || 0) > 2; }).length;
-    var cDown = d.commodities.filter(function(x) { return (x.chg_20d || 0) < -2; }).length;
-    if (cUp > cDown) { signals.push({ level: 'Commodity', signal: '🟢 Tailwind', detail: cUp + ' rising' }); bullPoints++; }
-    else if (cDown > cUp) { signals.push({ level: 'Commodity', signal: '🔴 Headwind', detail: cDown + ' falling' }); bearPoints++; }
-    else { signals.push({ level: 'Commodity', signal: '🟡 Mixed', detail: '' }); }
-  }
-
-  // IHSG
-  if (d.idx && d.idx.ihsg) {
-    var regime = d.idx.ihsg.regime;
-    if (regime === 'bull' || regime === 'mild_bull') { signals.push({ level: 'IHSG', signal: '🟢 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(2) + '%' }); bullPoints += 2; }
-    else if (regime === 'bear' || regime === 'mild_bear') { signals.push({ level: 'IHSG', signal: '🔴 ' + regime, detail: 'Chg20D: ' + (d.idx.ihsg.chg_20d || 0).toFixed(2) + '%' }); bearPoints += 2; }
-    else { signals.push({ level: 'IHSG', signal: '🟡 Sideways', detail: '' }); }
-  }
-
-  // Foreign Flow
-  if (d.idx && d.idx.foreign_flow) {
-    var fnet = d.idx.foreign_flow.net_20d || 0;
-    if (fnet > 0) { signals.push({ level: 'Foreign', signal: '🟢 Inflow', detail: fmtRp(fnet) }); bullPoints++; }
-    else { signals.push({ level: 'Foreign', signal: '🔴 Outflow', detail: fmtRp(fnet) }); bearPoints++; }
-  }
-
-  // Breadth
-  if (d.idx && d.idx.breadth) {
-    var ma50 = d.idx.breadth.pct_above_ma50 || 0;
-    if (ma50 > 60) { signals.push({ level: 'Breadth', signal: '🟢 Healthy', detail: ma50.toFixed(2) + '% > MA50' }); bullPoints++; }
-    else if (ma50 < 30) { signals.push({ level: 'Breadth', signal: '🔴 Weak', detail: ma50.toFixed(2) + '% > MA50' }); bearPoints++; }
-    else { signals.push({ level: 'Breadth', signal: '🟡 Neutral', detail: ma50.toFixed(2) + '% > MA50' }); }
-  }
-
-  // Final verdict
-  var totalPoints = bullPoints + bearPoints;
-  var verdict, verdictColor, verdictBg;
-  if (bullPoints > bearPoints + 2) { verdict = '🟢 TRADE — Market conditions favorable'; verdictColor = 'var(--gn)'; verdictBg = 'rgba(34,197,94,0.08)'; }
-  else if (bearPoints > bullPoints + 2) { verdict = '🔴 SIDELINE — Market conditions unfavorable'; verdictColor = 'var(--rd)'; verdictBg = 'rgba(239,68,68,0.08)'; }
-  else if (bullPoints > bearPoints) { verdict = '🟡 SELECTIVE — Trade with caution, pick strong sectors'; verdictColor = 'var(--am)'; verdictBg = 'rgba(245,158,11,0.08)'; }
-  else { verdict = '🟡 CAUTION — Mixed signals, reduce position size'; verdictColor = 'var(--am)'; verdictBg = 'rgba(245,158,11,0.08)'; }
-
-  var h = '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:10px">';
-  h += '<tr style="border-bottom:1px solid var(--b2)"><th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Level</th><th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Signal</th><th style="text-align:left;padding:4px 8px;color:var(--t3);font-size:9px">Detail</th></tr>';
-  signals.forEach(function(s) {
-    h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:4px 8px;font-weight:600">' + s.level + '</td><td style="padding:4px 8px">' + s.signal + '</td><td style="padding:4px 8px;color:var(--t3);font-size:10px">' + (s.detail || '') + '</td></tr>';
-  });
+  h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">Breadth</td>'
+    + '<td style="padding:3px 6px;text-align:right">' + mrNum(br.pct_above_ma50) + '% &gt; MA50</td>'
+    + '<td style="padding:3px 6px;color:var(--t3)">&gt;MA20 ' + mrNum(br.pct_above_ma20) + '%'
+    + ' · &gt;MA200 ' + mrNum(br.pct_above_ma200) + '%'
+    + ' · new high ' + (br.new_high || 0) + ' / new low ' + (br.new_low || 0)
+    + ' · ' + (br.total || 0) + ' emiten</td></tr>';
   h += '</table>';
 
-  // Verdict banner
-  h += '<div style="padding:10px 14px;border-radius:6px;background:' + verdictBg + ';border:1px solid ' + verdictColor + '33">';
-  h += '<div style="font-size:14px;font-weight:700;color:' + verdictColor + '">' + verdict + '</div>';
-  h += '<div style="font-size:10px;color:var(--t3);margin-top:2px">Bull points: ' + bullPoints + ' · Bear points: ' + bearPoints + '</div>';
-
-  // Recommended sectors
-  if (d.sectors && d.sectors.length) {
-    var favored = d.sectors.filter(function(s) { return (s.rs_vs_ihsg || 0) > 0 && (s.fnet_20d || 0) > 0; });
-    if (favored.length) {
-      h += '<div style="font-size:11px;margin-top:6px"><b>Favored sectors:</b> ' + favored.map(function(s) { return '<span style="color:var(--gn);font-weight:600">' + esc(s.sector) + '</span>'; }).join(', ') + '</div>';
-    }
+  // Sektor
+  var sec = it.sectors;
+  if (sec && (sec.top || sec.bottom)) {
+    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Rotasi sektor '
+      + '<span style="font-weight:400;color:var(--t3)">· sama bobot (equal weight) · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
+    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Sektor</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">1D</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">20D</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">RS vs IHSG (1D)</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Emiten</th>'
+      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Terbesar</th></tr>';
+    var rows = (sec.top || []).map(function (x) { return ['▲', x]; })
+      .concat((sec.bottom || []).map(function (x) { return ['▼', x]; }));
+    rows.forEach(function (pair) {
+      var x = pair[1];
+      var click = x.cp_sector ? ' onclick="mrGoSector(\'' + esc(x.cp_sector) + '\')" style="cursor:pointer;color:var(--bl)"' : '';
+      h += '<tr style="border-bottom:1px solid var(--b1)">'
+        + '<td style="padding:3px 6px"' + click + '>' + pair[0] + ' ' + esc(x.sector) + '</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_1d) + '">' + mrSigned(x.chg_1d, '%') + '</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_20d) + '">' + mrSigned(x.chg_20d, '%') + '</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.rs_vs_ihsg_1d) + '">' + mrSigned(x.rs_vs_ihsg_1d, '%') + '</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + (x.members || 0) + '</td>'
+        + '<td style="padding:3px 6px">' + (x.top_stocks || []).map(function (t) {
+          return '<span class="code" onclick="sdOpenTicker(\'' + esc(t) + '\')" style="cursor:pointer;font-size:10px;font-weight:600;margin-right:4px">' + esc(t) + '</span>';
+        }).join('') + '</td></tr>';
+    });
+    h += '</table>';
   }
-  h += '</div>';
+
+  // Konsentrasi kepemilikan ≥1%
+  var o = it.ownership;
+  if (o) {
+    var old = (o.age_days || 0) > 90;
+    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Konsentrasi kepemilikan &ge;1% '
+      + '<span style="font-weight:400;color:' + (old ? 'var(--am)' : 'var(--t3)') + '">· periode ' + esc(o.period_date || '—')
+      + ' (' + (o.age_days == null ? '—' : o.age_days) + ' hari) · ' + (o.codes || 0) + ' emiten · ' + (o.holders || 0) + ' pemegang tercatat</span></div>';
+    h += '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">HHI median <b>' + mrNum(o.hhi_median) + '</b>'
+      + ' · HHI p90 <b>' + mrNum(o.hhi_p90) + '</b>'
+      + ' · emiten sangat terkonsentrasi (HHI &gt; 50): <b>' + (o.very_concentrated || 0) + '</b></div>';
+    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Kode</th>'
+      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Pemegang terbesar</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Porsi</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">HHI</th>'
+      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Pemegang ≥1%</th></tr>';
+    (o.most_concentrated || []).forEach(function (x) {
+      h += '<tr style="border-bottom:1px solid var(--b1)">'
+        + '<td style="padding:3px 6px"><span class="code" onclick="sdOpenTicker(\'' + esc(x.code) + '\')" style="cursor:pointer;font-weight:600">' + esc(x.code) + '</span></td>'
+        + '<td style="padding:3px 6px;font-family:var(--f);color:var(--t2)">' + esc(x.top_holder || '—') + '</td>'
+        + '<td style="padding:3px 6px;text-align:right">' + mrNum(x.top_pct) + '%</td>'
+        + '<td style="padding:3px 6px;text-align:right">' + mrNum(x.hhi) + '</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + (x.holders || 0) + '</td></tr>';
+    });
+    h += '</table>';
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:3px">' + esc(o.note || '') + '</div>';
+    if (old) {
+      h += '<div style="font-size:9px;color:var(--am);margin-top:3px">Data kepemilikan terakhir ' + o.age_days
+        + ' hari lalu — BEI belum menerbitkan periode berikutnya. Bukan angka hari ini.</div>';
+    }
+  } else {
+    h += '<div style="font-size:10px;color:var(--t3);margin-top:10px">Data kepemilikan &ge;1% belum tersedia.</div>';
+  }
   return h;
 }
 
-// ═══ CHARTS ═══
-function mrDrawCharts(d) {
-  // Breadth chart (mini bar chart)
-  var bEl = $('mr-breadth-chart');
-  if (bEl && d.idx && d.idx.breadth_history && d.idx.breadth_history.length) {
-    var c = BL.init(bEl, 'mr-breadth');
-    if (c) {
-      var bh = d.idx.breadth_history;
-      c.setOption({
-        tooltip: { trigger: 'axis', textStyle: { fontSize: 9 } },
-        legend: { top: 2, textStyle: { fontSize: 8 }, data: ['%>MA20', '%>MA50'] },
-        grid: BL.grid({ top: 24, bottom: 20, left: 35, right: 10 }),
-        xAxis: { type: 'category', data: bh.map(function(r) { return r.date; }), axisLabel: { fontSize: 7, formatter: function(v) { return v.substring(5); } } },
-        yAxis: { type: 'value', min: 0, max: 100, axisLabel: { fontSize: 8, formatter: function(v) { return v + '%'; } } },
-        series: [
-          { name: '%>MA20', type: 'line', data: bh.map(function(r) { return r.pct_above_ma20; }), symbol: 'none', lineStyle: { width: 1.5, color: '#0ea5e9' }, itemStyle: { color: '#0ea5e9' } },
-          { name: '%>MA50', type: 'line', data: bh.map(function(r) { return r.pct_above_ma50; }), symbol: 'none', lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
-        ]
-      }, true);
-    }
+// ═══ 5. Coverage strip ═══
+// Menggantikan tombol refresh yang sudah dihapus: sebutkan apa yang tidak kita punya, bernama.
+// Semua daftar di bawah berasal dari payload.coverage — sumber yang SAMA dengan penanda ⏸/◔ di
+// baris monitor, jadi strip dan badge tidak bisa berbeda cerita.
+function mrCovItems(arr, fmt) {
+  return (arr || []).map(fmt).join(' · ');
+}
+function mrCovBucket(label, arr, fmt, tone) {
+  var n = (arr || []).length;
+  var h = '<div style="margin-top:4px;font-size:9px;color:' + (n ? tone : 'var(--t3)') + '">'
+    + '<b>' + label + ' (' + n + ')</b>: ';
+  if (!n) { h += '—</div>'; return h; }
+  var list = mrCovItems(arr, fmt);
+  if (n > 6) {
+    // Daftar panjang jangan mengubur strip: detail dilipat, jumlahnya tetap di depan.
+    h += '<details><summary style="cursor:pointer">' + esc((arr[0].name || arr[0].code)) + ', '
+      + esc((arr[1].name || arr[1].code)) + ', … (klik untuk ' + n + ' nama)</summary>' + esc(list) + '</details></div>';
+    return h;
   }
+  h += esc(list) + '</div>';
+  return h;
 }
 
-// ═══ Navigate: sector → Screener filtered, ticker → Stock Detail ═══
+function mrRenderCoverage(cov) {
+  if (!cov) return '<div style="color:var(--t3);font-size:11px">Blok coverage tidak tersedia.</div>';
+  var c = cov.counts || {};
+  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:4px">'
+    + 'Rujukan sesi <b style="color:var(--t2)">' + esc(cov.ref_date || '—') + '</b> (' + esc(cov.ref_source || '—') + ') · '
+    + (c.series || 0) + ' seri aktif: ' + (c.fresh || 0) + ' segar · ' + (c.stale || 0) + ' basi · '
+    + (c.delayed || 0) + ' terlambat (wajar) · ' + (c.aged || 0) + ' umur lewat kadens · '
+    + (c.unmeasured || 0) + ' umur tak terukur · ' + (c.thin || 0) + ' histori tipis · ' + (c.no_series || 0) + ' tanpa bar</div>';
+
+  var withAge = function (x) { return (x.name || x.code) + ' (' + (x.as_of || '—') + ', ' + (x.age_days == null ? '?' : x.age_days) + ' hr)'; };
+  h += mrCovBucket('Basi — sumber tidak menerbitkan bar', cov.stale, withAge, 'var(--rd)');
+  h += mrCovBucket('Terlambat — masih dalam kebiasaan sumber', cov.delayed, withAge, 'var(--am)');
+  h += mrCovBucket('Umur lewat kadens (lag belum dideklarasikan)', cov.aged, withAge, 'var(--am)');
+  h += mrCovBucket('Tanpa bar sama sekali', cov.no_series, function (x) { return (x.name || x.code); }, 'var(--rd)');
+  h += mrCovBucket('Histori tipis (&lt; 21 bar)', cov.thin, function (x) { return (x.name || x.code) + ' (' + (x.n_bars || 0) + ' bar)'; }, 'var(--t2)');
+  h += mrCovBucket('Umur tidak terukur (bukan tuduhan basi)', cov.unmeasured, withAge, 'var(--t2)');
+  if ((cov.unit_unknown || []).length) {
+    h += mrCovBucket('Satuan level belum dideklarasikan', cov.unit_unknown, function (x) { return (x.name || x.code); }, 'var(--t2)');
+  }
+  if ((cov.unit_identity_missing || cov.unit_missing || []).length) {
+    h += mrCovBucket('Jenis nilai (value_kind) belum dideklarasikan', cov.unit_missing, function (x) { return (x.name || x.code); }, 'var(--am)');
+  }
+
+  // Blok lain yang punya lubang sendiri (kurva, kepemilikan) — disebut di sini, bukan disembunyikan.
+  var ex = cov.extras || {};
+  if (ex.curve) {
+    h += '<div style="margin-top:6px;font-size:9px;color:var(--t3)"><b>Kurva SUN</b>: '
+      + (ex.curve.as_of ? 'tanggal ' + esc(ex.curve.as_of) : 'tidak ada kurva') + ' · '
+      + (ex.curve.coverage ? ex.curve.coverage.present + '/' + ex.curve.coverage.total + ' tenor' : '—')
+      + ' · kesegaran ' + esc(ex.curve.state || '—')
+      + (ex.curve.lag_sessions == null ? '' : ' (' + ex.curve.lag_sessions + ' sesi)') + '</div>';
+  }
+  if (ex.ownership) {
+    h += '<div style="margin-top:2px;font-size:9px;color:' + ((ex.ownership.age_days || 0) > 90 ? 'var(--am)' : 'var(--t3)') + '">'
+      + '<b>Kepemilikan &ge;1%</b>: periode ' + esc(ex.ownership.period_date || '—')
+      + ' · ' + (ex.ownership.age_days == null ? '—' : ex.ownership.age_days) + ' hari'
+      + ((ex.ownership.age_days || 0) > 90 ? ' (BEI belum menerbitkan periode berikutnya)' : '') + '</div>';
+  }
+  h += '<div style="margin-top:6px;font-size:9px;color:var(--t3)">Tidak ada tombol refresh: data diperbarui oleh pipeline. '
+    + 'Halaman ini hanya membaca DB saat dimuat, jadi kalau pipeline berhenti, yang berubah adalah tanggal rujukan di atas — bukan angkanya.</div>';
+  return h;
+}
+
+// ═══ Navigasi: sektor → Screener terfilter, ticker → Stock Detail ═══
 function mrGoSector(cpSector) {
   if (typeof stab === 'function') stab('analysis');
-  setTimeout(function() {
+  setTimeout(function () {
     var btn = document.querySelector('.wt-b[onclick*="screener"]');
     if (btn && typeof anaSubTab === 'function') anaSubTab('screener', btn);
-    setTimeout(function() {
+    setTimeout(function () {
       var formula = 'Sector == "' + cpSector + '" AND C > 0';
       var inp = document.getElementById('afl-input');
       if (inp) {
@@ -660,14 +788,13 @@ function mrGoSector(cpSector) {
   }, 100);
 }
 
-// ═══ MARKET NEWS PANEL ═══
+// ═══ MARKET NEWS PANEL — dipertahankan (feed headline, bukan kartu data) ═══
 var _mrNewsCache = null;
 var _mrNewsCacheTime = 0;
 
 async function mrRenderNews(containerId) {
   var el = document.getElementById(containerId); if (!el) return;
 
-  // Check cache (5 min TTL)
   var now = Date.now();
   if (_mrNewsCache && (now - _mrNewsCacheTime) < 300000) {
     mrRenderNewsData(el, _mrNewsCache);
@@ -698,9 +825,9 @@ function mrRenderNewsData(el, data) {
 
   var h = '';
 
-  // Header row: tabs + refresh
+  // Header row: tabs
   h += '<div style="display:flex;align-items:center;border-bottom:1px solid var(--b1);overflow-x:auto;flex-shrink:0">';
-  cats.forEach(function(cat, i) {
+  cats.forEach(function (cat, i) {
     var n = cat.items ? cat.items.length : 0;
     h += '<button class="mr-news-tab' + (i === 0 ? ' on' : '') + '" onclick="mrNewsTab(' + i + ')" data-idx="' + i + '">';
     h += cat.icon + ' ' + esc(cat.label);
@@ -710,21 +837,21 @@ function mrRenderNewsData(el, data) {
   h += '<div style="flex:1"></div>';
   if (data.fetched_at) {
     var ft = new Date(data.fetched_at);
-    h += '<span style="font-size:9px;color:var(--t3);padding:0 8px">' + ft.toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'}) + '</span>';
+    h += '<span style="font-size:9px;color:var(--t3);padding:0 8px">' + ft.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + '</span>';
   }
   h += '<button class="bei-sort-btn" onclick="mrRefreshNewsFn()" style="font-size:9px;padding:2px 8px;margin-right:4px">↻</button>';
   h += '</div>';
 
   // Panels
-  cats.forEach(function(cat, ci) {
+  cats.forEach(function (cat, ci) {
     h += '<div class="mr-news-panel" id="mr-news-p' + ci + '" style="display:' + (ci === 0 ? 'block' : 'none') + '">';
     if (!cat.items || !cat.items.length) {
       h += '<div style="padding:12px;text-align:center;color:var(--t3);font-size:11px">No headlines</div>';
     } else {
       h += '<div style="max-height:280px;overflow-y:auto">';
-      cat.items.forEach(function(item) {
+      cat.items.forEach(function (item) {
         var ageColor = item.age && item.age.indexOf('m ago') >= 0 ? 'var(--gn)' :
-                       item.age && item.age.indexOf('h ago') >= 0 ? 'var(--bl)' : 'var(--t3)';
+          item.age && item.age.indexOf('h ago') >= 0 ? 'var(--bl)' : 'var(--t3)';
         h += '<a href="' + esc(item.url) + '" target="_blank" rel="noopener" class="mr-news-item">';
         h += '<div class="mr-news-headline">' + esc(item.headline) + '</div>';
         h += '<div class="mr-news-meta">';
@@ -741,210 +868,10 @@ function mrRenderNewsData(el, data) {
 }
 
 function mrNewsTab(idx) {
-  document.querySelectorAll('.mr-news-tab').forEach(function(t) {
+  document.querySelectorAll('.mr-news-tab').forEach(function (t) {
     t.classList.toggle('on', parseInt(t.getAttribute('data-idx')) === idx);
   });
-  document.querySelectorAll('.mr-news-panel').forEach(function(p, i) {
+  document.querySelectorAll('.mr-news-panel').forEach(function (p, i) {
     p.style.display = i === idx ? 'block' : 'none';
   });
-}
-
-// ═══ Monitor lintas aset (kanban t_19f4f0d4) ═══
-// Satu tabel untuk SEMUA seri aktif. Data baru = baris baru, bukan blok UI baru.
-var mrMonitorData = null;
-
-function mrLoadMonitor() {
-  var box = $('mr-monitor-box'); if (!box) return;
-  fetch('/api/idx/monitor').then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) { box.innerHTML = '<div style="color:var(--rd);font-size:11px">monitor gagal dimuat</div>'; return; }
-    mrMonitorData = d;
-    box.innerHTML = mrRenderMonitor(d);
-  }).catch(function () {
-    box.innerHTML = '<div style="color:var(--rd);font-size:11px">monitor gagal dimuat</div>';
-  });
-}
-
-function mrMonLabels(lags, freq) {
-  if (freq === 'M') return ['1M', '3M', '12M'];
-  if (freq === 'Q') return ['1Q', '4Q', '12Q'];
-  if (freq === 'W') return ['1W', '4W', '12W'];
-  return ['1D', '5D', '20D'];
-}
-
-function mrMonNum(v) {
-  if (v === null || v === undefined || isNaN(v)) return '—';
-  return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function mrMonPct(v, mode) {
-  if (v === null || v === undefined || isNaN(v)) return '<span style="color:var(--t3)">—</span>';
-  var c = v > 0 ? 'var(--gn)' : v < 0 ? 'var(--rd)' : 'var(--t2)';
-  var body = (v > 0 ? '+' : '') + Number(v).toFixed(2);
-  // mode 'delta': suku bunga/neraca dilaporkan sebagai selisih (bp, USD bn, poin),
-  // bukan persen — persen pada nilai yang bisa negatif menyesatkan.
-  return '<span style="color:' + c + '">' + body + (mode === 'delta' ? '' : '%') + '</span>';
-}
-
-function mrRenderMonitor(d) {
-  var order = ['global_index', 'currency', 'rates', 'macro', 'commodity', 'commodity_unverified', 'other'];
-  var title = {
-    global_index: 'Indeks Global', currency: 'Valuta', rates: 'Suku Bunga & Kurva',
-    macro: 'Makro Indonesia', commodity: 'Komoditas', commodity_unverified: 'Komoditas (belum terverifikasi)',
-    other: 'Lain-lain'
-  };
-  var freqLabel = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan' };
-  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">' +
-    'Level &amp; perubahan per horizon sesuai kadensi seri. Kolom as-of = tanggal acuan data, bukan tanggal hari ini.</div>';
-
-  order.forEach(function (g) {
-    var items = (d.groups || {})[g]; if (!items || !items.length) return;
-    var freq = items[0].freq, lab = mrMonLabels(items[0].lags, freq), mode = items[0].mode || 'pct';
-    if (mode === 'delta') lab = lab.map(function (x) { return '\u0394' + x; });
-    h += '<div style="margin:10px 0 4px;font-size:10px;font-weight:700;color:var(--t1)">' + title[g] +
-      ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri · ' + (freqLabel[freq] || freq) + '</span></div>';
-    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">' +
-      '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>' +
-      '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>' +
-      lab.map(function (x) { return '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">' + x + '</th>'; }).join('') +
-      '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">' + (mode === 'delta' ? '\u0394 YTD' : 'YTD') + '</th>' +
-      '<th style="text-align:right;padding:3px 6px;font-weight:600">%ile 1Y</th>' +
-      '<th style="text-align:right;padding:3px 6px;font-weight:600">as-of</th></tr>';
-    items.forEach(function (it) {
-      var stale = it.stale_days > (it.freq === 'D' ? 5 : it.freq === 'W' ? 12 : it.freq === 'M' ? 45 : 130);
-      h += '<tr style="border-bottom:1px solid var(--b1)' + (stale ? ';opacity:.6' : '') + '">';
-      h += '<td style="padding:3px 6px;font-family:var(--f)">' + esc(it.name || it.code) +
-        (stale ? ' <span style="color:var(--am)">⏸</span>' : '') + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null ? '' : it.last) + '">' + mrMonNum(it.last) + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 === null ? '' : it.chg_1) + '">' + mrMonPct(it.chg_1, it.mode) + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_5 === null ? '' : it.chg_5) + '">' + mrMonPct(it.chg_5, it.mode) + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_20 === null ? '' : it.chg_20) + '">' + mrMonPct(it.chg_20, it.mode) + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_ytd === null ? '' : it.chg_ytd) + '">' + mrMonPct(it.chg_ytd, it.mode) + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right;color:var(--t2)" data-v="' + (it.pctile_1y === null ? '' : it.pctile_1y) + '">' + (it.pctile_1y === null ? '—' : it.pctile_1y + '%') + '</td>';
-      h += '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + esc(it.as_of || '') + '</td>';
-      h += '</tr>';
-    });
-    h += '</table>';
-  });
-
-  var cov = d.coverage || { stale: [], thin: [] };
-  var staleN = (cov.stale || []).length, thinN = (cov.thin || []).length;
-  h += '<div style="margin-top:10px;font-size:9px;color:var(--t3)">Cakupan: ' +
-    ((cov.stale || []).length ? '<span style="color:var(--am)">' + staleN + ' seri basi</span>' : '0 seri basi') +
-    ' · ' + (thinN ? thinN + ' seri tanpa data' : '0 seri tanpa data') + '</div>';
-  if (staleN) {
-    h += '<div style="font-size:9px;color:var(--t3);margin-top:3px">' +
-      cov.stale.slice(0, 12).map(function (s) { return esc(s.name || s.code) + ' (' + s.as_of + ', ' + s.days + ' hari)'; }).join(' · ') + '</div>';
-  }
-  return h;
-}
-
-// ═══ Regime bar: 4 skor + komposit (kanban t_19f4f0d4) ═══
-function mrLoadRegimeBar() {
-  var box = $('mr-regimebar'); if (!box) return;
-  fetch('/api/idx/regime-score').then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) { box.innerHTML = ''; return; }
-    box.innerHTML = mrRenderRegimeBar(d);
-  }).catch(function () { box.innerHTML = ''; });
-}
-
-function mrScoreColor(v) {
-  if (v === null || v === undefined) return 'var(--t3)';
-  return v >= 65 ? 'var(--gn)' : v >= 45 ? 'var(--am)' : 'var(--rd)';
-}
-
-function mrRenderRegimeBar(d) {
-  var s = d.scores || {}, l = d.labels || {}, c = d.components || {};
-  var tiles = [
-    { k: 'risk', name: 'Risk Appetite', sub: 'aset risiko naik 20P: ' + (c.risk_up_share === null ? '—' : c.risk_up_share + '%') },
-    { k: 'external', name: 'Eksternal', sub: 'IDR ' + (c.usdidr_20d === null ? '—' : (c.usdidr_20d > 0 ? '+' : '') + c.usdidr_20d + '%') + ' · DXY ' + (c.dxy_20d === null ? '—' : (c.dxy_20d > 0 ? '+' : '') + c.dxy_20d + '%') },
-    { k: 'liquidity', name: 'Likuiditas', sub: 'SRBI 1M ' + (c.srbi_total_1m === null ? '—' : (c.srbi_total_1m > 0 ? '+' : '') + c.srbi_total_1m + '%') + ' · BI ' + (c.bi_rate_delta_3m === null ? '—' : (c.bi_rate_delta_3m > 0 ? '+' : '') + c.bi_rate_delta_3m) },
-    { k: 'equity', name: 'Equity IDX', sub: 'breadth ' + (c.breadth_ma50 === null ? '—' : c.breadth_ma50 + '%') + ' · IHSG 20D ' + (c.ihsg_20d === null ? '—' : (c.ihsg_20d > 0 ? '+' : '') + c.ihsg_20d + '%') },
-  ];
-  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch">';
-  tiles.forEach(function (t) {
-    var v = s[t.k];
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:150px;flex:1">';
-    h += '<div style="font-size:9px;color:var(--t3)">' + t.name + '</div>';
-    h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(v) + '">' + (v === null ? '—' : v) +
-      ' <span style="font-size:9px;font-weight:400">' + (l[t.k] || '') + '</span></div>';
-    h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">' + t.sub + '</div>';
-    h += '</div>';
-  });
-  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:130px">';
-  h += '<div style="font-size:9px;color:var(--t3)">Komposit</div>';
-  h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(s.composite) + '">' + (s.composite === null ? '—' : s.composite) + '</div>';
-  h += '<div style="font-size:9px;color:var(--t3)">' + (l.composite || '') + ' · ' + esc(d.as_of || '') + '</div>';
-  h += '</div></div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Skor 0-100: &ge;65 positif · 45-65 netral · &lt;45 negatif. Komponen tiap skor ditampilkan di bawah angkanya, bukan kotak hitam.</div>';
-  return h;
-}
-
-// ═══ Internals: rotasi sektor + konsentrasi kepemilikan (t_19f4f0d4) ═══
-function mrLoadInternals() {
-  var box = $('mr-internals-box'); if (!box) return;
-  fetch('/api/idx/internals-extra').then(function (r) { return r.json(); }).then(function (d) {
-    box.innerHTML = (d && d.ok) ? mrRenderInternals(d) : '<div style="color:var(--rd);font-size:11px">internals gagal dimuat</div>';
-  }).catch(function () { box.innerHTML = '<div style="color:var(--rd);font-size:11px">internals gagal dimuat</div>'; });
-}
-
-function mrRenderInternals(d) {
-  var h = '';
-  var s = d.sectors || { top: [], bottom: [] };
-  h += '<div style="font-size:10px;font-weight:700;margin-bottom:4px">Rotasi sektor <span style="font-weight:400;color:var(--t3)">· rata-rata 20D, min 5 emiten · ' + esc(d.as_of || '') + '</span></div>';
-  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-  var rows = (s.top || []).map(function (x) { return ['▲', x]; })
-    .concat((s.bottom || []).map(function (x) { return ['▼', x]; }));
-  rows.forEach(function (pair) {
-    var x = pair[1];
-    h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">' + pair[0] + '</td>' +
-      '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.sector) + '</td>' +
-      '<td style="padding:3px 6px;text-align:right">' + Number(x.avg20).toFixed(2) + '%</td>' +
-      '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + x.n + ' emiten</td></tr>';
-  });
-  h += '</table>';
-
-  var o = d.ownership;
-  if (o) {
-    var age = Math.round((Date.now() - new Date(o.period).getTime()) / 86400000);
-    h += '<div style="font-size:10px;font-weight:700;margin:10px 0 4px">Konsentrasi kepemilikan &ge;1% ' +
-      '<span style="font-weight:400;color:' + (age > 90 ? 'var(--am)' : 'var(--t3)') + '">· periode ' + esc(o.period) +
-      ' (' + age + ' hari) · ' + o.issuers + ' emiten</span></div>';
-    h += '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">Porsi asing dari total kepemilikan &ge;1% yang tercatat: <b>' +
-      (o.foreign_share_of_tracked === null ? '—' : o.foreign_share_of_tracked.toFixed(2) + '%') + '</b></div>';
-    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-    h += '<tr style="color:var(--t3)"><th style="text-align:left;padding:3px 6px">Paling terkonsentrasi</th><th style="text-align:right;padding:3px 6px">Top holder</th><th style="text-align:left;padding:3px 6px">Asing terbesar</th><th style="text-align:right;padding:3px 6px">Porsi asing</th></tr>';
-    var a = o.most_concentrated || [], b = o.biggest_foreign || [];
-    for (var i = 0; i < Math.max(a.length, b.length); i++) {
-      var ra = a[i], rb = b[i];
-      h += '<tr style="border-bottom:1px solid var(--b1)">' +
-        '<td style="padding:3px 6px">' + (ra ? esc(ra.code) : '') + '</td>' +
-        '<td style="padding:3px 6px;text-align:right">' + (ra ? Number(ra.top_pct).toFixed(2) + '%' : '') + '</td>' +
-        '<td style="padding:3px 6px">' + (rb ? esc(rb.code) : '') + '</td>' +
-        '<td style="padding:3px 6px;text-align:right">' + (rb ? Number(rb.foreign_pct).toFixed(2) + '%' : '') + '</td></tr>';
-    }
-    h += '</table>';
-    if (age > 90) h += '<div style="font-size:9px;color:var(--am);margin-top:3px">Data kepemilikan terakhir '+age+' hari lalu — BEI belum menerbitkan periode berikutnya. Bukan angka hari ini.</div>';
-  } else {
-    h += '<div style="font-size:10px;color:var(--t3);margin-top:10px">Data kepemilikan &ge;1% belum tersedia.</div>';
-  }
-  return h;
-}
-
-function mrSortTable(th) {
-  var table = th.closest('table'); if (!table) return;
-  var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
-  var asc = th.getAttribute('data-asc') !== '1';
-  th.setAttribute('data-asc', asc ? '1' : '0');
-  var body = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(function (r) { return r.querySelector('td'); });
-  body.sort(function (a, b) {
-    var ca = a.children[idx], cb = b.children[idx];
-    var va = ca && ca.getAttribute('data-v') !== null && ca.getAttribute('data-v') !== '' ? parseFloat(ca.getAttribute('data-v')) : NaN;
-    var vb = cb && cb.getAttribute('data-v') !== null && cb.getAttribute('data-v') !== '' ? parseFloat(cb.getAttribute('data-v')) : NaN;
-    if (isNaN(va) && isNaN(vb)) return 0;
-    if (isNaN(va)) return 1;
-    if (isNaN(vb)) return -1;
-    return asc ? va - vb : vb - va;
-  });
-  body.forEach(function (r) { table.appendChild(r); });
 }
