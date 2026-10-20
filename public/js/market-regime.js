@@ -340,7 +340,9 @@ function mrRenderMonitor(mon) {
 }
 
 function mrMonitorTable(rows, caps, isPct, unitWord) {
-  var h = '<table class="mr-mon" style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+  var h = '<table class="mr-mon" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
+    + '<colgroup><col style="width:38%"><col style="width:14%">'
+    + '<col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>';
   h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>';
@@ -382,7 +384,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
       + (it.ref_date ? ' · rujukan sesi ' + it.ref_date : '')
       + (it.source ? ' · sumber ' + it.source : '');
     h += '<tr class="mr-row" data-state="' + st + '" data-asof="' + esc(it.as_of || '') + '" style="border-bottom:1px solid var(--b1)">';
-    h += '<td style="padding:3px 6px;font-family:var(--f)" title="' + esc(rowTitle) + '">' + esc(it.name || it.code) + mark + unitTag + asofNote + '</td>';
+    h += '<td style="padding:3px 6px;font-family:var(--f);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(rowTitle) + '">' + esc(it.name || it.code) + mark + unitTag + asofNote + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null || it.last === undefined ? '' : it.last) + '">' + lastCell + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 == null ? '' : it.chg_1) + '">' + mrMonChg(it.chg_1, isPct, neutral) + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_5 == null ? '' : it.chg_5) + '">' + mrMonChg(it.chg_5, isPct, neutral) + '</td>';
