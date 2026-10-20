@@ -69,7 +69,7 @@ function renderMR(el) {
   // Data skor tetap ada di payload /api/idx/cross-asset (field `regime`).
 
   // ── strip narasi harian ──
-  h += mrSection('·', '📌 Berubah hari ini', mrRenderChanged(d.changed_today));
+  // "Berubah hari ini" tidak ditampilkan (permintaan owner 20 Okt 2026).
 
   // ── 2. Monitor lintas aset ──
   h += mrSection('2', '📋 Monitor lintas aset', mrRenderMonitor(d.monitor));
