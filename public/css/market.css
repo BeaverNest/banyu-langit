@@ -196,3 +196,9 @@
 .mkt-sec{font-family:var(--fm);font-size:10px;padding:3px 7px;border-radius:3px;background:var(--bgH);color:var(--t2)}
 .mkt-sec.up{color:var(--gn)} .mkt-sec.dn{color:var(--rd)}
 .mkt-foot{padding:6px 10px;font-size:9px;color:var(--t3);font-family:var(--fm)}
+
+/* ═══ MARKET REGIME — drill-down baris monitor (kanban t_651e530e) ═══ */
+table.mr-mon tr.mr-row{cursor:pointer}
+table.mr-mon tr.mr-row:hover>td{background:var(--bgH)}
+table.mr-mon tr.mr-row[data-open="1"]>td{background:var(--bgH)}
+table.mr-mon tr.mr-detail>td{background:var(--bg1)}

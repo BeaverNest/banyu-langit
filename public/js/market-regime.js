@@ -9,7 +9,9 @@
 // Struktur (5 lapis + 1 strip narasi):
 //   1. Regime bar         — 4 skor, tiap skor membawa tanggal acuan + status kesegaran
 //   ·  Berubah hari ini   — 3-5 baris narasi
-//   2. Monitor lintas aset — satu baris per seri `custom_tickers`; data baru = baris baru
+//   2. Monitor lintas aset — satu baris per seri `custom_tickers`; data baru = baris baru.
+//      Klik satu baris = panel detail seri itu (as-of + umur, sumber, n_bars, rentang 1Y, spark)
+//      dari payload yang sama — 0 request per klik (kartu t_651e530e).
 //   3. Kurva & likuiditas  — 11 tenor SUN (Δ1D/1W/1M) + slope + SRBI/JISDOR
 //   4. Internals IDX       — breadth, foreign flow, tape, sektor, konsentrasi ≥1%
 //   5. Coverage            — seri basi/hilang/terlambat, bernama + umur
@@ -27,6 +29,8 @@
 
 var mrData = null;
 var mrLoading = false;
+// Indeks baris -> item payload. Diisi saat render; dipakai klik baris (mrRowDetail).
+var mrSeriesMap = {};
 
 function loadMarketRegime() {
   var el = $('mr-content'); if (!el) return;
@@ -223,7 +227,7 @@ function mrRenderMonitor(mon) {
   mon.groups.forEach(function (g) { nRows += (g.items || []).length; });
 
   var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">'
-    + nRows + ' seri · ' + mon.groups.length + ' kelas aset</div>';
+    + nRows + ' seri · ' + mon.groups.length + ' kelas aset · klik baris = detail</div>';
 
   // Blok kecil terpisah bikin tidak rapi: 'commodity_unverified' digabung ke Komoditas.
   var groups = [];
@@ -319,7 +323,11 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
       + (it.age_days != null ? ' · umur ' + it.age_days + ' hari' : '')
       + (it.ref_date ? ' · rujukan sesi ' + it.ref_date : '')
       + (it.source ? ' · sumber ' + it.source : '');
-    h += '<tr class="mr-row" data-state="' + st + '" data-asof="' + esc(it.as_of || '') + '" style="border-bottom:1px solid var(--b1)">';
+    var rowKey = (it.category || '') + '|' + (it.code || '');
+    mrSeriesMap[rowKey] = it;
+    h += '<tr class="mr-row" data-state="' + st + '" data-asof="' + esc(it.as_of || '') + '"'
+      + ' data-key="' + esc(rowKey) + '" onclick="mrRowDetail(this)"'
+      + ' style="border-bottom:1px solid var(--b1)">';
     h += '<td style="padding:3px 6px;font-family:var(--f);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(rowTitle) + '">' + esc(it.name || it.code) + mark + unitTag + asofNote + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.last === null || it.last === undefined ? '' : it.last) + '">' + lastCell + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_1 == null ? '' : it.chg_1) + '">' + mrMonChg(it.chg_1, isPct, neutral) + '</td>';
@@ -333,12 +341,127 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
   return h;
 }
 
+// ═══ Drill-down baris monitor (kartu t_651e530e) ═══
+// Satu klik membuka satu panel TEPAT di bawah baris yang diklik. Semua field yang ditampilkan
+// sudah ada di payload /api/idx/cross-asset (`as_of`, `age_days`, `source`, `n_bars`, `first_date`,
+// `win_1y_min/max`, `spark`) — jadi 0 request per klik dan tidak ada endpoint tambahan.
+// Kenapa panel dan bukan kolom: grid monitor berhenti di YTD (aturan owner — kolom as-of/sumber
+// dan %ile 1Y tidak kembali); provenance dibaca di panel, bukan di grid. `pctile_1y` SENGAJA
+// tidak dicetak meski ada di payload, karena dialah kolom yang dihapus owner (2796faf).
+// Degradasi wajib: status 'no_series'/n_bars 0 -> "tidak ada seri"; n_bars < 21 -> "riwayat <
+// 21 bar"; spark kosong/<2 titik -> "spark tidak tersedia". Tidak ada panel kosong, tidak throw.
+var MR_ROW_TEXT = {
+  fresh:      ['segar',                               'var(--gn)'],
+  stale:      ['basi — sumber tidak menerbitkan bar',  'var(--rd)'],
+  aged:       ['umur lewat kadens',                    'var(--am)'],
+  delayed:    ['terlambat (wajar untuk sumber ini)',    'var(--t3)'],
+  unmeasured: ['umur tak terukur',                     'var(--t3)'],
+  missing:    ['tidak ada seri',                       'var(--rd)']
+};
+
+function mrCloseSeriesDetail() {
+  var openRows = document.querySelectorAll('tr.mr-detail');
+  for (var i = 0; i < openRows.length; i++) openRows[i].parentNode.removeChild(openRows[i]);
+  var sel = document.querySelectorAll('table.mr-mon tr.mr-row[data-open="1"]');
+  for (var j = 0; j < sel.length; j++) sel[j].removeAttribute('data-open');
+}
+
+function mrRowDetail(tr) {
+  var key = tr.getAttribute('data-key') || '';
+  var it = mrSeriesMap[key];
+  if (!it) return;                          // baris tanpa item payload: diam, jangan error
+  var wasOpen = tr.getAttribute('data-open') === '1';
+  mrCloseSeriesDetail();
+  if (wasOpen) return;                      // klik kedua pada baris yang sama = tutup
+  tr.setAttribute('data-open', '1');
+  var row = document.createElement('tr');
+  row.className = 'mr-detail';
+  row.setAttribute('data-detail', '1');
+  row.setAttribute('data-key', key);
+  row.innerHTML = '<td colspan="6" style="padding:8px 10px;background:var(--bg1);'
+    + 'border-bottom:1px solid var(--b2);font-family:var(--fm)">' + mrSeriesDetailHtml(it) + '</td>';
+  tr.parentNode.insertBefore(row, tr.nextSibling);
+}
+
+// Sparkline = SVG poligraf inline, bukan chart library: 30 titik tidak butuh kanvas, dan
+// import ECharts untuk 78 baris (bila semua dibuka) akan menambah beban render tanpa manfaat.
+function mrSparkSvg(vals) {
+  var w = 240, hgt = 34, pad = 2;
+  var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+  var span = (max - min) || 1;
+  var pts = vals.map(function (v, i) {
+    var x = pad + (w - 2 * pad) * (vals.length <= 1 ? 0 : i / (vals.length - 1));
+    var y = hgt - pad - (hgt - 2 * pad) * ((v - min) / span);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  var col = vals[vals.length - 1] >= vals[0] ? 'var(--gn)' : 'var(--rd)';
+  return '<svg width="' + w + '" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '"'
+    + ' style="display:block;margin-top:5px" aria-label="sparkline" role="img">'
+    + '<polyline fill="none" stroke="' + col + '" stroke-width="1.4" points="' + pts + '"></polyline></svg>';
+}
+
+function mrSeriesDetailHtml(it) {
+  var st = mrRowState(it);
+  var stp = MR_ROW_TEXT[st] || MR_ROW_TEXT.unmeasured;
+  var n = (it.n_bars == null) ? 0 : it.n_bars;
+  var spark = (Array.isArray(it.spark) ? it.spark : []).filter(function (v) {
+    return v !== null && v !== undefined && !isNaN(v);
+  });
+
+  // data-* dipakai uji (dan reviewer) supaya angka di panel bisa dicek tanpa membaca teks.
+  var h = '<div class="mr-series-detail" data-code="' + esc(it.code || '') + '"'
+    + ' data-status="' + esc(st) + '" data-n-bars="' + n + '"'
+    + ' data-win-min="' + (it.win_1y_min == null ? '' : it.win_1y_min) + '"'
+    + ' data-win-max="' + (it.win_1y_max == null ? '' : it.win_1y_max) + '"'
+    + ' data-spark-n="' + spark.length + '">';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline">'
+    + '<b style="font-size:11px;color:var(--t1)">' + esc(it.name || it.code || '—') + '</b>'
+    + '<span style="font-size:9px;color:var(--t3)">' + esc(it.code || '') + '</span>'
+    + '<span style="font-size:9px;color:' + stp[1] + '">' + esc(stp[0]) + '</span></div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:9px;color:var(--t3);margin-top:3px">'
+    + '<span>as-of <b style="color:var(--t2)">' + esc(it.as_of || '—') + '</b>'
+    + (it.age_days == null ? '' : ' · umur <b style="color:var(--t2)">' + it.age_days + ' hari</b>') + '</span>'
+    + '<span>sumber <b style="color:var(--t2)">' + esc(it.source || '—') + '</b></span>'
+    + '<span>n_bars <b style="color:var(--t2)">' + n + '</b>'
+    + (it.first_date ? ' (' + esc(it.first_date) + ' &rarr; ' + esc(it.as_of || '—') + ')' : '') + '</span>'
+    + '<span>satuan <b style="color:var(--t2)">' + esc(it.unit || '—') + '</b></span>'
+    + '<span>terakhir <b style="color:var(--t2)">' + mrNum(it.last) + '</b></span>'
+    + '<span>win_1y <b style="color:var(--t2)">' + mrNum(it.win_1y_min) + ' – ' + mrNum(it.win_1y_max) + '</b></span>'
+    + '</div>';
+
+  if (st === 'missing' || n === 0) {
+    h += '<div style="font-size:10px;color:var(--rd);margin-top:5px">tidak ada seri: '
+      + esc(it.code || '') + ' belum punya bar sama sekali, jadi tidak ada rentang 1Y maupun '
+      + 'spark untuk digambar.</div></div>';
+    return h;
+  }
+  if (n < 21) {
+    h += '<div style="font-size:9px;color:var(--am);margin-top:4px">riwayat &lt; 21 bar (' + n
+      + ' bar): rentang 1Y dan YTD belum bermakna untuk seri ini.</div>';
+  }
+  if (spark.length < 2) {
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">spark tidak tersedia ('
+      + spark.length + ' titik di payload)</div>';
+  } else {
+    h += mrSparkSvg(spark);
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">spark ' + spark.length
+      + ' bar terakhir · rentang grafik ' + mrNum(Math.min.apply(null, spark)) + ' – '
+      + mrNum(Math.max.apply(null, spark)) + '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
 function mrSortTable(th) {
   var table = th.closest('table'); if (!table) return;
+  // Baris panel detail hidup DI DALAM tabel yang sama: tutup dulu. Kalau tidak, panelnya ikut
+  // jadi anggota array sortir dan tertinggal di posisi lama setelah baris induknya pindah —
+  // kelas cacat yang sama dengan baris keluar dari tbody (temuan sena r3).
+  mrCloseSeriesDetail();
   var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
   var asc = th.getAttribute('data-asc') !== '1';
   th.setAttribute('data-asc', asc ? '1' : '0');
-  var body = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(function (r) { return r.querySelector('td'); });
+  var body = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(function (r) { return r.querySelector('td') && r.getAttribute('data-detail') !== '1'; });
   body.sort(function (a, b) {
     var ca = a.children[idx], cb = b.children[idx];
     var rawA = ca ? ca.getAttribute('data-v') : null;
