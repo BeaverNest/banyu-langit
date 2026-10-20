@@ -416,7 +416,10 @@ function mrSortTable(th) {
     if (isNaN(vb)) return -1;
     return asc ? va - vb : vb - va;
   });
-  body.forEach(function (r) { table.appendChild(r); });
+  // Baris HARUS masuk ke <tbody>, bukan ke <table>: appendChild ke <table> mengeluarkan
+  // baris dari tbody (terukur: tbody rows 12 -> 0 setelah klik header; temuan sena r3).
+  var tb = (table.tBodies && table.tBodies[0]) ? table.tBodies[0] : table;
+  body.forEach(function (r) { tb.appendChild(r); });
 }
 
 // ═══ 3a. Likuiditas: SRBI & JISDOR ═══
