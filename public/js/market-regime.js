@@ -702,40 +702,8 @@ function mrRenderInternals(it) {
     h += '</table>';
   }
 
-  // Konsentrasi kepemilikan ≥1%
-  var o = it.ownership;
-  if (o) {
-    var old = (o.age_days || 0) > 90;
-    h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Konsentrasi kepemilikan &ge;1% '
-      + '<span style="font-weight:400;color:' + (old ? 'var(--am)' : 'var(--t3)') + '">· periode ' + esc(o.period_date || '—')
-      + ' (' + (o.age_days == null ? '—' : o.age_days) + ' hari) · ' + (o.codes || 0) + ' emiten · ' + (o.holders || 0) + ' pemegang tercatat</span></div>';
-    h += '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">HHI median <b>' + mrNum(o.hhi_median) + '</b>'
-      + ' · HHI p90 <b>' + mrNum(o.hhi_p90) + '</b>'
-      + ' · emiten sangat terkonsentrasi (HHI &gt; 50): <b>' + (o.very_concentrated || 0) + '</b></div>';
-    h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
-      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Kode</th>'
-      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Pemegang terbesar</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Porsi</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">HHI</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Pemegang ≥1%</th></tr>';
-    (o.most_concentrated || []).forEach(function (x) {
-      h += '<tr style="border-bottom:1px solid var(--b1)">'
-        + '<td style="padding:3px 6px"><span class="code" onclick="sdOpenTicker(\'' + esc(x.code) + '\')" style="cursor:pointer;font-weight:600">' + esc(x.code) + '</span></td>'
-        + '<td style="padding:3px 6px;font-family:var(--f);color:var(--t2)">' + esc(x.top_holder || '—') + '</td>'
-        + '<td style="padding:3px 6px;text-align:right">' + mrNum(x.top_pct) + '%</td>'
-        + '<td style="padding:3px 6px;text-align:right">' + mrNum(x.hhi) + '</td>'
-        + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + (x.holders || 0) + '</td></tr>';
-    });
-    h += '</table>';
-    h += '<div style="font-size:9px;color:var(--t3);margin-top:3px">' + esc(o.note || '') + '</div>';
-    if (old) {
-      h += '<div style="font-size:9px;color:var(--am);margin-top:3px">Data kepemilikan terakhir ' + o.age_days
-        + ' hari lalu — BEI belum menerbitkan periode berikutnya. Bukan angka hari ini.</div>';
-    }
-  } else {
-    h += '<div style="font-size:10px;color:var(--t3);margin-top:10px">Data kepemilikan &ge;1% belum tersedia.</div>';
-  }
+  // Konsentrasi kepemilikan ≥1% tidak ditampilkan (permintaan owner 20 Okt 2026).
+  // Data tetap ada di payload /api/idx/internals-extra (field `ownership`).
   return h;
 }
 
