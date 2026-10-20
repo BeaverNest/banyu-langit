@@ -350,7 +350,6 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
   });
   h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
     + (isPct ? 'YTD' : 'Δ YTD') + '</th>'
-    + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">%ile 1Y</th>'
     + '</tr>';
 
   rows.forEach(function (it) {
@@ -390,8 +389,6 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_20 == null ? '' : it.chg_20) + '">' + mrMonChg(it.chg_20, isPct, neutral) + '</td>';
     h += '<td style="padding:3px 6px;text-align:right" data-v="' + (it.chg_ytd == null || it.n_bars < 2 ? '' : it.chg_ytd) + '">'
       + (it.n_bars < 2 ? '<span style="color:var(--t3)" title="seri baru punya 1 bar: YTD tidak bermakna">—</span>' : mrMonChg(it.chg_ytd, isPct, neutral)) + '</td>';
-    h += '<td style="padding:3px 6px;text-align:right;color:var(--t2)" data-v="' + (it.pctile_1y == null ? '' : it.pctile_1y) + '">'
-      + (it.pctile_1y == null ? '—' : mrNum(it.pctile_1y) + '%') + '</td>';
     h += '</tr>';
   });
   h += '</table>';
