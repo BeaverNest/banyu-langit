@@ -5890,12 +5890,24 @@ module.exports = function(upload) {
       const verdict = { score: verdictScore, label: verdictLabel, color: verdictColor, bull: bullSignals, bear: bearSignals, total: totalSignals, signals, warnings };
 
       // ── Build chart data: full history (idx_daily sejak 2020) ──
-      const chartData = data.map((r, i, arr) => ({
-        date: r.trade_date, open: r.ao, high: r.ah, low: r.al, close: r.ac,
-        volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0,
-        value: r.value || null, fbuy: r.foreign_buy || 0, fsell: r.foreign_sell || 0,
-        tradeable: r.tradeable_shares || 0, bid_price: r.bid || 0, offer_price: r.offer || 0
-      }));
+      // Hari TANPA transaksi (suspensi/iliquid) tetap ditampilkan di chart — jangan dihapus —
+      // tapi OHLC-nya dinormalkan ke close supaya low=0 tidak menarik sumbu ke nol.
+      // Fakta "tidak diperdagangkan" disimpan di no_trade untuk label/legenda.
+      const chartData = data.map((r) => {
+        const noTrade = Number(r.volume || 0) === 0 && (!r.al || r.al <= 0);
+        const px = r.ac;
+        return {
+          date: r.trade_date,
+          open: noTrade ? px : r.ao,
+          high: noTrade ? px : r.ah,
+          low: noTrade ? px : r.al,
+          close: r.ac,
+          no_trade: noTrade,
+          volume: r.volume, frequency: r.frequency || 0, fnet: r.fnet, bid_vol: r.bid_vol || 0, offer_vol: r.offer_vol || 0,
+          value: r.value || null, fbuy: r.foreign_buy || 0, fsell: r.foreign_sell || 0,
+          tradeable: r.tradeable_shares || 0, bid_price: r.bid || 0, offer_price: r.offer || 0
+        };
+      });
 
       const adChartData = adLine.slice(-500).map(r => ({ date: r.date, ad: r.ad }));
 
