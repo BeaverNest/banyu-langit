@@ -295,6 +295,13 @@ db.exec(`
     rows INTEGER DEFAULT 0,
     written INTEGER DEFAULT 0,
     endpoint TEXT,
+    -- writer = SIAPA yang menulis baris ini (kanban t_b7a0fdb1). Berbeda dari kolom endpoint
+    -- (nama ROUTE HTTP, dipakai semua pemanggil: terukur 20 Okt 2026, rail dan cron eko
+    -- sama-sama 'POST /custom/upsert' — jadi endpoint tidak bisa membedakan penulis).
+    -- Nilai sekarang: 'rail:investing' | 'rail:sun' (dipasang scripts/daily-rails.sh
+    -- sebagai env RAIL_WRITER). NULL = penulis tidak menyatakan identitasnya (cron eko,
+    -- idx-api, tarikan manual) — dan itu artinya TIDAK dihitung sebagai bukti penjadwal.
+    writer TEXT,
     status TEXT NOT NULL DEFAULT 'ok',
     error TEXT
   );
@@ -927,6 +934,20 @@ try {
   if (!ctCols3.includes('lag_basis')) db.exec("ALTER TABLE custom_tickers ADD COLUMN lag_basis TEXT");
   if (!ctCols3.includes('lag_declared_at')) db.exec('ALTER TABLE custom_tickers ADD COLUMN lag_declared_at TEXT');
 } catch (e) { console.error('Migration custom_tickers.lag:', e.message); }
+
+// writer = penulis baris tarikan (kanban t_b7a0fdb1).
+// Kenapa perlu kolom baru, bukan kolom `endpoint` yang sudah ada: `endpoint` mencatat ROUTE
+// HTTP, dan SEMUA pemanggil /custom/upsert menulis string yang sama ('POST /custom/upsert').
+// Terukur 2026-10-20: rail SUN (19:03 WIB) dan cron eko `eko-rates-daily` (19:20 WIB) menulis
+// kode ID1M..ID30Y dengan endpoint identik, sehingga penjaga liveness tidak bisa membedakan
+// penjadwal dari penulis lain — cron eko memenuhi 12 dari 23 tarikan "rail SUN" malam itu.
+// Tanpa DEFAULT: baris lama tetap NULL ("penulis tidak menyatakan identitas"), dan penjaga
+// memperlakukan NULL sebagai BUKAN bukti penjadwal. Backfill sengaja tidak dilakukan: kita
+// tidak tahu siapa yang menulis baris lama, dan menebaknya persis kesalahan yang ditutup.
+try {
+  const cpCols = db.prepare('PRAGMA table_info(custom_pull_log)').all().map(c => c.name);
+  if (!cpCols.includes('writer')) db.exec('ALTER TABLE custom_pull_log ADD COLUMN writer TEXT');
+} catch (e) { console.error('Migration custom_pull_log.writer:', e.message); }
 
 // Metadata satuan per seri (kanban t_19f4f0d4). Dipakai monitor lintas aset: satu tabel untuk
 // SEMUA seri, jadi blok UI tidak boleh menebak apakah perubahan harga masuk akal dihitung

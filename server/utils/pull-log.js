@@ -56,6 +56,29 @@
 
 const STATUSES = ['ok', 'no_data', 'error'];
 
+// ─── PENANDA PENULIS (kanban t_b7a0fdb1) ───
+// Siapa yang menulis satu baris tarikan dicatat TERPISAH dari `endpoint`, karena endpoint
+// hanya nama route ('POST /custom/upsert') dan dipakai SEMUA pemanggil. Nilai yang dipakai
+// pemanggil sekarang: 'rail:investing' dan 'rail:sun' (market-rails/scripts/daily-rails.sh
+// meneruskan env RAIL_WRITER ke skrip rail, skrip rail mengirimnya di body POST).
+//
+// Aturan: NULL = penulis tidak menyatakan identitas. NULL TIDAK PERNAH dianggap bukti
+// penjadwal oleh penjaga liveness — itu inti perbaikan kartu ini: cron eko
+// `eko-rates-daily` memanggil bi_curve_push_bl.py langsung (di luar daily-rails.sh) dan
+// menulis kode yang SAMA, sehingga tanpa penanda ia memenuhi syarat "rail SUN jalan".
+//
+// Format divalidasi ketat karena nilainya masuk ke klausa SQL penjaga: huruf kecil, angka,
+// pemisah terbatas. Nilai tidak valid => null (dicatat sebagai peringatan oleh pemanggil
+// yang memvalidasi lebih dulu, lihat routes/idx.js).
+const WRITER_RE = /^[a-z0-9][a-z0-9_.:-]{0,47}$/;
+
+/** Normalisasi penanda penulis: nilai sah dikembalikan apa adanya, sisanya null. */
+function normalizeWriter(w) {
+  if (w === undefined || w === null) return null;
+  const s = String(w).trim();
+  return WRITER_RE.test(s) ? s : null;
+}
+
 // Jumlah tarikan SUKSES berturut-turut dengan frontier yang tidak maju sebelum
 // "sumber berhenti" dinyatakan. Rail sesi harian: 3 tarikan (~3 hari bursa).
 // Rail snapshot (tradingeconomics/snapshot — dua titik per hari, bukan seri sesi):
@@ -172,8 +195,8 @@ function logPull(db, entry) {
   try {
     db.prepare(
       `INSERT INTO custom_pull_log
-       (code, source, pulled_at, ref_date, source_frontier_date, rows, written, endpoint, status, error)
-       VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?,?,?,?,?,?,?)`)
+       (code, source, pulled_at, ref_date, source_frontier_date, rows, written, endpoint, writer, status, error)
+       VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?,?,?,?,?,?,?,?)`)
       .run(code,
         e.source ? String(e.source).slice(0, 64) : null,
         e.refDate ? String(e.refDate).slice(0, 10) : null,
@@ -181,6 +204,7 @@ function logPull(db, entry) {
         Number.isFinite(Number(e.rows)) ? Number(e.rows) : 0,
         Number.isFinite(Number(e.written)) ? Number(e.written) : 0,
         e.endpoint ? String(e.endpoint).slice(0, 64) : null,
+        normalizeWriter(e.writer),
         status,
         e.error ? String(e.error).slice(0, 300) : null);
     return status;
@@ -466,6 +490,8 @@ module.exports = {
   PULL_STALL_DAILY,
   PULL_STALL_SNAPSHOT,
   SNAPSHOT_SOURCE,
+  WRITER_RE,
+  normalizeWriter,
   PULL_DAY_SHIFT_HOURS,
   SCAN_PULL_DAYS,
   STATUSES,

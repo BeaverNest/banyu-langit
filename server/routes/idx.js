@@ -3840,6 +3840,16 @@ module.exports = function(upload) {
       if (!code) return res.status(400).json({ error: 'code required' });
       if (!rows.length) return res.status(400).json({ error: 'rows required' });
       if (!SOURCE_RE.test(source)) return res.status(400).json({ error: 'source tidak valid (maks 64 karakter, [A-Za-z0-9_.:/-])' });
+      // Penanda PENULIS (kanban t_b7a0fdb1). Divalidasi SEBELUM menulis apa pun: nilai tidak
+      // sah dijawab 400, bukan disimpan sebagai NULL diam-diam — penulis yang salah ketik
+      // harus tahu bahwa barisnya tidak akan dihitung penjaga penjadwal sebagai bukti.
+      // Tidak dikirim = null (perilaku lama, sah untuk fred/yahoo/idx-api yang bukan rail).
+      const writerRaw = req.body.writer;
+      const writer = pullLog.normalizeWriter(writerRaw);
+      if (writerRaw !== undefined && writerRaw !== null && String(writerRaw).trim() !== '' && !writer) {
+        return res.status(400).json({ ok: false, error: 'writer tidak valid (huruf kecil/angka, maks 48, [a-z0-9_.:-])',
+          writer_received: String(writerRaw).slice(0, 48) });
+      }
 
       const g = gateRows(code, rows, fillMissing);
       const gated = g.gated;
@@ -3922,10 +3932,14 @@ module.exports = function(upload) {
       const frontier = pullLog.frontierOf(gated);
       const pullStatus = pullLog.logPull(db, {
         code, source, frontier, rows: gated.length, written,
-        endpoint: 'POST /custom/upsert', refDate: pullRef,
+        endpoint: 'POST /custom/upsert', refDate: pullRef, writer,
         status: written > 0 ? 'ok' : 'no_data',
       });
       res.json({ ok: true, code, source, written,
+                 // `writer` di ECHO di tingkat atas (bukan hanya di dalam `pull`): skrip rail
+                 // memverifikasinya seperti `fill_missing` — server lama yang mengabaikan kunci
+                 // ini harus terbaca GAGAL oleh penulis, bukan diam-diam menulis tanpa penanda.
+                 writer,
                  rows_sent: rejection.rows_sent, rows_dropped: rejection.rows_dropped,
                  rejected: rejection.rejected, allow_nonpositive: rejection.allow_nonpositive,
                  gate_warning: rejection.message, gate_hint: rejection.hint,
@@ -3933,7 +3947,7 @@ module.exports = function(upload) {
                  total_rows: cnt, fill_missing: fillMissing,
                  ohlc_mode: verdict || getTickerMode(code), price_only: priceOnly,
                  nulled_ohlc_rows: normalized, bar_states: droppedByState, states_in_table: stateCounts(code),
-                 pull: { status: pullStatus, source_frontier_date: frontier, ref_date: pullRef },
+                 pull: { status: pullStatus, source_frontier_date: frontier, ref_date: pullRef, writer },
                  date_range: { first: dr.f, last: dr.l } });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -52,6 +52,28 @@
 //   `all-investing` + `mixed_rails: true` di keluaran teks maupun JSON — jawabannya TIDAK
 //   memisahkan rail, dan tidak boleh dipakai untuk menyimpulkan "penjadwal X jalan".
 //
+// PENULIS BARIS (`--writer`) — WAJIB untuk putusan "penjadwal X jalan"
+//   Cakupan KODE saja belum cukup: kode yang sama bisa ditulis penulis lain. Terukur
+//   2026-10-20 (kanban t_b7a0fdb1): cron eko `eko-rates-daily` memanggil
+//   bi_curve_push_bl.py LANGSUNG, di luar daily-rails.sh, pukul 19:20 WIB dan menulis 11 tenor
+//   ID1M..ID30Y dengan `source` dan `endpoint` yang IDENTIK dengan rail SUN 19:03
+//   (`endpoint` tidak bisa dipakai membedakan: semua pemanggil /custom/upsert menulis string
+//   yang sama 'POST /custom/upsert'). Akibatnya penjaga 21:20 melaporkan untuk rail SUN
+//   `23/23 tarikan ok` padahal 12 di antaranya bukan penjadwal.
+//   Karena itu `custom_pull_log.writer` (diisi skrip rail dari env RAIL_WRITER yang dipasang
+//   daily-rails.sh) menjadi syarat penilaian:
+//     --writer rail:sun   -> HANYA baris yang ditulis penjadwal rail SUN yang dihitung.
+//   Baris penulis lain (writer NULL: cron eko, idx-api, tarikan manual) DILAPORKAN sebagai
+//   `other_writer_pulls` dan TIDAK memenuhi syarat. Jadi `verdict=ok` sekarang berarti
+//   "PENJADWAL menulis", bukan "ada baris kode ini dari siapa pun" — itu inti perbaikan
+//   t_b7a0fdb1, dan tanpa `--writer` lubang lama masih terbuka (dinyatakan di keluaran).
+//   Kolom `writer` baru terisi sejak 2026-10-21 (konstanta WRITER_SINCE). Untuk tanggal
+//   SEBELUM itu putusan per-rail berlabel `writer_uninstrumented` (rc 0) dengan batasnya
+//   disebut eksplisit: baris lama tidak bisa dibedakan penulisnya, dan menebak akan
+//   menghidupkan lagi lubang yang kartu ini tutup.
+//   `--codes-ok` (dipakai dedupe daily-rails.sh) SENGAJA tidak memakai filter penulis:
+//   dedupe menjawab "data hari ini sudah ada?", bukan "siapa yang menulisnya" (batas kartu).
+//
 // Kode keluar:
 //   0  = sehat (hari bursa & ada tarikan dalam jendela), hari non-bursa, atau `not_yet`
 //        (jam WIB belum melewati jendela tarik — belum ada yang dinilai)
@@ -65,6 +87,7 @@
 //   ... --date 2026-10-24      # nilai tanggal lain (uji, tanpa menulis apa pun)
 //   ... --window-start 00:00   # hitung juga tarikan pra-jendela (uji/diagnosa)
 //   ... --codes COAL,WTI       # cakupan PER RAIL (wajib untuk kesimpulan; lihat bawah)
+//   ... --codes COAL,WTI --writer rail:investing   # HANYA baris penulis penjadwal rail
 //   ... --codes-file /tmp/k    # daftar kode dari berkas (satu per baris / dipisah koma)
 //   ... --codes COAL,WTI --codes-ok   # kode rail ini yang sudah `ok` sejak jendela tarik
 //   ... --json                 # keluaran mesin
@@ -95,6 +118,24 @@ const DATE_ARG = arg('date', null);
 const CODES_ARG = arg('codes', null);
 const CODES_FILE = arg('codes-file', null);
 const CODE_RE = /^[A-Za-z0-9_]{1,32}$/;
+
+// Penanda penulis (lihat kepala berkas "PENULIS BARIS"). Satu token, bukan daftar: satu
+// pemanggilan penjaga menjawab untuk SATU penjadwal. `rail_liveness.sh` memanggilnya per rail.
+const WRITER_ARG = arg('writer', null);
+const WRITER_RE = /^[a-z0-9][a-z0-9_.:-]{0,47}$/;
+// Tanggal pertama kolom `writer` bisa berisi sesuatu: baris rail ditulis dengan penanda mulai
+// run 19:00 WIB 2026-10-21 (revisi ini dipasang 2026-10-20 malam, sesudah run rail hari itu).
+// Sebelum tanggal ini putusan per-rail TIDAK bisa membedakan penulis — dilaporkan apa adanya
+// (`writer_uninstrumented`), bukan ditebak.
+const WRITER_SINCE = process.env.RAIL_WRITER_SINCE || '2026-10-21';
+
+function readWriter() {
+  if (WRITER_ARG === true) return { error: '--writer butuh token (mis. --writer rail:sun)' };
+  if (WRITER_ARG === null) return { writer: null };
+  const w = String(WRITER_ARG).trim();
+  if (!WRITER_RE.test(w)) return { error: 'writer tidak valid (huruf kecil/angka, maks 48, [a-z0-9_.:-])' };
+  return { writer: w };
+}
 
 function readCodes() {
   if (CODES_ARG === true) return { error: '--codes butuh daftar kode (mis. --codes COAL,WTI)' };
@@ -184,6 +225,19 @@ function main() {
     console.error('GAGAL: ' + SCOPE.error);
     return 2;
   }
+  const WR = readWriter();
+  if (WR.error) {
+    console.error('GAGAL: ' + WR.error);
+    return 2;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(WRITER_SINCE)) {
+    console.error('GAGAL: RAIL_WRITER_SINCE harus YYYY-MM-DD, diterima: ' + WRITER_SINCE);
+    return 2;
+  }
+  // Filter penulis hanya dipakai kalau diminta. Tanpa `--writer`, putusan tetap dihitung dari
+  // SEMUA penulis (perilaku lama) DAN keluarannya menyatakan batas itu — lihat writerNote.
+  const WRITER_SQL = WR.writer ? ' AND writer = @writer' : '';
+  const P = WR.writer ? { date, since: WINDOW_START, writer: WR.writer } : { date, since: WINDOW_START };
   const s = sessionOf(date, CALENDAR);
 
   let db;
@@ -201,7 +255,7 @@ function main() {
   const WIB_DAY = "date(" + WIB_TS + ")";
   const WIB_HM = "strftime('%H:%M'," + WIB_TS + ")";
   const SCOPE_SQL = SCOPE.sql;
-  let rail, early, all, recent;
+  let rail, early, all, recent, byWriter;
   try {
     rail = db.prepare(
       `SELECT COUNT(*) pulls, COUNT(DISTINCT code) codes,
@@ -209,16 +263,27 @@ function main() {
               SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) error_pulls,
               SUM(CASE WHEN status='no_data' THEN 1 ELSE 0 END) no_data_pulls,
               MIN(pulled_at) first_pull, MAX(pulled_at) last_pull,
-              GROUP_CONCAT(DISTINCT endpoint) endpoints
-         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}
-          AND ${WIB_HM} >= @since`).get({ date, since: WINDOW_START });
+              GROUP_CONCAT(DISTINCT endpoint) endpoints,
+              GROUP_CONCAT(DISTINCT writer) writers
+         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}${WRITER_SQL}
+          AND ${WIB_HM} >= @since`).get(P);
     // Baris pra-jendela dihitung terpisah: sah sebagai telemetri, TIDAK sah sebagai bukti
     // "hari ini ditarik" (lihat kepala berkas).
     early = db.prepare(
       `SELECT COUNT(*) pulls, SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) ok_pulls,
               MIN(pulled_at) first_pull, MAX(pulled_at) last_pull
+         FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}${WRITER_SQL}
+          AND ${WIB_HM} < @since`).get(P);
+    // Sebaran penulis untuk kode ini pada hari itu (SELALU dihitung, juga saat `--writer` tidak
+    // diberikan): tanpa angka ini, "12 dari 23 baris bukan penjadwal" (t_b7a0fdb1) tidak
+    // kelihatan dari keluaran penjaga dan lubangnya mudah muncul lagi.
+    byWriter = db.prepare(
+      `SELECT COALESCE(writer,'(null)') AS writer, COUNT(*) pulls,
+              SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) ok_pulls,
+              MIN(pulled_at) first_pull, MAX(pulled_at) last_pull
          FROM custom_pull_log WHERE ${WIB_DAY}=@date AND source LIKE 'investing/%'${SCOPE_SQL}
-          AND ${WIB_HM} < @since`).get({ date, since: WINDOW_START });
+          AND ${WIB_HM} >= @since
+        GROUP BY 1 ORDER BY pulls DESC`).all({ date, since: WINDOW_START });
     all = db.prepare(
       `SELECT COUNT(*) pulls, COUNT(DISTINCT code) codes FROM custom_pull_log WHERE ${WIB_DAY}=?`).get(date);
     recent = db.prepare(
@@ -232,6 +297,9 @@ function main() {
 
   // Mode mesin untuk penjadwal: daftar kode yang sudah `ok` pada tanggal itu SEJAK jendela
   // tarik — ambang yang sama dengan yang dipakai menilai kelengkapan hari.
+  // SENGAJA tanpa filter `--writer`: pertanyaannya "data hari D sudah ada?", dipakai dedupe
+  // daily-rails.sh, dan memfilter penulis di sini akan membuat dedupe menarik ulang seri yang
+  // datanya sudah segar (menulis baris ganda). Batas ini dinyatakan di kepala berkas.
   if (CODES_ONLY) {
     try {
       const rows = db.prepare(
@@ -265,27 +333,56 @@ function main() {
   const scopeNote = SCOPE.mode === 'codes'
     ? ' [cakupan: ' + SCOPE.codes.length + ' kode rail]'
     : ' [cakupan: SELURUH investing/% — TIDAK memisahkan rail; rail komoditas & rail SUN saling menutupi]';
+  // Sebaran penulis (t_b7a0fdb1): baris kode rail ini yang ditulis SELAIN penulis yang diminta.
+  // Angka ini yang dulu tidak ada, dan ketiadaannya membuat 12 baris cron eko terbaca sebagai
+  // bukti penjadwal rail SUN.
+  const otherWriterRows = (byWriter || []).filter(r => !WR.writer || r.writer !== WR.writer);
+  const otherPulls = otherWriterRows.reduce((n, r) => n + Number(r.pulls || 0), 0);
+  const otherOk = otherWriterRows.reduce((n, r) => n + Number(r.ok_pulls || 0), 0);
+  const writersSeen = (byWriter || []).map(r => r.writer + '=' + r.pulls).join(',') || '-';
+  const otherNote = (WR.writer && otherPulls)
+    ? ' [penulis lain pada kode ini: ' + otherPulls + ' tarikan (' + otherOk + ' ok) — '
+      + otherWriterRows.map(r => r.writer + '=' + r.pulls).join(',')
+      + ', TIDAK dihitung sebagai bukti penjadwal]'
+    : '';
+  // Penulis dinyatakan di setiap putusan. Tanpa `--writer`, verdict TIDAK membuktikan
+  // penjadwal mana pun — lubang lama (t_b7a0fdb1) dan harus terbaca begitu.
+  const writerNote = WR.writer
+    ? ' [penulis: ' + WR.writer + ' saja]'
+    : ' [penulis: TIDAK DIBATASI — verdict ini TIDAK membuktikan penjadwal tertentu yang jalan]';
+  const uninstrumented = !!WR.writer && date < WRITER_SINCE;
   let code = 0, verdict, detail;
   if (!s.session) {
     verdict = 'not_expected';
-    detail = 'hari non-bursa (' + s.reason + ') — penjadwal tidak diharapkan menarik' + earlyNote + scopeNote;
+    detail = 'hari non-bursa (' + s.reason + ') — penjadwal tidak diharapkan menarik' + earlyNote + scopeNote + writerNote;
   } else if (beforeWindow) {
     verdict = 'not_yet';
-    detail = 'jendela tarik belum tiba (sekarang ' + nowHm + ' WIB < ' + WINDOW_START + ' WIB) — belum ada yang dinilai' + earlyNote + scopeNote;
+    detail = 'jendela tarik belum tiba (sekarang ' + nowHm + ' WIB < ' + WINDOW_START + ' WIB) — belum ada yang dinilai' + earlyNote + scopeNote + writerNote;
+  } else if (uninstrumented) {
+    // Tanggal sebelum kolom `writer` digunakan: menilai "penjadwal" di sini berarti menebak.
+    // rc 0 (bukan alarm) tetapi verdict-nya TIDAK 'ok' dan detailnya menyebut batasnya.
+    const legacyPulls = (byWriter || []).reduce((n, r) => n + Number(r.pulls || 0), 0);
+    verdict = 'writer_uninstrumented';
+    detail = date + ' < writer-since ' + WRITER_SINCE + ': baris tarikan pada tanggal ini tidak'
+      + ' punya penanda penulis, jadi penjadwal TIDAK bisa dibuktikan dari data. '
+      + legacyPulls + ' tarikan kode ini ada pada hari itu (' + writersSeen + '); '
+      + 'jangan kutip sebagai "penjadwal ' + WR.writer + ' jalan"' + earlyNote + scopeNote;
   } else if (railPulls === 0) {
     verdict = 'scheduler_silent';
-    detail = 'HARI BURSA tetapi 0 baris tarikan rail dalam cakupan ini di ' + date + ' WIB sejak ' + WINDOW_START + ' WIB'
-      + earlyNote + scopeNote
+    detail = 'HARI BURSA tetapi 0 baris tarikan'
+      + (WR.writer ? ' dari penulis ' + WR.writer : '')
+      + ' dalam cakupan ini di ' + date + ' WIB sejak ' + WINDOW_START + ' WIB'
+      + otherNote + earlyNote + scopeNote + writerNote
       + (Number(all.pulls || 0) ? ' (ada ' + all.pulls + ' baris sumber lain hari itu, jadi hanya cakupan ini yang diam)' : '');
     code = 1;
   } else if (railOk === 0) {
     verdict = 'rail_failed';
     detail = railPulls + ' baris tarikan ada tetapi 0 ber-status ok (error=' + Number(rail.error_pulls || 0)
-      + ', no_data=' + Number(rail.no_data_pulls || 0) + ')' + earlyNote + scopeNote;
+      + ', no_data=' + Number(rail.no_data_pulls || 0) + ')' + otherNote + earlyNote + scopeNote + writerNote;
     code = 3;
   } else {
     verdict = 'ok';
-    detail = railOk + '/' + railPulls + ' tarikan ok, ' + Number(rail.codes) + ' kode' + earlyNote + scopeNote;
+    detail = railOk + '/' + railPulls + ' tarikan ok, ' + Number(rail.codes) + ' kode' + otherNote + earlyNote + scopeNote + writerNote;
   }
 
   if (WANT_JSON) {
@@ -293,12 +390,17 @@ function main() {
       date_wib: date, verdict, exit_code: code, detail,
       window_start_wib: WINDOW_START, now_wib: nowHm,
       scope: { mode: SCOPE.mode, code_count: SCOPE.codes.length,
-               codes: SCOPE.codes, mixed_rails: SCOPE.mixed },
+               codes: SCOPE.codes, mixed_rails: SCOPE.mixed,
+               writer: WR.writer || null, writer_since: WRITER_SINCE,
+               writer_discriminated: !!WR.writer && !uninstrumented,
+               writers_seen: writersSeen },
       session: { is_session: s.session, basis: s.basis, reason: s.reason, warn: s.warn || null },
       calendar: CALENDAR,
       rail: { pulls: railPulls, ok_pulls: railOk, codes: Number(rail.codes || 0),
               first_pull_utc: rail.first_pull || null, last_pull_utc: rail.last_pull || null,
-              endpoints: rail.endpoints || null,
+              endpoints: rail.endpoints || null, writers: rail.writers || null,
+              other_writer_pulls: otherPulls, other_writer_ok: otherOk,
+              by_writer: byWriter || [],
               early_pulls: earlyPulls, early_ok: earlyOk,
               early_first_pull_utc: early.first_pull || null, early_last_pull_utc: early.last_pull || null },
       all_sources: { pulls: Number(all.pulls || 0), codes: Number(all.codes || 0) },
@@ -308,15 +410,24 @@ function main() {
     console.log('rail-liveness date=' + date + ' session=' + (s.session ? 'ya' : 'TIDAK')
       + ' basis=' + s.basis + ' reason=' + s.reason
       + ' window_start=' + WINDOW_START + ' now=' + nowHm
-      + ' scope=' + (SCOPE.mode === 'codes' ? SCOPE.codes.length + 'kode' : 'ALL-investing'));
+      + ' scope=' + (SCOPE.mode === 'codes' ? SCOPE.codes.length + 'kode' : 'ALL-investing')
+      + ' writer=' + (WR.writer || 'TIDAK-DIBATASI'));
     if (SCOPE.mixed) {
       console.log('  CAKUPAN CAMPURAN: filter ini menghitung SEMUA investing/% — rail komoditas dan'
         + ' rail kurva SUN saling menutupi. Pakai --codes untuk putusan per rail.');
+    }
+    if (!WR.writer) {
+      console.log('  PENULIS TIDAK DIBATASI: verdict ini TIDAK membuktikan penjadwal tertentu jalan'
+        + ' (t_b7a0fdb1). Pakai --writer rail:<nama> untuk putusan per penjadwal.');
     }
     console.log('  verdict=' + verdict + ' exit=' + code + ' — ' + detail);
     if (railPulls) {
       console.log('  rail investing: pulls=' + railPulls + ' ok=' + railOk + ' codes=' + Number(rail.codes)
         + ' window=' + rail.first_pull + '..' + rail.last_pull);
+    }
+    if (byWriter && byWriter.length) {
+      console.log('  penulis dalam jendela: ' + byWriter.map(r => r.writer + '=' + r.pulls
+        + '/' + Number(r.ok_pulls || 0) + 'ok').join(' '));
     }
     if (earlyPulls) {
       console.log('  pra-jendela: pulls=' + earlyPulls + ' ok=' + earlyOk + ' window=' + early.first_pull + '..' + early.last_pull);
