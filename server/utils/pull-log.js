@@ -18,7 +18,9 @@
 // Dua kelas temuan yang dilaporkan:
 //
 //   pull_behind     custom_tickers.last_date < frontier terakhir tarikan  -> cacat kita
-//   source_stalled  frontier tidak maju N tarikan SUKSES berturut-turut   -> sumber berhenti
+//   source_stalled  frontier tidak maju N HARI TARIK SUKSES berturut-turut -> sumber berhenti
+//                   (satuannya HARI, bukan baris: retry/burst di hari yang sama bukan bukti
+//                    sumber berhenti — lihat PULL_DAY_SHIFT_HOURS di bawah; kanban t_be770638)
 //
 // Tabel ini MELAPORKAN. Ia TIDAK PERNAH menulis ulang expected_lag_sessions: expectation
 // yang menyesuaikan diri sendiri adalah ratchet, dan pada hari sumber berhenti lag barunya
@@ -65,8 +67,41 @@ const PULL_STALL_SNAPSHOT = 7;
 // Sumber yang tidak diukur dengan ritme sesi harian.
 const SNAPSHOT_SOURCE = /^tradingeconomics\//i;
 
-// Berapa baris terakhir per kode yang dipindai untuk menilai "frontier beku".
-const SCAN_ROWS = PULL_STALL_SNAPSHOT + 1;
+// ─── SATUAN DERET BEKU = HARI TARIK, BUKAN BARIS (kanban t_be770638, temuan R6 sena) ───
+//
+// Kenapa: retry/burst menulis banyak baris `ok` dengan frontier yang sama dalam hitungan
+// detik (terukur 50 baris / 27 detik pada 2026-10-20). Kalau deret beku dihitung per baris,
+// satu loop retry menuduh sumber sehat "berhenti menerbitkan". Yang diukur alarm ini adalah
+// "sumber tidak menerbitkan apa pun yang baru selama N hari tarik", jadi satuannya hari.
+//
+// Definisi hari tarik = tanggal WIB (pulled_at + 7 jam), bukan tanggal UTC: jendela rail
+// didefinisikan dalam WIB (RAIL_WINDOW_START 18:30, batas 21:20) dan tarikan 19:40 WIB +
+// retry dini hari berikutnya tetap satu malam bursa. Tanggal harus SAMA di SQL (jendela
+// pindai pullContext) dan di JS (dedupe deret), karena itu shift-nya satu konstanta.
+//
+// Yang TIDAK berubah: `pull_behind`/`last_frontier_date` tetap dibaca dari baris mentah
+// terbaru (satu baris, bukan deret) — dedupe hanya menyentuh DERET beku.
+const PULL_DAY_SHIFT_HOURS = 7;
+// SQLite: date() menerima sufiks 'Z' (ISO-8601) dan mengonversi ke UTC dulu, jadi
+// date('2026-10-20T02:41:16Z','+7 hours') = '2026-10-20'.
+const PULL_DAY_SQL = "date(pulled_at, '+7 hours')";
+
+// Berapa HARI TARIK terakhir per kode yang dipindai untuk menilai "frontier beku".
+// Basisnya ambang tertinggi (snapshot 7) + 1 hari pembanding, sama seperti sebelumnya
+// saat satuannya masih baris. Jendela per-hari ini yang membuat burst satu hari tidak
+// bisa menghabiskan seluruh jendela (jebakan terukur: COAL kehilangan baris `ok`).
+const SCAN_PULL_DAYS = PULL_STALL_SNAPSHOT + 1;
+
+/** Tanggal WIB sebuah tarikan (yyyy-mm-dd) — cermin JS dari PULL_DAY_SQL. */
+function pullDayOf(pulledAt) {
+  const s = String(pulledAt || '');
+  if (!s) return null;
+  const hasTz = /Z$/i.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
+  const ms = Date.parse(hasTz ? s : s.replace(' ', 'T') + 'Z');
+  if (!isFinite(ms)) return s.slice(0, 10) || null;      // format asing: jangan menebak zaman
+  return new Date(ms + PULL_DAY_SHIFT_HOURS * 3600000).toISOString().slice(0, 10);
+}
+
 
 function stallThresholdFor(source) {
   return SNAPSHOT_SOURCE.test(String(source || '').trim()) ? PULL_STALL_SNAPSHOT : PULL_STALL_DAILY;
@@ -91,6 +126,30 @@ function frontierOf(rows) {
     if (!best || s > best) best = s;
   }
   return best;
+}
+
+/**
+ * Rapatkan daftar tarikan (TERBARU DULU) menjadi SATU titik per HARI TARIK.
+ *
+ * Yang dipakai per hari = tarikan `ok` TERAKHIR hari itu (frontier yang berlaku saat hari
+ * itu berakhir) — bukan rata-rata dan bukan MAX sepanjang hari: kalau sumber sempat maju
+ * lalu retry di jam yang sama, frontier terakhirnya yang benar. Hari tanpa tarikan `ok`
+ * (hanya error/no_data) TIDAK menyumbang titik: tarikan yang gagal tidak boleh terbaca
+ * sebagai "sumber berhenti" (kontrak lama, tetap berlaku).
+ *
+ * @returns {Array<{day:string, frontier:string, pulled_at:string}>} terbaru dulu
+ */
+function frozenDays(list) {
+  const seen = new Set();
+  const days = [];
+  for (const r of Array.isArray(list) ? list : []) {
+    if (!r || r.status !== 'ok' || !r.source_frontier_date) continue;
+    const day = pullDayOf(r.pulled_at);
+    if (!day || seen.has(day)) continue;
+    seen.add(day);
+    days.push({ day, frontier: String(r.source_frontier_date).slice(0, 10), pulled_at: r.pulled_at });
+  }
+  return days;
 }
 
 /**
@@ -135,33 +194,38 @@ function logPull(db, entry) {
  * Klasifikasi satu seri dari daftar tarikannya (TERBARU DULU) + last_date tabel kita.
  *
  * Dipakai DUA kali dengan jendela berbeda supaya algoritmanya cuma satu:
- *   - pullContext (jalur request panel) : baris TERAKHIR per kode saja (murah)
+ *   - pullContext (jalur request panel) : SCAN_PULL_DAYS HARI TARIK terakhir (murah)
  *   - pullReport  (endpoint/laporan)    : seluruh riwayat kode itu
  * Kalau jendelanya terpotong, `frozen_capped` menandainya: frontier_frozen_pulls saat itu
  * adalah BATAS BAWAH, dan itu cukup untuk memutuskan stalled (yang dibandingkan selalu >= N).
+ *
+ * Kedua surface memanggil fungsi ini — bukan salinan. Dedupe per-hari ADA DI SINI, jadi
+ * mustahil satu surface memakainya dan yang lain tidak (kesalahan patch 6812747).
  */
 function classifyCode(list, lastDate, hasTicker) {
   const last = list[0] || {};
   // Frontier terakhir = frontier dari baris tarikan TERBARU yang punya frontier.
   // Bukan MAX() sepanjang sejarah: high-water mark bisa lebih tinggi dari frontier
   // tarikan terakhir, dan itu justru menghilangkan pull_behind saat perlu muncul.
+  // Tetap dari BARIS MENTAH (bukan hasil dedupe): satu tarikan `no_data` di hari yang
+  // sama tidak boleh menghapus frontier yang sudah terbaca hari itu.
   const withFrontier = list.find(r => r.source_frontier_date);
   const frontier = withFrontier ? withFrontier.source_frontier_date : null;
   const source = (withFrontier && withFrontier.source) || last.source || null;
 
-  // Deret tarikan SUKSES berturut-turut dengan frontier yang sama. Baris non-'ok'
-  // (error/no_data) DILEWATI, bukan mematahkan: "N tarikan sukses berturut-turut" mengukur
-  // tarikan yang benar-benar berhasil, jadi satu tarikan yang hilang mengurangi hitungan —
-  // dan jalur tarik yang rusak tidak boleh terbaca sebagai "sumber berhenti".
-  let frozen = 0, frozenSince = null, frozenFrontier = null, okSeen = 0;
-  for (const r of list) {
-    const ok = r.status === 'ok' && !!r.source_frontier_date;
-    if (!ok) continue;
-    okSeen++;
-    if (frozenFrontier === null) { frozenFrontier = r.source_frontier_date; frozen = 0; }
-    if (r.source_frontier_date !== frozenFrontier) break;
+  // Deret tarikan SUKSES berturut-turut dengan frontier yang sama — dihitung per HARI
+  // TARIK (satu titik per hari), bukan per baris: burst/retry di hari yang sama bukan bukti
+  // sumber berhenti menerbitkan. Baris non-'ok' (error/no_data) DILEWATI, bukan mematahkan:
+  // "N tarikan sukses berturut-turut" mengukur tarikan yang benar-benar berhasil.
+  let okSeen = 0;
+  for (const r of list) if (r.status === 'ok' && r.source_frontier_date) okSeen++;
+  const days = frozenDays(list);
+  let frozen = 0, frozenSince = null, frozenFrontier = null;
+  for (const d of days) {
+    if (frozenFrontier === null) { frozenFrontier = d.frontier; frozen = 0; }
+    if (d.frontier !== frozenFrontier) break;
     frozen++;
-    frozenSince = r.pulled_at;
+    frozenSince = d.pulled_at;
   }
 
   const ld = hasTicker ? (lastDate || '') : null;
@@ -169,6 +233,12 @@ function classifyCode(list, lastDate, hasTicker) {
   // Hanya dinilai bila kedua sisi ada; seri tanpa baris custom_tickers tidak dituduh.
   const behind = !!(frontier && ld !== null && (!ld || ld < frontier));
   const threshold = stallThresholdFor(source);
+  // EVALUABILITAS (keputusan Toku t_be770638 butir 4-5): ambang 3 HARI tidak bisa diputuskan
+  // dari 2 hari riwayat. `source_stalled=false` pada riwayat muda BUKAN "sumber sehat", jadi
+  // itu harus terbaca dari payload — kalau tidak, TIN (beku sejak 15 Okt) hilang diam-diam
+  // dan hanya tersisa lewat sinyal `stale`. Dasar: HARI TARIK `ok` yang benar-benar dipindai,
+  // karena hanya hari itulah yang bisa menopang deret beku.
+  const evaluable = days.length >= threshold;
 
   return {
     source,
@@ -178,10 +248,21 @@ function classifyCode(list, lastDate, hasTicker) {
     last_frontier_date: frontier,
     last_date: ld,
     pull_behind: behind,
+    // Nama field lama DIPERTAHANKAN (kontrak response), tetapi satuannya sekarang HARI
+    // TARIK. `frozen_unit` + `frozen_pull_days` menerbitkan arti barunya secara eksplisit.
     frontier_frozen_pulls: frozen,
+    frozen_unit: 'pull_day',
+    frozen_pull_days: frozen,
+    // Pembagi yang menopang angka di atas: berapa HARI TARIK `ok` yang benar-benar terpindai.
+    pull_days_observed: days.length,
     frozen_frontier_date: frozenFrontier,
     frozen_since: frozen >= 2 ? frozenSince : null,
     stall_threshold: threshold,
+    // Ambang yang sama, dinyatakan dalam satuan yang sekarang dipakai deretnya. Untuk rail
+    // sesi nilainya 3 (nilai yang dikutip keputusan); rail snapshot tetap 7 — angka 7 itu
+    // memang sudah "hari" sejak dulu karena rail snapshot menarik sekali sehari.
+    stall_threshold_days: threshold,
+    stall_evaluable: evaluable,
     source_stalled: frozen >= threshold,
     ok_pulls_scanned: okSeen,
   };
@@ -190,27 +271,35 @@ function classifyCode(list, lastDate, hasTicker) {
 /**
  * Potret telemetri per kode untuk SATU request panel (dipakai buildContext/summarize).
  *
- * Hanya dua query: (1) SCAN_ROWS baris terakhir per kode, (2) last_date tiap seri dari
- * custom_tickers. Tabel ini tumbuh ~40 baris/hari, jadi jangan pernah membaca seluruhnya
- * di jalur request.
+ * Hanya dua query: (1) SCAN_PULL_DAYS HARI TARIK terakhir per kode, (2) last_date tiap seri
+ * dari custom_tickers. Tabel ini tumbuh ~40 baris/hari, jadi jangan pernah membaca
+ * seluruhnya di jalur request.
  *
- * @returns {{available:boolean, thresholds:object, by_code:object}}
+ * Jendela dihitung per HARI (DENSE_RANK atas tanggal WIB), bukan per baris: dengan jendela
+ * per-baris, satu burst 50 baris di hari yang sama menghabiskan seluruh jendela dan hari
+ * sebelumnya (yang punya baris `ok` pembanding) ikut terbuang — terukur pada COAL 20 Okt,
+ * `last_frontier_date` jadi null. Sekalian: dedupe deret memakai tanggal yang SAMA, supaya
+ * SQL dan JS tidak bisa berbeda pendapat soal batas hari.
+ *
+ * @returns {{available:boolean, thresholds:object, scan_pull_days:number, by_code:object}}
  */
 function pullContext(db) {
   const out = {
     available: false,
     thresholds: { session_rail: PULL_STALL_DAILY, snapshot_rail: PULL_STALL_SNAPSHOT },
+    scan_pull_days: SCAN_PULL_DAYS,
     by_code: {},
   };
   let rows = [];
   try {
     rows = db.prepare(
-      `SELECT code, source, pulled_at, ref_date, source_frontier_date, rows, written, status, id
+      `SELECT code, source, pulled_at, ref_date, source_frontier_date, rows, written, status, id, pull_day
          FROM (
            SELECT code, source, pulled_at, ref_date, source_frontier_date, rows, written, status, id,
-                  ROW_NUMBER() OVER (PARTITION BY code ORDER BY id DESC) AS rn
+                  ${PULL_DAY_SQL} AS pull_day,
+                  DENSE_RANK() OVER (PARTITION BY code ORDER BY ${PULL_DAY_SQL} DESC) AS pull_day_rank
            FROM custom_pull_log
-         ) WHERE rn <= ?`).all(SCAN_ROWS);
+         ) WHERE pull_day_rank <= ?`).all(SCAN_PULL_DAYS);
   } catch (e) {
     return out;                                   // tabel belum ada (DB lebih tua dari kode)
   }
@@ -237,7 +326,10 @@ function pullContext(db) {
     const hasTicker = Object.prototype.hasOwnProperty.call(lastDate, code);
     const info = classifyCode(list, hasTicker ? lastDate[code] : null, hasTicker);
     info.frozen_scan_rows = list.length;
-    info.frozen_capped = list.length >= SCAN_ROWS && info.frontier_frozen_pulls >= SCAN_ROWS;
+    // Batas jendela diukur dalam HARI yang benar-benar dipindai (bukan baris): kalau semua
+    // hari di jendela sudah terkumpul, deret yang mentok di SCAN_PULL_DAYS = batas bawah.
+    info.frozen_scan_days = info.frozen_pull_days;
+    info.frozen_capped = info.frozen_pull_days >= SCAN_PULL_DAYS && info.frontier_frozen_pulls >= SCAN_PULL_DAYS;
     out.by_code[code] = info;
   }
   return out;
@@ -327,8 +419,9 @@ function pullReport(db, opts) {
     const p = per[c];
     const hasTicker = Object.prototype.hasOwnProperty.call(lastDate, c);
     // Laporan ini membaca SELURUH riwayat kode, jadi deret beku & pull_behind di sini tidak
-    // terpotong jendela SCAN_ROWS milik pullContext (yang dibaca tiap request panel). Satu
-    // algoritma (classifyCode), dua jendela: hanya kecepatannya yang berbeda, bukan artinya.
+    // terpotong jendela SCAN_PULL_DAYS milik pullContext (yang dibaca tiap request panel).
+    // Satu algoritma (classifyCode, dedupe per hari tarik), dua jendela: hanya kecepatan
+    // yang berbeda, bukan artinya.
     const flags = classifyCode((seq[c] || []).slice().sort((a, b) => b.id - a.id),
       hasTicker ? lastDate[c] : null, hasTicker);
     const sorted = p.lags.slice().sort((a, b) => a - b);
@@ -351,10 +444,15 @@ function pullReport(db, opts) {
       frontier_lag_p50: percentile(sorted, 0.5),
       frontier_lag_p95: percentile(sorted, 0.95),
       frontier_frozen_pulls: flags.frontier_frozen_pulls,
+      frozen_unit: flags.frozen_unit,
+      frozen_pull_days: flags.frozen_pull_days,
+      pull_days_observed: flags.pull_days_observed,
       frozen_capped: false,                       // laporan memakai seluruh riwayat, tidak dipotong
       frozen_frontier_date: flags.frozen_frontier_date,
       frozen_since: flags.frozen_since,
       stall_threshold: flags.stall_threshold,
+      stall_threshold_days: flags.stall_threshold_days,
+      stall_evaluable: flags.stall_evaluable,
       source_stalled: flags.source_stalled,
       pull_behind: flags.pull_behind,
     };
@@ -367,9 +465,12 @@ module.exports = {
   PULL_STALL_DAILY,
   PULL_STALL_SNAPSHOT,
   SNAPSHOT_SOURCE,
-  SCAN_ROWS,
+  PULL_DAY_SHIFT_HOURS,
+  SCAN_PULL_DAYS,
   STATUSES,
   stallThresholdFor,
+  pullDayOf,
+  frozenDays,
   frontierOf,
   logPull,
   pullContext,

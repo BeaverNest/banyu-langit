@@ -513,6 +513,9 @@ function isSameSessionBar(c) {
  * karena artinya beda dan yang bisa kita perbaiki hanya yang pertama:
  *   pull_behind_codes    custom_tickers.last_date < frontier terakhir tarikan = CACAT KITA
  *   source_stalled_codes frontier tidak maju N tarikan sukses = SUMBER berhenti menerbitkan
+ *   stall_unevaluable_codes  belum bisa dinilai: riwayat HARI TARIK < ambang (kanban t_be770638).
+ *                        Kode di sini TIDAK boleh disajikan sebagai "sumber sehat" — payload
+ *                        tidak punya bukti cukup untuk memutuskan, bukan bukti sumber hidup.
  * Keduanya dibatasi pada kode yang muncul di `entries` permukaan ini (ringkasan ini per-surface),
  * dan tidak pernah mengubah aturan stale/excess per seri. Gambaran penuh per kode ada di
  * GET /api/idx/custom/pull-log (pullReport).
@@ -521,7 +524,7 @@ function isSameSessionBar(c) {
  */
 function summarize(ctx, entries) {
   const stale_codes = [], delayed_codes = [], na_codes = [], undeclared_codes = [];
-  const pull_behind_codes = [], source_stalled_codes = [];
+  const pull_behind_codes = [], source_stalled_codes = [], stall_unevaluable_codes = [];
   const push = (arr, code) => { if (code && arr.indexOf(code) === -1) arr.push(code); };
   for (const e of entries) {
     const f = e && e.freshness;
@@ -538,9 +541,16 @@ function summarize(ctx, entries) {
     const p = ctx && ctx.pull && ctx.pull.by_code ? ctx.pull.by_code[e.code] : null;
     if (p && p.pull_behind) push(pull_behind_codes, e.code);
     if (p && p.source_stalled) push(source_stalled_codes, e.code);
+    // "Belum bisa dinilai" BUKAN "sumber sehat" (keputusan Toku t_be770638 butir 4-5):
+    // alarm stall butuh N HARI TARIK; dengan riwayat lebih muda dari ambang, `source_stalled`
+    // bernilai false karena belum bisa diputuskan, bukan karena sumbernya terbukti menerbitkan.
+    // Tanpa field ini pembaca payload akan membacanya sebagai sehat (kasus TIN, beku 15 Okt).
+    // Null/undefined (util lama / baris telemetri tanpa field) TIDAK dianggap tidak-evaluable:
+    // jangan menuduh "belum bisa dinilai" hanya karena field-nya tidak ada.
+    if (p && p.stall_evaluable === false) push(stall_unevaluable_codes, e.code);
   }
   stale_codes.sort(); delayed_codes.sort(); na_codes.sort(); undeclared_codes.sort();
-  pull_behind_codes.sort(); source_stalled_codes.sort();
+  pull_behind_codes.sort(); source_stalled_codes.sort(); stall_unevaluable_codes.sort();
   const pullCtx = (ctx && ctx.pull) || null;
   return {
     ref_date: ctx ? ctx.ref_date : null,
@@ -556,6 +566,9 @@ function summarize(ctx, entries) {
     // Telemetri tarikan: dua kelas yang DULU tidak bisa dibedakan dari lag sesi.
     pull_behind_codes,
     source_stalled_codes,
+    // Kode yang `source_stalled`-nya BELUM BISA DINILAI (riwayat hari tarik < ambang).
+    // Wajib dibaca bersama source_stalled_codes: tidak ada di kedua daftar = benar-benar diam.
+    stall_unevaluable_codes,
     pull_log: {
       available: !!(pullCtx && pullCtx.available),
       thresholds: pullCtx ? pullCtx.thresholds : null,

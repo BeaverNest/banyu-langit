@@ -538,27 +538,46 @@ function main() {
       strayDiv.length === 0, strayDiv.join(','));
 
     // ── [9] telemetri tarikan: pull_behind vs source_stalled (kanban t_57252454) ─────
-    // Yang dikunci: (a) frontier beku N tarikan sukses = sumber berhenti, (b) satu tarikan
+    // Yang dikunci: (a) frontier beku N HARI TARIK sukses = sumber berhenti (satuannya HARI,
+    // dedupe per tanggal WIB — burst/retry dalam satu hari bukan bukti sumber berhenti;
+    // kanban t_be770638), (a2) riwayat hari tarik < ambang -> `stall_evaluable=false` DAN kode
+    // itu terbit di `stall_unevaluable_codes` (belum bisa dinilai != sumber sehat), (b) satu tarikan
     // HILANG (error) tidak boleh menghitung sebagai tarikan sukses, (c) lag kita sendiri
     // (last_date < frontier) dipisahkan dari lag sumber, (d) ambang snapshot 7 bukan 3,
     // (e) ringkasan panel menerbitkan keduanya tanpa mengubah aturan stale/excess,
     // (f) angka p50/p95 dihitung dari frontier + ref_date yang TERSIMPAN saat tarik.
     console.log('\n[9] telemetri tarikan — frontier sumber per tarikan (pull_behind / source_stalled)');
 
-    // (a) DB tiruan: pullContext hanya memakai 2 query (baris terakhir per kode + custom_tickers),
-    // jadi perilakunya bisa diuji tanpa menulis satu baris pun ke DB asli.
+    // (a) DB tiruan: pullContext hanya memakai 2 query (HARI TARIK terakhir per kode +
+    // custom_tickers), jadi perilakunya bisa diuji tanpa menulis satu baris pun ke DB asli.
+    // `dayWib` di sini SENGAJA ditulis ulang (bukan impor dari util) supaya asersi tidak ikut
+    // salah kalau batas hari di util berubah tanpa sengaja.
+    const dayWib = (ts) => {
+      const s = String(ts || '');
+      const ms = Date.parse(/Z$|[+-]\d{2}:?\d{2}$/.test(s) ? s : s + 'Z');
+      return new Date(ms + 7 * 3600000).toISOString().slice(0, 10);   // WIB = UTC+7
+    };
     const mockDb = (pullRows, tickers) => ({
       prepare(sql) {
         const s = String(sql);
         if (s.indexOf('custom_pull_log') !== -1) {
           return {
             all: (n) => {
+              // Tiru jendela SQL: `pull_day_rank <= n`, yaitu n TANGGAL WIB terakhir per kode
+              // (semua baris pada tanggal itu ikut), bukan n baris.
               const by = {}, out = [];
-              for (const r of pullRows.slice().sort((x, y) => y.id - x.id)) {
-                const a = (by[r.code] = by[r.code] || []);
-                if (a.length < (n || 8)) a.push(r);
+              for (const r of pullRows.slice().sort((x, y) => y.id - x.id)) (by[r.code] = by[r.code] || []).push(r);
+              for (const k of Object.keys(by)) {
+                const keep = new Set();
+                for (const r of by[k]) {
+                  const d = dayWib(r.pulled_at);
+                  if (!keep.has(d)) {
+                    if (keep.size >= (n || pullLog.SCAN_PULL_DAYS)) continue;
+                    keep.add(d);
+                  }
+                }
+                for (const r of by[k]) if (keep.has(dayWib(r.pulled_at))) out.push(r);
               }
-              for (const k of Object.keys(by)) out.push(...by[k]);
               return out;
             },
           };
@@ -612,14 +631,108 @@ function main() {
     check('sintetis: rail snapshot 7 tarikan beku -> source_stalled TRUE',
       pSnap7.source_stalled === true && pSnap7.frontier_frozen_pulls === 7, JSON.stringify(pSnap7));
 
-    // jendela pindai terbatas (SCAN_ROWS): deret beku yang lebih panjang dari jendela
-    // dilaporkan sebagai BATAS BAWAH + frozen_capped, bukan angka palsu yang terpotong diam-diam.
+    // jendela pindai terbatas (SCAN_PULL_DAYS hari tarik): deret beku yang lebih panjang dari
+    // jendela dilaporkan sebagai BATAS BAWAH + frozen_capped, bukan angka palsu yang terpotong.
     const longFreeze = [];
     for (let i = 1; i <= 9; i++) longFreeze.push(pr('ZZW', i, '2026-10-0' + i + 'T10:00:00Z', '2026-10-01'));
     const pLong = pullLog.pullContext(mockDb(longFreeze, { ZZW: '2026-10-01' })).by_code.ZZW;
-    check('sintetis: deret beku lebih panjang dari jendela -> frozen = SCAN_ROWS + frozen_capped true (batas bawah jujur)',
-      pLong.frontier_frozen_pulls === pullLog.SCAN_ROWS && pLong.frozen_capped === true && pLong.source_stalled === true,
+    check('sintetis: deret beku lebih panjang dari jendela -> frozen = SCAN_PULL_DAYS + frozen_capped true (batas bawah jujur)',
+      pLong.frontier_frozen_pulls === pullLog.SCAN_PULL_DAYS && pLong.frozen_capped === true && pLong.source_stalled === true,
       JSON.stringify(pLong));
+
+    // ── SATUAN DERET = HARI TARIK (kanban t_be770638, temuan R6 sena) ──────────────────
+    // Pengunci perilaku baru: burst/retry dalam satu hari TIDAK boleh menuduh sumber sehat,
+    // sementara sumber yang benar-benar beku lintas hari HARUS tetap menyala.
+    const burstOneDay = [];
+    for (let i = 1; i <= 10; i++) {
+      burstOneDay.push(pr('ZZQ', i, '2026-10-19T02:40:' + String(40 + i).padStart(2, '0') + 'Z', '2026-10-15'));
+    }
+    const pBurst = pullLog.pullContext(mockDb(burstOneDay, { ZZQ: '2026-10-15' })).by_code.ZZQ;
+    check('sintetis: 10 tarikan dalam <1 menit (SATU hari tarik) frontier sama -> frozen 1, TIDAK stalled',
+      pBurst.frontier_frozen_pulls === 1 && pBurst.source_stalled === false
+        && pBurst.frozen_pull_days === 1 && pBurst.ok_pulls_scanned === 10 && pBurst.frozen_unit === 'pull_day',
+      JSON.stringify(pBurst));
+
+    // burst di hari yang sama TIDAK menambah deret: 1 hari beku kemarin + 10 baris hari ini
+    // dengan frontier sama = 2 HARI beku (bukan 11), jadi masih di bawah ambang rail 3.
+    const burstPlusYesterday = burstOneDay.slice();
+    burstPlusYesterday.push(pr('ZZQ', 11, '2026-10-18T12:40:00Z', '2026-10-15'));
+    const pBurst2 = pullLog.pullContext(mockDb(burstPlusYesterday, { ZZQ: '2026-10-15' })).by_code.ZZQ;
+    check('sintetis: burst 10 baris hari ini + 1 hari beku kemarin -> frozen 2 (bukan 11), belum stalled',
+      pBurst2.frontier_frozen_pulls === 2 && pBurst2.source_stalled === false && pBurst2.frozen_pull_days === 2,
+      JSON.stringify(pBurst2));
+
+    // dan pengunci arah sebaliknya: 3 hari tarik BERBEDA dengan frontier sama = STALL.
+    const threeDays = [pr('ZZD', 1, '2026-10-17T12:40:00Z', '2026-10-15'),
+                       pr('ZZD', 2, '2026-10-18T12:40:00Z', '2026-10-15'),
+                       pr('ZZD', 3, '2026-10-19T12:40:00Z', '2026-10-15')];
+    const pThree = pullLog.pullContext(mockDb(threeDays, { ZZD: '2026-10-15' })).by_code.ZZD;
+    check('sintetis: 3 tarikan pada 3 HARI TARIK berbeda, frontier sama -> source_stalled TRUE (pengunci)',
+      pThree.source_stalled === true && pThree.frontier_frozen_pulls === 3 && pThree.stall_threshold === 3,
+      JSON.stringify(pThree));
+
+    // jebakan terukur (COAL 20 Okt): baris TERBARU satu hari adalah `no_data`. Dedupe per hari
+    // tidak boleh menghapus frontier `ok` — pull_behind/frontier harus tetap terbaca.
+    const noDataLatest = [pr('ZZN', 1, '2026-10-18T12:40:00Z', '2026-10-16'),
+                          pr('ZZN', 2, '2026-10-19T12:40:00Z', '2026-10-16'),
+                          pr('ZZN', 3, '2026-10-20T04:38:00Z', null, 'no_data')];
+    const pNoData = pullLog.pullContext(mockDb(noDataLatest, { ZZN: '2026-10-15' })).by_code.ZZN;
+    check('sintetis: baris terbaru `no_data` TIDAK menghapus frontier ok -> frontier 2026-10-16, frozen 2, last_status no_data',
+      pNoData.last_frontier_date === '2026-10-16' && pNoData.frontier_frozen_pulls === 2
+        && pNoData.pull_behind === true && pNoData.last_status === 'no_data',
+      JSON.stringify(pNoData));
+
+    // batas hari = WIB (bukan UTC): 19:40 WIB 19 Okt (12:40Z) dan 02:41 WIB 20 Okt (19:41Z 19 Okt)
+    // adalah DUA hari tarik walau tanggal UTC-nya sama.
+    const wibBoundary = [pr('ZZT', 1, '2026-10-19T12:40:00Z', '2026-10-15'),
+                         pr('ZZT', 2, '2026-10-19T19:41:00Z', '2026-10-15')];
+    const pWib = pullLog.pullContext(mockDb(wibBoundary, { ZZT: '2026-10-15' })).by_code.ZZT;
+    check('sintetis: batas hari tarik = WIB (19:40 WIB & 02:41 WIB besoknya = 2 hari, bukan 1)',
+      pullLog.pullDayOf('2026-10-19T12:40:00Z') === '2026-10-19'
+        && pullLog.pullDayOf('2026-10-19T19:41:00Z') === '2026-10-20'
+        && pWib.frozen_pull_days === 2 && pWib.frontier_frozen_pulls === 2,
+      JSON.stringify({ d1: pullLog.pullDayOf('2026-10-19T12:40:00Z'), d2: pullLog.pullDayOf('2026-10-19T19:41:00Z'), p: pWib }));
+
+    // jendela per-hari: burst satu hari tidak boleh menghabiskan jendela sampai hari
+    // sebelumnya (yang punya baris ok pembanding) hilang dari pindaian.
+    const manyRowsOneDay = [];
+    for (let i = 1; i <= 20; i++) manyRowsOneDay.push(pr('ZZM', 100 + i, '2026-10-19T02:4' + (i % 10) + ':00Z', '2026-10-16'));
+    manyRowsOneDay.push(pr('ZZM', 1, '2026-10-18T12:40:00Z', '2026-10-16'));
+    manyRowsOneDay.push(pr('ZZM', 2, '2026-10-17T12:40:00Z', '2026-10-15'));
+    const pMany = pullLog.pullContext(mockDb(manyRowsOneDay, { ZZM: '2026-10-16' })).by_code.ZZM;
+    check('sintetis: 20 baris di satu hari tidak menghabiskan jendela -> hari sebelumnya tetap dipindai (frozen 2, bukan 21)',
+      pMany.frontier_frozen_pulls === 2 && pMany.frozen_pull_days === 2 && pMany.pull_days_observed === 3
+        && pMany.source_stalled === false,
+      JSON.stringify(pMany));
+
+    // ── EVALUABILITAS (keputusan Toku t_be770638 butir 4-5) ────────────────────────────
+    // Pengunci: "belum bisa dinilai" TIDAK boleh terbaca sebagai "sumber sehat". Dengan
+    // 2 HARI TARIK < ambang 3, `source_stalled` memang tidak bisa true (bukan salah hitung),
+    // jadi satu-satunya cara membedakannya dari sumber sehat adalah field evaluabilitas ini.
+    const twoDays = [pr('ZZV', 1, '2026-10-18T12:40:00Z', '2026-10-15'),
+                     pr('ZZV', 2, '2026-10-19T12:40:00Z', '2026-10-15')];
+    const pTwo = pullLog.pullContext(mockDb(twoDays, { ZZV: '2026-10-15' })).by_code.ZZV;
+    check('sintetis: pull_days_observed=2 -> stall_evaluable FALSE (riwayat < ambang, bukan "sehat")',
+      pTwo.pull_days_observed === 2 && pTwo.stall_evaluable === false && pTwo.source_stalled === false
+        && pTwo.stall_threshold_days === 3 && pTwo.frozen_pull_days === 2,
+      JSON.stringify(pTwo));
+    check('sintetis: 3 HARI TARIK -> stall_evaluable TRUE (evaluabilitas mengikuti satuan hari)',
+      pThree.pull_days_observed === 3 && pThree.stall_evaluable === true, JSON.stringify(pThree));
+    check('sintetis: rail snapshot (ambang 7 hari) -> 3 hari belum bisa dinilai, 7 hari bisa',
+      pSnap3.stall_evaluable === false && pSnap3.stall_threshold_days === 7
+        && pSnap7.stall_evaluable === true && pSnap7.pull_days_observed === 7,
+      JSON.stringify({ snap3: [pSnap3.pull_days_observed, pSnap3.stall_evaluable], snap7: [pSnap7.pull_days_observed, pSnap7.stall_evaluable] }));
+    // Deret beku TETAP dihitung dari hari `ok`; hari yang isinya cuma error/no_data menambah
+    // pull_days_observed tapi TIDAK boleh menaikkan evaluabilitas... kecuali hari `ok` cukup.
+    const mixedDays = [pr('ZZU', 1, '2026-10-17T12:40:00Z', '2026-10-15'),
+                       pr('ZZU', 2, '2026-10-18T12:40:00Z', '2026-10-15'),
+                       pr('ZZU', 3, '2026-10-19T12:40:00Z', null, 'error'),
+                       pr('ZZU', 4, '2026-10-20T12:40:00Z', null, 'no_data')];
+    const pMixed = pullLog.pullContext(mockDb(mixedDays, { ZZU: '2026-10-14' })).by_code.ZZU;
+    check('sintetis: hari tanpa tarikan ok tidak menopang evaluabilitas (ok 2 hari < ambang -> evaluable false)',
+      pMixed.pull_days_observed === 2 && pMixed.stall_evaluable === false && pMixed.source_stalled === false
+        && pMixed.frozen_pull_days === 2 && pMixed.pull_behind === true,
+      JSON.stringify(pMixed));
 
     // (b) pull_behind: cacat KITA vs lag sumber
     const behind = [pr('ZZB', 1, '2026-10-19T10:00:00Z', '2026-10-16')];
@@ -656,6 +769,36 @@ function main() {
       sSum.pull_behind_codes.join(',') === 'TIN' && sSum.source_stalled_codes.join(',') === 'STALLED,TIN'
         && sSum.stale_codes.join(',') === 'TIN' && sSum.delayed_codes.join(',') === 'CPO',
       JSON.stringify({ stale: sSum.stale_codes, delayed: sSum.delayed_codes, behind: sSum.pull_behind_codes, stalled: sSum.source_stalled_codes }));
+    // Addendum Toku (18:12) butir 1 — KOMPATIBEL KE BELAKANG: fixture di atas sengaja TIDAK
+    // punya field stall_* sama sekali, dan hasilnya harus tetap persis seperti sebelumnya.
+    // Absen = evaluable, jadi tidak boleh ada kode yang "dituduh" belum bisa dinilai.
+    check('ringkasan: by_code tanpa field stall_* (util lama) -> stall_unevaluable_codes KOSONG (absen = evaluable, asersi lama tetap hijau)',
+      Array.isArray(sSum.stall_unevaluable_codes) && sSum.stall_unevaluable_codes.length === 0,
+      JSON.stringify(sSum.stall_unevaluable_codes));
+
+    // Fixture KEDUA (terpisah, bukan menumpang yang lama) untuk pengunci DoD tambahan Toku:
+    // 2 hari tarik -> stall_evaluable=false DAN kode itu muncul di stall_unevaluable_codes.
+    const sctx2 = {
+      ref_date: '2026-10-19', ref_source: 'test', sessions,
+      window_from: sessions[0], expected_lag: ctx.expected_lag,
+      pull: { available: true, thresholds: { session_rail: 3, snapshot_rail: 7 },
+              by_code: {
+                // kasus nyata 20 Okt 2026: kelima seri punya 2 hari tarik < ambang 3.
+                YOUNG: { pull_behind: false, source_stalled: false, stall_evaluable: false, pull_days_observed: 2 },
+                // sumber sehat yang SUDAH bisa dinilai: tidak boleh masuk daftar mana pun.
+                HEALTHY: { pull_behind: false, source_stalled: false, stall_evaluable: true, pull_days_observed: 9 },
+              } },
+    };
+    const sEnt2 = [
+      { code: 'YOUNG', freshness: fresh.seriesFreshness(sctx2, '2026-10-19', 'CPO') },
+      { code: 'HEALTHY', freshness: fresh.seriesFreshness(sctx2, '2026-10-19', 'CPO') },
+    ];
+    const sSum2 = fresh.summarize(sctx2, sEnt2);
+    check('ringkasan: pull_days_observed=2 (stall_evaluable=false) -> kode TERBIT di stall_unevaluable_codes, bukan di source_stalled_codes',
+      sSum2.stall_unevaluable_codes.join(',') === 'YOUNG'
+        && sSum2.source_stalled_codes.length === 0
+        && sSum2.stall_unevaluable_codes.indexOf('HEALTHY') === -1,
+      JSON.stringify({ unevaluable: sSum2.stall_unevaluable_codes, stalled: sSum2.source_stalled_codes }));
     check('ringkasan: pull_log.thresholds ikut terkirim (angka N terbaca, bukan sihir di kode)',
       sSum.pull_log.available === true && sSum.pull_log.thresholds.session_rail === 3 && sSum.pull_log.thresholds.snapshot_rail === 7);
     const sumNoPull = fresh.summarize(ctx, sEnt);
@@ -675,35 +818,83 @@ function main() {
     const tickers = {};
     for (const t of db.prepare('SELECT code, last_date FROM custom_tickers').all()) tickers[t.code] = t.last_date || '';
     const liveReport = pullLog.pullReport(db);
-    // Deret beku dihitung ulang DI SINI (bukan dari util): tarikan sukses berturut-turut
-    // dengan frontier sama, baris non-ok dilewati. Jendela = baris yang benar-benar dipindai.
-    const streakOf = (list, limit) => {
-      let streak = 0, front = null;
-      for (const r of list.slice(0, limit)) {
+    // Deret beku dihitung ulang DI SINI (bukan dari util): tarikan sukses dirapatkan jadi SATU
+    // titik per HARI TARIK (tanggal WIB), baris non-ok dilewati, lalu deret terdepan dengan
+    // frontier sama dihitung. Jendela = HARI TARIK yang benar-benar dipindai pullContext.
+    const okDaysOf = (list, dayLimit) => {
+      const seen = new Set(), days = [];
+      for (const r of list) {
         if (r.status !== 'ok' || !r.source_frontier_date) continue;
-        if (front === null) front = r.source_frontier_date;
-        if (r.source_frontier_date !== front) break;
+        const d = dayWib(r.pulled_at);
+        if (seen.has(d)) continue;
+        seen.add(d);
+        days.push(r.source_frontier_date);
+        if (dayLimit && days.length >= dayLimit) break;
+      }
+      return days;
+    };
+    const streakOf = (list, dayLimit) => {
+      let streak = 0, front = null;
+      for (const f of okDaysOf(list, dayLimit)) {
+        if (front === null) front = f;
+        if (f !== front) break;
         streak++;
       }
       return streak;
+    };
+    // Jumlah HARI TARIK (semua status) yang masuk jendela pullContext.
+    const windowDaysOf = (list, dayLimit) => {
+      const seen = new Set();
+      for (const r of list) {
+        if (seen.size >= dayLimit) break;
+        seen.add(dayWib(r.pulled_at));
+      }
+      return seen.size;
+    };
+    // HARI TARIK yang punya tarikan `ok` DI DALAM jendela pullContext — pembagi deret beku.
+    // Hari di luar jendela tidak boleh ikut: kalau ikut, `pull_days_observed` jadi lebih besar
+    // dari yang benar-benar dipindai util, dan evaluabilitasnya dibandingkan dengan angka lain.
+    const okDaysInWindow = (list, dayLimit) => {
+      const days = [], ok = new Set();
+      for (const r of list) {
+        const d = dayWib(r.pulled_at);
+        if (days.indexOf(d) === -1) {
+          if (days.length >= dayLimit) continue;      // sudah di luar jendela
+          days.push(d);
+        }
+        if (r.status === 'ok' && r.source_frontier_date) ok.add(d);
+      }
+      return ok.size;
     };
     for (const code of Object.keys(grouped)) {
       const list = grouped[code];                        // id DESC = terbaru dulu
       const flags = liveCtx.pull.by_code[code] || {};
       const rep = liveReport.by_code[code] || {};
       const lastFrontier = (list.find(r => r.source_frontier_date) || {}).source_frontier_date || null;
-      const streakWindow = streakOf(list, pullLog.SCAN_ROWS);
-      const streakFull = streakOf(list, list.length);
+      const streakWindow = streakOf(list, pullLog.SCAN_PULL_DAYS);
+      const streakFull = streakOf(list, 0);
+      const windowDays = windowDaysOf(list, pullLog.SCAN_PULL_DAYS);
+      const okDaysWindow = okDaysInWindow(list, pullLog.SCAN_PULL_DAYS);
+      const okDaysFull = okDaysOf(list, 0).length;
       const thr = pullLog.stallThresholdFor((list.find(r => r.source_frontier_date) || {}).source || '');
       if (flags.last_frontier_date !== lastFrontier) liveBad.push(code + ': frontier ' + flags.last_frontier_date + ' != ' + lastFrontier);
       if (flags.frontier_frozen_pulls !== streakWindow) liveBad.push(code + ': frozen window ' + flags.frontier_frozen_pulls + ' != ' + streakWindow);
-      if (flags.frozen_capped !== (list.length >= pullLog.SCAN_ROWS && streakWindow >= pullLog.SCAN_ROWS)) {
-        liveBad.push(code + ': frozen_capped ' + flags.frozen_capped + ' != ' + (list.length >= pullLog.SCAN_ROWS && streakWindow >= pullLog.SCAN_ROWS));
+      if (flags.frozen_pull_days !== streakWindow) liveBad.push(code + ': frozen_pull_days ' + flags.frozen_pull_days + ' != ' + streakWindow);
+      if (flags.pull_days_observed !== okDaysWindow) liveBad.push(code + ': pull_days_observed ' + flags.pull_days_observed + ' != ' + okDaysWindow);
+      if (flags.stall_threshold_days !== thr) liveBad.push(code + ': threshold_days ' + flags.stall_threshold_days + ' != ' + thr);
+      if (flags.stall_evaluable !== (okDaysWindow >= thr)) liveBad.push(code + ': evaluable ' + flags.stall_evaluable + ' != ' + (okDaysWindow >= thr));
+      // Invarian yang menutup silent false-negative: stalled HANYA boleh true bila bisa dinilai.
+      if (flags.source_stalled === true && flags.stall_evaluable !== true) liveBad.push(code + ': stalled tanpa evaluable');
+      if (flags.frozen_capped !== (windowDays >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS)) {
+        liveBad.push(code + ': frozen_capped ' + flags.frozen_capped + ' != ' + (windowDays >= pullLog.SCAN_PULL_DAYS && streakWindow >= pullLog.SCAN_PULL_DAYS));
       }
       if (flags.source_stalled !== (streakFull >= thr)) liveBad.push(code + ': stalled ' + flags.source_stalled + ' != ' + (streakFull >= thr));
       if (flags.stall_threshold !== thr) liveBad.push(code + ': threshold ' + flags.stall_threshold + ' != ' + thr);
       // Laporan (seluruh riwayat) tidak boleh terpotong jendela request.
       if (rep.frontier_frozen_pulls !== streakFull) liveBad.push(code + ': report frozen ' + rep.frontier_frozen_pulls + ' != ' + streakFull);
+      if (rep.frozen_pull_days !== streakFull) liveBad.push(code + ': report frozen_pull_days ' + rep.frozen_pull_days + ' != ' + streakFull);
+      if (rep.pull_days_observed !== okDaysFull) liveBad.push(code + ': report pull_days_observed ' + rep.pull_days_observed + ' != ' + okDaysFull);
+      if (rep.stall_evaluable !== (okDaysFull >= thr)) liveBad.push(code + ': report evaluable ' + rep.stall_evaluable + ' != ' + (okDaysFull >= thr));
       if (rep.frozen_capped !== false) liveBad.push(code + ': report frozen_capped harus false (laporan penuh)');
       const wantBehind = !!(lastFrontier && Object.prototype.hasOwnProperty.call(tickers, code)
         && (!tickers[code] || tickers[code] < lastFrontier));
@@ -719,6 +910,35 @@ function main() {
         const comp = (Object.keys(grouped).indexOf(c) === -1);   // kode di luar jendela? tidak mungkin, laporkan apa adanya
         return comp || liveReport.by_code[c].frontier_frozen_pulls >= ((liveCtx.pull.by_code[c] || {}).frontier_frozen_pulls || 0);
       }), Object.keys(liveReport.by_code).join(','));
+
+    // (e2) live: "belum bisa dinilai" terbit di PAYLOAD panel, bukan hanya di util.
+    // DoD Toku: kode dengan stall_evaluable=false wajib terlihat di /api/market/overview.
+    // Yang diuji bukan "array tidak kosong" (itu bisa lolos dengan isi karangan), melainkan
+    // kesamaan himpunan dengan pullContext untuk seri yang memang ada di surface itu.
+    // Surface overview membatasi ringkasannya ke section `commodities` (9 seri), jadi himpunan
+    // pembandingnya diambil dari section itu — bukan seluruh custom_pull_log, dan tanpa duplikat
+    // (allComm memuat beberapa kontrak per kode).
+    const ovSection = ((ov && Array.isArray(ov.sections)) ? ov.sections : [])
+      .filter(s => s && s.id === 'commodities')[0] || null;
+    const ovCodes = Array.from(new Set(((ovSection && ovSection.items) || []).map(i => i && i.code).filter(Boolean))).sort();
+    const unevalWant = ovCodes.filter(c => liveCtx.pull.by_code[c] && liveCtx.pull.by_code[c].stall_evaluable === false).sort();
+    const unevalGot = ((ov && ov.freshness && ov.freshness.stall_unevaluable_codes) || []).slice().sort();
+    const unevalBad = [];
+    if (!ov || !ov.freshness || !Array.isArray(ov.freshness.stall_unevaluable_codes)) {
+      unevalBad.push('field stall_unevaluable_codes tidak ada di /api/market/overview.freshness');
+    }
+    if (ovCodes.length === 0) unevalBad.push('section commodities kosong — asersi ini tidak menguji apa pun');
+    for (const c of unevalGot) {
+      const p = liveCtx.pull.by_code[c];
+      if (!p) unevalBad.push(c + ': tidak ada di pullContext');
+      else if (p.stall_evaluable !== false) unevalBad.push(c + ': evaluable=true tapi masuk unevaluable');
+      else if (p.source_stalled) unevalBad.push(c + ': stalled=true tapi masuk unevaluable (kontradiktif)');
+    }
+    if (unevalWant.join(',') !== unevalGot.join(',')) {
+      unevalBad.push('panel [' + unevalGot.join(',') + '] != pullContext [' + unevalWant.join(',') + ']');
+    }
+    check('live: freshness.stall_unevaluable_codes = kode ber-`stall_evaluable=false` di pullContext (bukan daftar karangan)',
+      unevalBad.length === 0, unevalBad.join(' | ') || ('unevaluable=' + unevalGot.join(',')));
 
     // (f) live: lag frontier MAKS (sesi) vs nilai deklaratif — angka yang menggantikan deklarasi
     const report = pullLog.pullReport(db);
