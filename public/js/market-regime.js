@@ -60,9 +60,8 @@ function renderMR(el) {
   // ── Header ──
   h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
   h += '<span style="font-weight:700;font-size:14px">🌐 Market Regime</span>';
-  h += '<span style="font-size:10px;color:var(--t3)">sesi rujukan <b style="color:var(--t2)">' + esc(d.ref_date || '—') + '</b>'
+  h += '<span style="font-size:10px;color:var(--t3)">data per <b style="color:var(--t2)">' + esc(d.ref_date || '—') + '</b>'
     + ' (' + esc(d.ref_source || '—') + ')</span>';
-  h += '<span style="font-size:10px;color:var(--t3)">dibaca ' + esc(mrClock(d.generated_at)) + ' oleh server</span>';
   h += mrPipelineBadge(d.pipeline);
   h += '</div>';
 
@@ -192,7 +191,7 @@ function mrRenderRegimeBar(regime) {
   regime.forEach(function (s) {
     var st = MR_STATUS_TEXT[s.status] || MR_STATUS_TEXT.unavailable;
     var comps = (s.components || []).map(function (c) {
-      return esc(c.label) + ' ' + mrNum(c.value) + (c.unit === '%' ? '%' : '') + ' (' + esc(c.as_of || '—') + ')';
+      return esc(c.label) + ' ' + mrNum(c.value) + (c.unit === '%' ? '%' : '');
     }).join(' · ');
     var miss = (s.missing || []).map(function (m) { return esc(m.label); }).join(', ');
     h += '<div class="mr-score" data-id="' + esc(s.id) + '" style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:210px;flex:1"'
@@ -203,8 +202,8 @@ function mrRenderRegimeBar(regime) {
       + ' <span style="font-size:9px;font-weight:400;color:var(--t2)">' + esc(s.band_label || '') + '</span></div>';
     h += '<div style="font-size:9px;color:var(--t3)">acuan <b style="color:var(--t2)">' + esc(s.as_of || '—') + '</b>'
       + (s.age_days === null || s.age_days === undefined ? '' : ' · ' + s.age_days + ' hr')
-      + ' · <span style="color:' + st.c + '">' + st.t + '</span>'
-      + ' · cakupan bobot ' + (s.coverage === null ? '—' : mrNum(s.coverage) + '%') + '</div>';
+      + (st.t === 'umur tak terukur' ? '' : ' · <span style="color:' + st.c + '">' + st.t + '</span>')
+      + '</div>';
     if (s.score === null) {
       h += '<div style="font-size:9px;color:var(--am)">' + esc(s.reason || 'skor tidak dihitung') + '</div>';
     } else {
@@ -214,10 +213,7 @@ function mrRenderRegimeBar(regime) {
     h += '</div>';
   });
   h += '</div>';
-  h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">Skor 0-100 deskriptif — bukan ramalan dan bukan sinyal beli/jual. '
-    + 'Ambang label: &ge;67 mendukung · 45-67 campuran · 33-45 campuran-lemah · &lt;33 menekan '
-    + '(server/utils/regime-score.js; anchor tiap komponen ada di berkas itu, bukan tersembunyi di UI). '
-    + 'Tanggal acuan = komponen TERTUA yang dipakai, jadi skor tidak pernah tampil lebih segar dari inputnya.</div>';
+  h += '<div style="font-size:9px;color:var(--t3);margin-top:5px">0-100 · &ge;67 mendukung · &lt;33 menekan · bukan sinyal</div>';
   return h;
 }
 
@@ -284,10 +280,7 @@ function mrRenderMonitor(mon) {
   mon.groups.forEach(function (g) { nRows += (g.items || []).length; });
 
   var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">'
-    + nRows + ' seri dari <b style="color:var(--t2)">custom_tickers</b> · ' + (mon.groups.length) + ' kelas aset · '
-    + 'baris = instrumen, jadi seri baru cukup menambah baris. Klik header kolom untuk mengurutkan. '
-    + 'Kolom <b style="color:var(--t2)">as-of</b> = tanggal acuan data, bukan tanggal hari ini; seri yang basi '
-    + 'ditandai ⏸ dan angkanya ditulis netral (tidak diwarnai seperti pergerakan hari ini).</div>';
+    + nRows + ' seri · ' + mon.groups.length + ' kelas aset</div>';
 
   mon.groups.forEach(function (g) {
     var items = g.items || [];
@@ -329,8 +322,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
   h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
     + (isPct ? 'YTD' : 'Δ YTD') + '</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">%ile 1Y</th>'
-    + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">as-of</th>'
-    + '<th style="text-align:left;padding:3px 6px;font-weight:600">sumber</th></tr>';
+    + '</tr>';
 
   rows.forEach(function (it) {
     var st = mrRowState(it);
@@ -358,10 +350,6 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
       + (it.n_bars < 2 ? '<span style="color:var(--t3)" title="seri baru punya 1 bar: YTD tidak bermakna">—</span>' : mrMonChg(it.chg_ytd, isPct, neutral)) + '</td>';
     h += '<td style="padding:3px 6px;text-align:right;color:var(--t2)" data-v="' + (it.pctile_1y == null ? '' : it.pctile_1y) + '">'
       + (it.pctile_1y == null ? '—' : mrNum(it.pctile_1y) + '%') + '</td>';
-    h += '<td style="padding:3px 6px;text-align:right;color:var(--t3)" data-v="' + esc(it.as_of || '') + '">'
-      + esc(it.as_of || '—')
-      + (it.age_days ? ' <span style="font-size:9px">' + ' \u00b7 ' + it.age_days + ' hr</span>' : '') + '</td>';
-    h += '<td style="padding:3px 6px;color:var(--t3);font-family:var(--f);font-size:9px">' + esc(it.source || '—') + '</td>';
     h += '</tr>';
   });
   h += '</table>';
@@ -402,7 +390,6 @@ function mrRenderLiquidity(liq) {
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Seri</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Level</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Δ1 periode</th>'
-    + '<th style="text-align:right;padding:3px 6px;font-weight:600">as-of</th>'
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">status</th></tr>';
   liq.items.forEach(function (x) {
     if (x.missing) {
@@ -414,7 +401,7 @@ function mrRenderLiquidity(liq) {
     }
     var st = x.stale ? 'stale' : (x.state === 'na' ? 'unmeasured' : 'fresh');
     var stTxt = x.stale ? '<span style="color:var(--rd)">basi</span>'
-      : x.state === 'na' ? '<span style="color:var(--t3)">umur tak terukur</span>'
+      : x.state === 'na' ? '<span style="color:var(--t3)">—</span>'
       : '<span style="color:var(--gn)">segar</span>';
     var lvl = (x.last === null || x.last === undefined)
       ? '<span style="color:var(--t2)" title="bar terakhir ' + mrNum(x.last_bar_value) + ' pada ' + esc(x.as_of || '') + '">—</span>'
@@ -425,8 +412,6 @@ function mrRenderLiquidity(liq) {
       + '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.label) + (x.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(x.unit) + ')</span>' : '') + '</td>'
       + '<td style="padding:3px 6px;text-align:right">' + lvl + '</td>'
       + '<td style="padding:3px 6px;text-align:right">' + d1 + '</td>'
-      + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + esc(x.as_of || '—')
-      + (x.age_days ? ' <span style="font-size:9px">' + ' \u00b7 ' + x.age_days + ' hr</span>' : '') + '</td>'
       + '<td style="padding:3px 6px">' + stTxt + '</td></tr>';
   });
   h += '</table>';
