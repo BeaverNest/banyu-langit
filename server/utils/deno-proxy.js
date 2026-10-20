@@ -377,7 +377,9 @@ function runSelectiveBridgeImport(db, idxBridge, logSync, modules) {
     dividends: ['importDividends'],
     stock_split: ['importStockSplits'],
     company_profile: ['importCompanyProfiles', 'importCompanyDetails'],
-    broker_summary: ['importBrokerSummary'],
+    // broker_summary: dinonaktifkan 20 Okt 2026 (keputusan owner: total per broker tanpa
+    // pecahan per saham tidak berguna untuk analisis). Data lama sudah dihapus.
+    // broker_summary: ['importBrokerSummary'],
     announcements: ['importCompanyAnnouncement'],
     domestic_trading: ['importDomesticTrading'],
     industry_trading: ['importIndustryTrading'],
