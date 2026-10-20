@@ -198,13 +198,13 @@ function mrRenderRegimeBar(regime) {
     h += '<div class="mr-score" data-id="' + esc(s.id) + '" style="background:var(--bg1);border:1px solid var(--b1);border-radius:6px;padding:8px 12px;min-width:210px;flex:1"'
       + ' title="' + esc(s.method || '') + '">';
     h += '<div style="font-size:9px;color:var(--t3)">' + esc(s.label) + '</div>';
-    h += '<div style="font-size:20px;font-weight:700;font-family:var(--fm);color:' + mrScoreColor(s.score) + '">'
-      + (s.score === null ? '—' : mrNum(s.score))
-      + ' <span style="font-size:9px;font-weight:400;color:var(--t2)">' + esc(s.band_label || '') + '</span></div>';
-    var meta = ['acuan <b style="color:var(--t2)">' + esc(s.as_of || '—') + '</b>'];
-    if (s.age_days !== null && s.age_days !== undefined) meta.push(s.age_days + ' hr');
-    if (st.t !== 'umur tak terukur') meta.push('<span style="color:' + st.c + '">' + st.t + '</span>');
-    h += '<div style="font-size:9px;color:var(--t3)">' + meta.join(' · ') + '</div>';
+    // Keadaan dulu, angka belakang: yang dibaca 2 detik pertama adalah KATA, bukan skor 0-100.
+    h += '<div style="font-size:18px;font-weight:700;color:' + mrScoreColor(s.score) + '">'
+      + esc(s.band_label || (s.score === null ? '—' : '')) + '</div>';
+    h += '<div style="font-size:9px;color:var(--t3)">'
+      + (s.score === null ? '' : Math.round(s.score) + '/100 · ')
+      + 'acuan ' + esc(s.as_of || '—')
+      + (s.age_days ? ' · ' + s.age_days + ' hr' : '') + '</div>';
     if (s.score === null) {
       h += '<div style="font-size:9px;color:var(--am)">' + esc(s.reason || 'skor tidak dihitung') + '</div>';
     } else {
