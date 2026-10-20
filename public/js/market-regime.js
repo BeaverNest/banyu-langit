@@ -83,8 +83,9 @@ function renderMR(el) {
   // ── 4. Internals IDX ──
   h += mrSection('4', '🇮🇩 Internals IDX', mrRenderInternals(d.internals));
 
-  // ── 5. Coverage ──
-  h += mrSection('5', '🧭 Coverage — apa yang tidak kita punya', mrRenderCoverage(d.coverage));
+  // ── 5. Coverage: tidak ditampilkan di Market Regime (permintaan owner 20 Okt 2026).
+  // Penanda basi tetap ada di baris tabel (⏸/◔) dan di tooltip; data mentahnya tetap
+  // tersedia di payload /api/idx/cross-asset (field `coverage`) untuk diagnosis.
 
   // ── 6. Hot News (dipertahankan) ──
   h += mrSection('6', '📰 Hot News', '<div id="mr-news"><div style="color:var(--t3);font-size:11px">⏳ Loading headlines...</div></div>');
