@@ -385,9 +385,9 @@ function mrRowDetail(tr) {
 
 // Sparkline = SVG poligraf inline, bukan chart library: 30 titik tidak butuh kanvas, dan
 // import ECharts untuk 78 baris (bila semua dibuka) akan menambah beban render tanpa manfaat.
-function mrSparkSvg(vals) {
-  // Lebar sparkline mengikuti lebar tabel (viewBox diskalakan), bukan 240px tetap.
-  var w = 1000, hgt = 140, pad = 6;
+function mrSparkSvg(vals, dates) {
+  // Lebar mengikuti tabel (viewBox diskalakan). Hover memakai koordinat viewBox yang sama.
+  var w = 1000, hgt = 140, pad = 8;
   var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
   var pts = vals.map(function (v, i) {
@@ -396,11 +396,57 @@ function mrSparkSvg(vals) {
     return x.toFixed(1) + ',' + y.toFixed(1);
   }).join(' ');
   var col = vals[vals.length - 1] >= vals[0] ? 'var(--gn)' : 'var(--rd)';
-  return '<svg width="100%" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '"'
-    + ' preserveAspectRatio="none"'
-    + ' style="display:block;margin-top:6px;width:100%" aria-label="sparkline" role="img">'
+  var ds = JSON.stringify(dates || []).replace(/'/g, '&#39;');
+  return '<div style="position:relative;margin-top:6px">'
+    + '<svg width="100%" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '"'
+    + ' preserveAspectRatio="none" data-vals=\'' + JSON.stringify(vals) + '\' data-dates=\'' + ds + '\''
+    + ' style="display:block;width:100%;cursor:crosshair" aria-label="sparkline" role="img"'
+    + ' onmousemove="mrSparkMove(event,this)" onmouseleave="mrSparkLeave(this)">'
     + '<polyline fill="none" stroke="' + col + '" stroke-width="1.6" vector-effect="non-scaling-stroke"'
-    + ' points="' + pts + '"></polyline></svg>';
+    + ' points="' + pts + '"></polyline>'
+    + '<line class="mr-cross" x1="0" y1="0" x2="0" y2="' + hgt + '" stroke="rgba(160,170,190,.55)"'
+    + ' stroke-width="1" vector-effect="non-scaling-stroke" style="display:none"></line>'
+    + '<circle class="mr-dot" cx="0" cy="0" r="3" fill="' + col + '" style="display:none"></circle>'
+    + '</svg>'
+    + '<div class="mr-spark-tip" style="position:absolute;top:0;left:0;pointer-events:none;opacity:0;'
+    + 'background:var(--bg2);border:1px solid var(--b1);border-radius:4px;padding:2px 6px;font-size:9px;'
+    + 'font-family:var(--fm);white-space:nowrap;transition:opacity .1s"></div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);margin-top:2px">'
+    + '<span>' + mrNum(min) + '</span><span>' + mrNum(max) + '</span></div>'
+    + '</div>';
+}
+
+// Hover: crosshair + tooltip tanggal/nilai. Dipakai bersama semua baris (delegasi per elemen).
+function mrSparkMove(ev, svg) {
+  var vals = JSON.parse(svg.getAttribute('data-vals') || '[]');
+  var dates = JSON.parse(svg.getAttribute('data-dates') || '[]');
+  if (!vals.length) return;
+  var box = svg.getBoundingClientRect();
+  var rel = (ev.clientX - box.left) / (box.width || 1);
+  var i = Math.round(rel * (vals.length - 1));
+  i = Math.max(0, Math.min(vals.length - 1, i));
+  var pad = 8, w = 1000;
+  var x = pad + (w - 2 * pad) * (vals.length <= 1 ? 0 : i / (vals.length - 1));
+  var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals), span = (max - min) || 1;
+  var y = 140 - pad - (140 - 2 * pad) * ((vals[i] - min) / span);
+  var line = svg.querySelector('.mr-cross'), dot = svg.querySelector('.mr-dot');
+  if (line) { line.setAttribute('x1', x); line.setAttribute('x2', x); line.style.display = ''; }
+  if (dot) { dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.style.display = ''; }
+  var tip = svg.parentNode.querySelector('.mr-spark-tip');
+  if (tip) {
+    tip.style.opacity = 1;
+    tip.textContent = (dates[i] || '') + ' · ' + mrNum(vals[i]);
+    var left = Math.min(Math.max(0, rel * box.width - 45), Math.max(0, box.width - 120));
+    tip.style.left = left + 'px';
+  }
+}
+
+function mrSparkLeave(svg) {
+  var line = svg.querySelector('.mr-cross'), dot = svg.querySelector('.mr-dot');
+  if (line) line.style.display = 'none';
+  if (dot) dot.style.display = 'none';
+  var tip = svg.parentNode.querySelector('.mr-spark-tip');
+  if (tip) tip.style.opacity = 0;
 }
 
 function mrSeriesDetailHtml(it) {
@@ -421,16 +467,10 @@ function mrSeriesDetailHtml(it) {
     + '<b style="font-size:11px;color:var(--t1)">' + esc(it.name || it.code || '—') + '</b>'
     + '<span style="font-size:9px;color:var(--t3)">' + esc(it.code || '') + '</span>'
     + '<span style="font-size:9px;color:' + stp[1] + '">' + esc(stp[0]) + '</span></div>';
-  h += '<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:9px;color:var(--t3);margin-top:3px">'
-    + '<span>as-of <b style="color:var(--t2)">' + esc(it.as_of || '—') + '</b>'
-    + (it.age_days == null ? '' : ' · umur <b style="color:var(--t2)">' + it.age_days + ' hari</b>') + '</span>'
-    + '<span>sumber <b style="color:var(--t2)">' + esc(it.source || '—') + '</b></span>'
-    + '<span>n_bars <b style="color:var(--t2)">' + n + '</b>'
-    + (it.freq ? ' · ' + esc(MR_FREQ_TEXT[it.freq] || it.freq) : '')
-    + (it.first_date ? ' (' + esc(it.first_date) + ' &rarr; ' + esc(it.as_of || '—') + ')' : '') + '</span>'
-    + '<span>satuan <b style="color:var(--t2)">' + esc(it.unit || '—') + '</b></span>'
+  // Provenance lengkap ada di title baris tabel; panel detail cukup identitas + level terakhir.
+  h += '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:9px;color:var(--t3);margin-top:3px">'
     + '<span>terakhir <b style="color:var(--t2)">' + mrNum(it.last) + '</b></span>'
-    + '<span>win_1y <b style="color:var(--t2)">' + mrNum(it.win_1y_min) + ' – ' + mrNum(it.win_1y_max) + '</b></span>'
+    + '<span>' + esc(MR_FREQ_TEXT[it.freq] || it.freq || '') + '</span>'
     + '</div>';
 
   if (st === 'missing' || n === 0) {
@@ -447,10 +487,7 @@ function mrSeriesDetailHtml(it) {
     h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">spark tidak tersedia ('
       + spark.length + ' titik di payload)</div>';
   } else {
-    h += mrSparkSvg(spark);
-    h += '<div style="font-size:9px;color:var(--t3);margin-top:2px">spark ' + spark.length
-      + ' bar terakhir · rentang grafik ' + mrNum(Math.min.apply(null, spark)) + ' – '
-      + mrNum(Math.max.apply(null, spark)) + '</div>';
+    h += mrSparkSvg(spark, it.spark_dates || []);
   }
   h += '</div>';
   return h;

@@ -245,6 +245,8 @@ function buildRow(t, rawRows, ctx) {
     ref_date: refDate,
     // 30 bar terakhir untuk sparkline drill-down (dibulatkan 2 desimal: aturan format payload)
     spark: rows.slice(-30).map(r => r2(r.close)),
+    // tanggal untuk sparkline interaktif (hover). Tanpa ini, tooltip hanya bisa menyebut nilai.
+    spark_dates: rows.slice(-30).map(r => r.date),   // rows sudah dinormalisasi ke {date, close}
   };
 }
 
