@@ -370,12 +370,13 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
 
     var unitTag = it.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.unit) + ')</span>' : '';
     // as-of per baris (DoD3) TANPA kolom: kolom as-of & sumber dihapus dua kali oleh commit
-    // 8fc4904/571f156 (pemangkasan teks). Tanggal dicetak hanya pada baris yang BUKAN 'fresh' —
-    // baris fresh bertanggal sesi rujukan yang tertulis di header — dan tanggal + sumber + umur
-    // selalu tersedia di title baris, jadi tidak ada baris yang tanggalnya tak bisa dicek.
-    var asofNote = (st !== 'fresh' && it.as_of)
-      ? ' <span style="color:var(--t3);font-size:9px">· ' + esc(it.as_of)
-        + (it.age_days != null ? ' (' + it.age_days + ' hr)' : '') + '</span>'
+    // 8fc4904/571f156 (pemangkasan teks). Tanggal dicetak hanya bila baris BUKAN 'fresh' DAN
+    // tanggalnya berbeda dari sesi rujukan (baris bersesi rujukan sudah bertanggal di header);
+    // tanggal + sumber + umur selalu ada di title baris, jadi tidak ada baris yang tak bisa dicek.
+    var needsDate = st !== 'fresh' && it.as_of && it.as_of !== it.ref_date;
+    var asofNote = needsDate
+      ? ' <span style="color:var(--t3);font-size:9px">(' + esc(it.as_of)
+        + (it.age_days != null ? ' · ' + it.age_days + ' hr' : '') + ')</span>'
       : '';
     var rowTitle = (it.name || it.code) + ': bar terakhir ' + (it.as_of || '—')
       + (it.age_days != null ? ' · umur ' + it.age_days + ' hari' : '')
