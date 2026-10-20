@@ -146,46 +146,57 @@ router.get('/cross-asset', (req, res) => {
   }
 });
 
-// ═══ /api/idx/suspensions — status suspensi dari pengumuman BEI ═══
-// Riwayat event: company_suspends (turunan company_announcements, skrip
-// server/scripts/parse-suspensions.js). PENTING: pengumuman TIDAK cukup untuk menyatakan
-// "masih tersuspend" — terukur 20 Okt 2026, 36 dari 39 kandidat punya bar harga SETELAH
-// tanggal suspend (aktif kembali tanpa pengumuman Pembukaan). Status akhir selalu disilang
-// ke idx_daily: ada bar setelah tanggal suspend => TIDAK dianggap tersuspend.
-router.get('/suspensions', (req, res) => {
-  try {
-    const rows = db.prepare(`
-      SELECT s.code, s.type, s.suspend_date, s.title,
-             (SELECT MAX(d.trade_date) FROM idx_daily d WHERE d.code = s.code) AS last_bar
-        FROM company_suspends s
-       WHERE s.id IN (SELECT MAX(id) FROM company_suspends GROUP BY code)
-       ORDER BY s.suspend_date DESC`).all();
-
-    const active = [], resumedSilently = [], unknown = [];
-    for (const r of rows) {
-      if (r.type !== 'suspend') continue;
-      const days = Math.max(0, Math.round((Date.now() - new Date(r.suspend_date).getTime()) / 86400000));
-      const item = { code: r.code, since: r.suspend_date, days, last_bar: r.last_bar, reason: String(r.title || '').slice(0, 160) };
-      if (!r.last_bar) unknown.push(item);
-      else if (r.last_bar <= r.suspend_date) active.push(item);
-      else resumedSilently.push(item);
+  // ═══ /api/idx/suspensions — emiten yang TIDAK DIPERDAGANGKAN ═══
+  // Bukti utama = data perdagangan, bukan pengumuman: bar dengan volume 0 (dan low 0) berarti
+  // tidak ada transaksi. Terukur 20 Okt 2026: 203 kode punya low=0 sepanjang Agu-Okt dan
+  // TIDAK SATU pun punya volume>0; hanya 51 yang punya pengumuman suspensi di tabel kita —
+  // sisanya disuspend sebelum jendela pengumuman (data kita mulai 2025-01-01).
+  // Pengumuman dipakai sebagai ALASAN/tanggal, bukan sebagai penentu status.
+  router.get('/suspensions', (req, res) => {
+    try {
+      const minSessions = Number(req.query.sessions || 5);
+      // sesi tanpa transaksi berturut-turut dari belakang, per kode
+      const rows = db.prepare(`
+        SELECT code, trade_date, volume, close, prev_close
+          FROM idx_daily
+         WHERE trade_date >= date('now', '-120 day')
+         ORDER BY code, trade_date DESC`).all();
+      const byCode = new Map();
+      for (const r of rows) {
+        if (!byCode.has(r.code)) byCode.set(r.code, []);
+        byCode.get(r.code).push(r);
+      }
+      const active = [];
+      for (const [code, list] of byCode) {
+        let zero = 0, since = null;
+        for (const b of list) {                       // list sudah terbaru dulu
+          if (Number(b.volume) === 0) { zero++; since = b.trade_date; } else break;
+        }
+        if (zero < minSessions) continue;
+        const ann = db.prepare(`SELECT suspend_date, title FROM company_suspends
+                                 WHERE code=? ORDER BY suspend_date DESC LIMIT 1`).get(code);
+        active.push({
+          code, zero_sessions: zero, since,
+          last_close: list[0].close,
+          announced: ann ? ann.suspend_date : null,
+          reason: ann ? String(ann.title || '').slice(0, 160) : null,
+        });
+      }
+      active.sort((a, b) => b.zero_sessions - a.zero_sessions);
+      res.json({
+        ok: true,
+        sessions_threshold: minSessions,
+        counts: {
+          halted: active.length,
+          with_announcement: active.filter(x => x.announced).length,
+          without_announcement: active.filter(x => !x.announced).length,
+        },
+        halted: active,
+        rule: 'tidak ada transaksi (volume 0) minimal N sesi terakhir; pengumuman hanya memberi tanggal/alasan',
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) });
     }
-    res.json({
-      ok: true,
-      active,
-      resumed_without_announcement: resumedSilently.slice(0, 50),
-      unknown,
-      counts: {
-        active: active.length,
-        resumed_without_announcement: resumedSilently.length,
-        unknown: unknown.length,
-        events: db.prepare('SELECT COUNT(*) c FROM company_suspends').get().c,
-      },
-      rule: 'event terakhir per emiten, dibatalkan bila ada bar harga setelah tanggal suspend',
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
+  });
 
 module.exports = router;
