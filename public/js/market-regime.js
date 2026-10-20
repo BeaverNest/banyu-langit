@@ -250,6 +250,7 @@ function mrRenderChanged(list) {
 // itu inti DoD2. Satu tabel per (kadens, jenis perubahan): baris bulanan tidak boleh duduk di
 // bawah label kolom harian, dan seri rate tidak boleh diberi label "%" (salah satunya adalah
 // cacat review t_95ab7fa9 butir 4).
+var MR_FREQ_WORD = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan' };
 var MR_FREQ_SHORT = { D: 'D', W: 'W', M: 'M', Q: 'Q', Y: 'Y' };
 var MR_FREQ_TEXT = { D: 'harian', W: 'mingguan', M: 'bulanan', Q: 'kuartalan', Y: 'tahunan' };
 var MR_UNIT_SHORT = { sesi: 'D', minggu: 'W', bulan: 'M', kuartal: 'Q', tahun: 'Y' };
@@ -285,7 +286,19 @@ function mrRenderMonitor(mon) {
   var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">'
     + nRows + ' seri · ' + mon.groups.length + ' kelas aset</div>';
 
+  // Blok kecil terpisah bikin tidak rapi: 'commodity_unverified' digabung ke Komoditas.
+  var groups = [];
+  var cmd = null;
   mon.groups.forEach(function (g) {
+    if (g.category === 'commodity' || g.category === 'commodity_unverified') {
+      if (!cmd) { cmd = { category: 'commodity', label: 'Komoditas', windows: g.windows, items: [] }; groups.push(cmd); }
+      cmd.items = cmd.items.concat(g.items || []);
+      return;
+    }
+    groups.push(g);
+  });
+
+  groups.forEach(function (g) {
     var items = g.items || [];
     if (!items.length) return;
     // Partisi per kadens + jenis perubahan. `window.lags`/`window.unit` datang dari baris itu
@@ -293,7 +306,7 @@ function mrRenderMonitor(mon) {
     var parts = {};
     items.forEach(function (it) {
       var isPct = it.kind === 'price';
-      var key = (it.freq || 'D') + '|' + (isPct ? 'pct' : 'delta');
+      var key = (it.freq || 'D');
       (parts[key] = parts[key] || []).push(it);
     });
     h += '<div style="margin:12px 0 4px;font-size:10px;font-weight:700;color:var(--t1)">' + esc(g.label || g.category)
@@ -307,6 +320,9 @@ function mrRenderMonitor(mon) {
       var lags = (first.window && first.window.lags) || [1, 5, 20];
       var sfx = MR_UNIT_SHORT[unitWord] || MR_FREQ_SHORT[first.freq] || 'D';
       var caps = lags.map(function (l) { return (isPct ? '' : 'Δ') + l + sfx; });
+      if (Object.keys(parts).length > 1) {
+        h += '<div style="font-size:9px;color:var(--t3);margin:2px 0">' + esc(MR_FREQ_WORD[first.freq] || first.freq || '') + '</div>';
+      }
       h += mrMonitorTable(rows, caps, isPct, unitWord);
     });
   });
@@ -402,15 +418,26 @@ function mrRenderLiquidity(liq) {
         + '<td style="padding:3px 6px;text-align:right">—</td><td style="padding:3px 6px">—</td></tr>';
       return;
     }
-    var st = x.stale ? 'stale' : (x.state === 'na' ? 'unmeasured' : 'fresh');
-    var stTxt = x.stale ? '<span style="color:var(--rd)">basi</span>'
-      : x.state === 'na' ? '<span style="color:var(--t3)">—</span>'
-      : '<span style="color:var(--gn)">segar</span>';
+    // Status dari server (`x.status`), bukan disimpulkan lagi di sini: seri SRBI yang umurnya
+    // lewat kadens dulu tampil "segar" karena blok ini hanya membaca x.stale/x.state.
+    var st = x.status || (x.stale ? 'stale' : (x.state === 'na' ? 'unmeasured' : 'fresh'));
+    var MR_LIQ_TEXT = {
+      fresh: ['segar', 'var(--gn)'],
+      stale: ['basi', 'var(--rd)'],
+      delayed: ['terlambat (wajar)', 'var(--t3)'],
+      aged: ['umur &gt; kadens', 'var(--am)'],
+      unmeasured: ['umur tak terukur', 'var(--t3)'],
+      no_series: ['tanpa bar', 'var(--rd)']
+    };
+    var stPair = MR_LIQ_TEXT[st] || MR_LIQ_TEXT.unmeasured;
+    var stTxt = '<span style="color:' + stPair[1] + '" title="' + esc('as-of ' + (x.as_of || '—')
+      + (x.age_days == null ? '' : ' · umur ' + x.age_days + ' hari')) + '">' + stPair[0] + '</span>';
+    var neutralLiq = (st === 'stale' || st === 'aged' || st === 'missing');
     var lvl = (x.last === null || x.last === undefined)
       ? '<span style="color:var(--t2)" title="bar terakhir ' + mrNum(x.last_bar_value) + ' pada ' + esc(x.as_of || '') + '">—</span>'
-      : mrNum(x.last);
+      : '<span' + (neutralLiq ? ' style="color:var(--t2)"' : '') + '>' + mrNum(x.last) + '</span>';
     var d1 = (x.chg_1 === null || x.chg_1 === undefined) ? '—'
-      : '<span style="color:' + (x.stale ? 'var(--t3)' : mrColor(x.chg_1)) + '">' + mrSigned(x.chg_1, x.chg_1_unit === '%' ? '%' : '') + '</span>';
+      : '<span style="color:' + (neutralLiq ? 'var(--t3)' : mrColor(x.chg_1)) + '">' + mrSigned(x.chg_1, x.chg_1_unit === '%' ? '%' : '') + '</span>';
     h += '<tr class="mr-liq" data-state="' + st + '" style="border-bottom:1px solid var(--b1)">'
       + '<td style="padding:3px 6px;font-family:var(--f)">' + esc(x.label) + (x.unit ? ' <span style="color:var(--t3);font-size:9px">(' + esc(x.unit) + ')</span>' : '') + '</td>'
       + '<td style="padding:3px 6px;text-align:right">' + lvl + '</td>'
@@ -718,11 +745,37 @@ function mrCovBucket(label, arr, fmt, tone) {
 function mrRenderCoverage(cov) {
   if (!cov) return '<div style="color:var(--t3);font-size:11px">Blok coverage tidak tersedia.</div>';
   var c = cov.counts || {};
+  // Enam bucket status EKSKLUSIF (server: series[].status). `status_sum` dikirim server supaya
+  // ketidakcocokan terlihat sebagai angka, bukan diratakan diam-diam — review r2 menemukan strip
+  // 79 untuk 78 seri karena `aged` dulu ditambahkan di luar rantai if/else.
+  var bucketSum = (c.fresh || 0) + (c.stale || 0) + (c.delayed || 0) + (c.aged || 0)
+    + (c.unmeasured || 0) + (c.no_series || 0);
+  var sumOk = (c.status_sum_ok !== undefined) ? c.status_sum_ok : (bucketSum === (c.series || 0));
   var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:4px">'
     + 'Rujukan sesi <b style="color:var(--t2)">' + esc(cov.ref_date || '—') + '</b> (' + esc(cov.ref_source || '—') + ') · '
     + (c.series || 0) + ' seri aktif: ' + (c.fresh || 0) + ' segar · ' + (c.stale || 0) + ' basi · '
     + (c.delayed || 0) + ' terlambat (wajar) · ' + (c.aged || 0) + ' umur lewat kadens · '
-    + (c.unmeasured || 0) + ' umur tak terukur · ' + (c.thin || 0) + ' histori tipis · ' + (c.no_series || 0) + ' tanpa bar</div>';
+    + (c.unmeasured || 0) + ' umur tak terukur · ' + (c.no_series || 0) + ' tanpa bar'
+    + ' <span style="color:' + (sumOk ? 'var(--t3)' : 'var(--rd)') + '"'
+    + ' title="enam bucket status saling eksklusif; jumlahnya harus sama dengan jumlah seri">'
+    + '(bucket ' + bucketSum + '/' + (c.series || 0) + (sumOk ? '' : ' — TIDAK COCOK') + ')</span></div>';
+  // Atribut silang: sengaja boleh tumpang tindih dengan status di atas, jadi ditulis terpisah
+  // dan TIDAK dijumlahkan ke total seri.
+  var attrs = [];
+  if (c.thin != null) attrs.push((c.thin || 0) + ' histori tipis (&lt;21 bar)');
+  if (c.unit_unknown != null) attrs.push((c.unit_unknown || 0) + ' satuan level belum ada');
+  if (c.unit_missing != null) attrs.push((c.unit_missing || 0) + ' jenis nilai belum ada');
+  if (c.undeclared_lag != null) attrs.push((c.undeclared_lag || 0) + ' lag belum dideklarasikan');
+  if (attrs.length) {
+    h += '<div style="font-size:9px;color:var(--t3)">Atribut silang (tidak dijumlahkan ke seri): '
+      + attrs.join(' · ') + '</div>';
+  }
+  if (cov.age_thresholds) {
+    var at = cov.age_thresholds;
+    h += '<div style="font-size:9px;color:var(--t3)">Ambang umur lewat kadens (lag belum dideklarasikan): '
+      + 'D' + at.D + ' · W' + at.W + ' · M' + at.M + ' · Q' + at.Q + ' hari'
+      + ' — seri ber-expected_lag memakai deklarasi per sumber, bukan ambang ini.</div>';
+  }
 
   var withAge = function (x) { return (x.name || x.code) + ' (' + (x.as_of || '—') + ', ' + (x.age_days == null ? '?' : x.age_days) + ' hr)'; };
   h += mrCovBucket('Basi — sumber tidak menerbitkan bar', cov.stale, withAge, 'var(--rd)');
