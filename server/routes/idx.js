@@ -3773,7 +3773,9 @@ module.exports = function(upload) {
   //   ?limit=200    baris mentah terbaru (maks 2000)
   // Ringkasan per kode yang menjawab "kenapa seri ini tertinggal?":
   //   pull_behind    true  = sumber sudah terbit, tabel kita belum punya barnya -> CACAT KITA
-  //   source_stalled true  = frontier tidak maju N tarikan sukses -> SUMBER berhenti terbit
+  //   source_stalled true  = frontier tidak maju N HARI TARIK sukses -> SUMBER berhenti terbit
+  //   stall_evaluable false = riwayat hari tarik < ambang -> BELUM BISA DINILAI (bukan "sehat").
+  //                          Kode seperti ini juga muncul di freshness.stall_unevaluable_codes.
   //   frontier_lag_p50/p95 = lag (SESI) antara frontier sumber dan sesi rujukan PADA JAM TARIK.
   // Angka-angka ini MELAPORKAN; ia tidak dipakai menulis ulang expected_lag_sessions (lihat
   // catatan di utils/pull-log.js: ratchet otomatis = cara mematikan alarm).
