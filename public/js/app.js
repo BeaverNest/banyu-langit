@@ -47,7 +47,9 @@ function stab(n,el){
   if(panel)panel.classList.add('on');
 
   // Lazy load — only load content on first visit
-  if(n==='mkt'&&!tabLoaded.mkt){tabLoaded.mkt=true;loadMktOverview();}
+  // Market tab kini mendarat di sub-tab Commodities: Overview dihapus karena isinya
+  // sudah ada di Market Regime (permintaan pemilik, 21 Okt 2026).
+  if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
   if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;if(typeof loadScreener==='function')loadScreener();}
@@ -55,7 +57,6 @@ function stab(n,el){
   if(n==='bt'&&!tabLoaded.bt){tabLoaded.bt=true;if(typeof loadBacktest==='function')loadBacktest();}
 
   // Re-trigger load for tabs that need refresh
-  if(n==='mkt')loadMktOverview();
   if(n==='idx'&&typeof loadMarketIntel==='function')loadMarketIntel();
   if(n==='analysis'&&typeof loadMarketRegime==='function')loadMarketRegime();
 }
@@ -67,7 +68,6 @@ function smkt(n,b){
   b.classList.add('on');
   panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
   $('m-'+n).classList.add('on');
-  if(n==='ov')loadMktOverview();
   if(n==='nws')lNews('');
   if(n==='ann')loadAnnouncements();
   if(n==='cmd'&&typeof loadCommodities==='function')loadCommodities();
@@ -93,51 +93,12 @@ function anaSubTab(n,b){
 
 
 
-// ═══ MARKET OVERVIEW — satu sumber (custom_ohlc/idx_indices) + konteks ═══
-var mktCache={};
-async function loadMktOverview(){
-  var el=$('ml-ov');if(!el)return;
-  if(mktCache._ov&&Date.now()-mktCache._ov.ts<60000){el.innerHTML=mktCache._ov.html;return;}
-  el.innerHTML='<div class="ne">Loading...</div>';
-  try{
-    var d=await fetch('/api/market/overview').then(function(r){return r.json()});
-    if(d.error)throw new Error(d.error);
-    function num(v,dec){if(v==null||isNaN(v))return '—';return Number(v).toLocaleString(undefined,{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0});}
-    function pc(v){if(v==null||isNaN(v))return '—';return (v>0?'+':'')+Number(v).toFixed(2)+'%';}
-    function cls(v){return v==null?'':(v>0?'up':v<0?'dn':'');}
-    var h='';
-
-    (d.sections||[]).forEach(function(sec){
-      h+='<div class="mkt-section-h">'+sec.icon+' '+esc(sec.title)+'</div>';
-      h+='<div class="mkt-head"><span class="mkt-label">Item</span><span class="mkt-desc"></span><span class="mkt-price">Harga</span><span class="mkt-chg">1D</span><span class="mkt-sm">5D</span><span class="mkt-sm">20D</span></div>';
-      (sec.items||[]).forEach(function(i){
-        // Seri basi (t_61ccbdbe): bar terakhir tertinggal dari sesi rujukan (TIN 15 Okt
-        // vs sesi 19 Okt). Level bar lama TIDAK ditulis sebagai harga terkini — kalau
-        // ditulis, pembaca menyimpulkan instrumennya datar dua hari padahal kita tidak
-        // punya datanya. chg 1D/5D/20D tetap ditampilkan (itu gerakan bar terakhir seri
-        // itu) tapi warnanya dinetralkan, sama seperti tabel Market Regime.
-        var stale=i.stale===true;                        // 'excess': di luar kebiasaan sumber (t_b234606a)
-        var bySrc=i.state==='by_source';                 // sumber memang lambat — netral, tanpa kata "basi"
-        var dim=(stale||bySrc)?' style="color:var(--t3)"':'';
-        var priceCell=stale
-          ?'<span class="mkt-price" style="white-space:nowrap" title="level bar '+esc(shortDay(i.stale_date||i.date))+' = '+num(i.price,i.price>=1000?0:2)+'; sumber belum menerbitkan bar untuk '+(i.lag_sessions||0)+' sesi — retry tidak menolong, yang berhenti di hulu"><b style="font-family:var(--fm);color:var(--t2)">—</b> <span style="font-size:9px;color:var(--am)">⏸ basi '+esc(shortDay(i.stale_date||i.date))+'</span></span>'
-          :(bySrc
-            ?'<span class="mkt-price" style="white-space:nowrap" title="ekspektasi sumber ini '+(i.expected_lag_sessions==null?'?':i.expected_lag_sessions)+' sesi">'+num(i.price,i.price>=1000?0:2)+' <span style="font-size:9px;color:var(--t3)">sumber lag '+(i.lag_sessions||0)+' sesi ('+esc(shortDay(i.stale_date||i.date))+')</span></span>'
-            :'<span class="mkt-price">'+num(i.price,i.price>=1000?0:2)+'</span>');
-        h+='<div class="mkt-item">'
-          +'<span class="mkt-label">'+esc(i.label)+'</span>'
-          +'<span class="mkt-desc">'+esc(i.desc||'')+(i.linked_sector?' <span class="mkt-link">→ '+esc(i.linked_sector)+'</span>':'')+'</span>'
-          +priceCell
-          +'<span class="mkt-chg '+(stale?'':cls(i.chg_1d))+'"'+dim+'>'+pc(i.chg_1d)+'</span>'
-          +'<span class="mkt-sm '+(stale?'':cls(i.chg_5d))+'"'+dim+'>'+pc(i.chg_5d)+'</span>'
-          +'<span class="mkt-sm '+(stale?'':cls(i.chg_20d))+'"'+dim+'>'+pc(i.chg_20d)+'</span>'
-          +'</div>';
-      });
-    });
-    mktCache._ov={html:h,ts:Date.now()};
-    el.innerHTML=h;
-  }catch(e){el.innerHTML='<div class="ne">Failed to load: '+esc(e.message)+'</div>';}
-}
+// ═══ MARKET OVERVIEW — DIHAPUS DARI UI (21 Okt 2026) ═══
+// Sub-tab Maket > Overview dihapus: isinya (harga + chg 1D/5D/20D per seri) sudah
+// ada di panel Market Regime. Route `/api/market/overview` TETAP ada di
+// server/routes/market.js karena dipakai server/scripts/check-series-freshness.js
+// (penjaga kesegaran seri), jadi jangan hapus route-nya saat membersihkan UI.
+// CSS .mkt-list/.mkt-section-h di css/ juga dibiarkan (tidak lagi dipakai di sini).
 
 // ═══ WATCHLIST DROPDOWN TOGGLE ═══
 function togWL(){

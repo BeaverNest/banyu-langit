@@ -3,7 +3,8 @@
 lEnt();
 lNews('');
 loadN();
-loadMktOverview();
+// Market tab mendarat di sub-tab Commodities (Overview dihapus 21 Okt 2026).
+if(typeof loadCommodities==='function')loadCommodities();
 tabLoaded.mkt=true;
 tabLoaded.diary=true;
 setInterval(chkAl,60000);

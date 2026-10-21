@@ -101,12 +101,11 @@
   <!-- TAB 1: MARKET -->
   <div class="tpanel on" id="t-mkt">
     <div class="wt">
-      <button class="wt-b on" onclick="smkt('ov',this)">Overview</button>
+      <button class="wt-b on" onclick="smkt('cmd',this)">Commodities</button>
       <button class="wt-b" onclick="smkt('nws',this)">News</button>
       <button class="wt-b" onclick="smkt('ann',this)">BEI Announcements</button>
-      <button class="wt-b" onclick="smkt('cmd',this)">Commodities</button>
     </div>
-    <div class="wp on" id="m-ov"><div class="mkt-list" id="ml-ov"><div class="ne">Loading...</div></div></div>
+    <div class="wp on" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading...</div></div>
@@ -115,7 +114,6 @@
       <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
       <div class="nlist" id="ann-list"><div class="ne">Click Search or load to see BEI announcements</div></div>
     </div>
-    <div class="wp" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
   <!-- TAB 2: MARKET INTELLIGENCE -->
