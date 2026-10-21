@@ -438,16 +438,22 @@ router.get('/commodities', (req, res) => {
       const n = a.length;
       const last = a[n - 1];
       const at = k => (n > k ? a[n - 1 - k] : null);
-      // chg_5d/chg_20d harus dari deret harga TERKOREKSI aksi korporasi (ca_adj):
+      // chg_5d/chg_10d/chg_20d harus dari deret harga TERKOREKSI aksi korporasi (ca_adj):
       // split di dalam jendela 20 sesi terbaca sebagai -80% kalau pakai close mentah.
       // `close` mentah tetap dipakai untuk nilai level dan rupiah (value, fnet_val).
       const px = r => (r && r.ac != null ? r.ac : (r ? r.close : null));
+      // Horizon N-sesi butuh N+1 bar: at(k) = k bar ke belakang dari bar terakhir.
+      // `base_*` ikut dikirim karena bar hilang (suspend / hari tanpa transaksi) membuat
+      // jendela LEBIH LEBAR dari labelnya — UI wajib bisa menunjuk tanggal dasarnya
+      // (docs/ui-display-contract.md §1–§2), bukan menulis "5D" tanpa bukti.
+      const win = k => (at(k) ? pct(px(last), px(at(k))) : null);
+      const base = k => (at(k) ? at(k).trade_date : null);
       return {
         code, name: last.name || code,
         close: last.close, prev_close: last.prev_close,
         chg_pct: pct(last.close, last.prev_close),
-        chg_5d: at(5) ? pct(px(last), px(at(5))) : null,
-        chg_20d: at(20) ? pct(px(last), px(at(20))) : null,
+        chg_5d: win(5), chg_10d: win(10), chg_20d: win(20),
+        base_5d: base(5), base_10d: base(10), base_20d: base(20),
         value: last.value || 0, volume: last.volume || 0,
         fnet_val: ((last.foreign_buy || 0) - (last.foreign_sell || 0)) * (last.close || 0)
       };
@@ -494,6 +500,7 @@ router.get('/commodities', (req, res) => {
         .sort((a, b) => (b.value || 0) - (a.value || 0));
       const chgs1 = stocks.map(s => s.chg_pct).filter(v => v != null);
       const chgs5 = stocks.map(s => s.chg_5d).filter(v => v != null);
+      const chgs10 = stocks.map(s => s.chg_10d).filter(v => v != null);
       const chgs20 = stocks.map(s => s.chg_20d).filter(v => v != null);
       const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
       const cmd = cmdStats(g.cmd_code);
@@ -512,7 +519,9 @@ router.get('/commodities', (req, res) => {
         tickers: g.tickers, stocks,
         n: stocks.length, thin: stocks.length > 0 && stocks.length < 3,
         avg_chg: avg(chgs1), median_chg: median(chgs1),
-        avg_5d: avg(chgs5), avg_20d: avg(chgs20),
+        avg_5d: avg(chgs5), avg_10d: avg(chgs10), avg_20d: avg(chgs20),
+        // n per horizon: basket tipis/baru listed bisa punya 20D dihitung dari nama lebih sedikit.
+        n_5d: chgs5.length, n_10d: chgs10.length, n_20d: chgs20.length,
         up: chgs1.filter(v => v > 0).length, down: chgs1.filter(v => v < 0).length,
         total_value: stocks.reduce((s, r) => s + (r.value || 0), 0),
         total_fnet: stocks.reduce((s, r) => s + (r.fnet_val || 0), 0),

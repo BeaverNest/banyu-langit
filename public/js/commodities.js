@@ -84,9 +84,13 @@ function cmdRender(el){
     h+='</div>';
 
     // Row 4: horizon + divergensi
+    // 5D/10D/20D = perubahan per SESI, dihitung server dari harga terkoreksi aksi korporasi
+    // (ca_adj) atas N+1 bar. n per horizon ikut ditulis: basket yang belum punya 20 sesi
+    // membuat rata-rata 20D dihitung dari nama lebih sedikit daripada 5D.
     h+='<div style="display:flex;gap:8px;font-size:9px;color:var(--t3);margin-top:2px">';
-    h+='<span>5D <b style="color:'+cl(c.avg_5d)+'">'+pc(c.avg_5d)+'</b></span>';
-    h+='<span>20D <b style="color:'+cl(c.avg_20d)+'">'+pc(c.avg_20d)+'</b></span>';
+    h+='<span title="'+(c.n_5d||0)+' saham">5D <b style="color:'+cl(c.avg_5d)+'">'+pc(c.avg_5d)+'</b></span>';
+    h+='<span title="'+(c.n_10d||0)+' saham">10D <b style="color:'+cl(c.avg_10d)+'">'+pc(c.avg_10d)+'</b></span>';
+    h+='<span title="'+(c.n_20d||0)+' saham">20D <b style="color:'+cl(c.avg_20d)+'">'+pc(c.avg_20d)+'</b></span>';
     if(c.divergence!=null)h+='<span style="margin-left:auto">div <b style="color:'+(c.divergence>0?'var(--gn)':'var(--rd)')+'">'+(c.divergence>0?'+':'')+c.divergence.toFixed(2)+' pp</b></span>';
     h+='</div>';
 
@@ -151,12 +155,33 @@ function cmdSortBy(key){if(cmdSort===key)cmdDir=cmdDir==='desc'?'asc':'desc';els
 
 function cmdTable(cmd){
   var stocks=cmd.stocks.slice();
-  var d=cmdDir==='desc'?-1:1;
+  // d=1 untuk desc: (b-a) positif berarti a di belakang b -> terbesar di atas.
+  // Sebelumnya d=-1 untuk desc sehingga urutan terbalik dari panah ▼ yang ditulis header.
+  var d=cmdDir==='desc'?1:-1;
+  // null (sesi belum cukup) selalu di bawah, baik asc maupun desc — jangan diperlakukan 0%.
+  function num(key){return function(a,b){
+    var av=a[key],bv=b[key];
+    if(av==null&&bv==null)return 0;
+    if(av==null)return 1;
+    if(bv==null)return -1;
+    return d*(bv-av);
+  };}
   if(cmdSort==='code')stocks.sort(function(a,b){return d*a.code.localeCompare(b.code);});
-  else if(cmdSort==='close')stocks.sort(function(a,b){return d*((b.close||0)-(a.close||0));});
-  else if(cmdSort==='chg')stocks.sort(function(a,b){return d*((b.chg_pct||0)-(a.chg_pct||0));});
-  else if(cmdSort==='fnet')stocks.sort(function(a,b){return d*((b.fnet_val||0)-(a.fnet_val||0));});
-  else stocks.sort(function(a,b){return d*((b.value||0)-(a.value||0));});
+  else if(cmdSort==='close')stocks.sort(num('close'));
+  else if(cmdSort==='chg')stocks.sort(num('chg_pct'));
+  else if(cmdSort==='5d')stocks.sort(num('chg_5d'));
+  else if(cmdSort==='10d')stocks.sort(num('chg_10d'));
+  else if(cmdSort==='20d')stocks.sort(num('chg_20d'));
+  else if(cmdSort==='fnet')stocks.sort(num('fnet_val'));
+  else stocks.sort(num('value'));
+
+  // Horizon: 2 desimal + tanda, seperti kolom Chg%. Nilai kosong ditulis '—', bukan 0,00%.
+  // title menunjuk TANGGAL DASAR jendela: kalau emiten punya bar hilang (suspend/no-trade),
+  // at(k) melompati bar itu sehingga jendela lebih lebar dari labelnya — pembaca bisa melihatnya.
+  function hcell(v,base){
+    if(v==null)return '<td style="padding:4px 8px;text-align:right;font-family:monospace;color:var(--t3)" title="bar sesi belum cukup">—</td>';
+    return '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(v>0?'var(--gn)':v<0?'var(--rd)':'#888')+'" title="dasar '+(base?shortDay(base):'—')+'">'+(v>0?'+':'')+v.toFixed(2)+'%</td>';
+  }
 
   var h='<div style="border:1px solid var(--b2,var(--b2));border-radius:10px;overflow:hidden;margin-bottom:12px">';
   h+='<div style="padding:8px 12px;border-bottom:1px solid var(--b1,var(--b1));display:flex;align-items:center;gap:8px">';
@@ -168,10 +193,10 @@ function cmdTable(cmd){
   // table-layout:fixed + colgroup -> lebar kolom tidak ditentukan panjang nama,
   // dan header/isi memakai sumbu yang sama.
   h+='<table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">';
-  h+='<colgroup><col style="width:62px"><col><col style="width:92px"><col style="width:78px"><col style="width:96px"><col style="width:96px"></colgroup>';
+  h+='<colgroup><col style="width:62px"><col><col style="width:88px"><col style="width:68px"><col style="width:56px"><col style="width:56px"><col style="width:56px"><col style="width:92px"><col style="width:96px"></colgroup>';
   h+='<thead><tr style="background:var(--bgH,var(--bgH))">';
   // dulu ditulis 'al'/'ar' -> CSS tidak valid, header tertinggal di kiri
-  var cols=[['code','Code','left'],['','Name','left'],['close','Close','right'],['chg','Chg%','right'],['value','Value','right'],['fnet','F.Net','right']];
+  var cols=[['code','Code','left'],['','Name','left'],['close','Close','right'],['chg','Chg%','right'],['5d','5D','right'],['10d','10D','right'],['20d','20D','right'],['value','Value','right'],['fnet','F.Net','right']];
   for(var i=0;i<cols.length;i++){
     var ck=cols[i][0],cl=cols[i][1],ca=cols[i][2];
     var arrow=cmdSort===ck?(cmdDir==='desc'?' ▼':' ▲'):'';
@@ -190,6 +215,7 @@ function cmdTable(cmd){
     h+='<td style="padding:4px 8px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.name||'')+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600">'+(s.close||0).toLocaleString()+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(chg>0?'var(--gn)':chg<0?'var(--rd)':'#888')+'">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
+    h+=hcell(s.chg_5d,s.base_5d)+hcell(s.chg_10d,s.base_10d)+hcell(s.chg_20d,s.base_20d);
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace">'+cmdFmt(s.value||0)+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(fn>0?'var(--gn)':fn<0?'var(--rd)':'#888')+'">'+cmdFmt(fn)+'</td>';
     h+='</tr>';
