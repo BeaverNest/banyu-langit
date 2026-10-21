@@ -22,3 +22,6 @@ data/investor_tags.xlsx
 Thumbs.db
 .vscode/
 .idea/
+
+# keep the template, ignore the real file
+!.env.example
