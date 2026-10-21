@@ -150,6 +150,7 @@
   <div class="tpanel" id="t-analysis">
     <div class="wt">
       <button class="wt-b on" onclick="anaSubTab('regime',this)">Market Regime</button>
+      <button class="wt-b" onclick="anaSubTab('usdaily',this)">US Stocks</button>
       <button class="wt-b" onclick="anaSubTab('screener',this)">Screener</button>
       <button class="wt-b" onclick="anaSubTab('scoring',this)">Composite Score</button>
       <button class="wt-b" onclick="anaSubTab('stockdetail',this)">Stock Information</button>
@@ -159,6 +160,7 @@
 
     </div>
     <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="ana-usdaily"><div id="ud-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-screener"><div id="scr-content" style="flex:1;overflow-y:auto"></div></div>
     <div class="wp" id="ana-sectors" style="display:none"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
@@ -225,6 +227,7 @@
 <script src="/js/sector-intelligence.js"></script>
 
 <script src="/js/market-regime.js"></script>
+<script src="/js/us-daily.js"></script>
 <script src="/js/scoring.js"></script>
 <script src="/js/portfolio-builder.js"></script>
 <script src="/js/stock-detail.js"></script>

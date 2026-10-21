@@ -71,6 +71,9 @@ app.use('/api/idx', idxRoutes);
 // Monitor lintas aset + skor regime (kanban t_19f4f0d4) — router sendiri supaya berkas route
 // idx.js (6 ribu baris) tidak perlu ditumbuhi satu blok lagi setiap kali ada data baru.
 app.use('/api/idx', require('./routes/cross-asset'));
+// Panel saham AS dari tabel us_daily (kanban t_2c5e0fbb) — router sendiri, alasan sama:
+// idx.js sudah 6 ribu baris dan tidak perlu ditumbuhi blok baru.
+app.use('/api/idx', require('./routes/us-daily'));
 app.use('/api/screener', screenerRoutes);
 app.use('/api/backtest', require('./routes/backtest'));
 app.use('/api/portfolio', require('./routes/portfolio'));

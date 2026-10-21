@@ -81,6 +81,7 @@ function anaSubTab(n,b){
   panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
   $('ana-'+n).classList.add('on');
   if(n==='regime'&&typeof loadMarketRegime==='function')loadMarketRegime();
+  if(n==='usdaily'&&typeof loadUSDaily==='function')loadUSDaily();
   if(n==='screener'&&typeof loadScreener==='function')loadScreener();
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
