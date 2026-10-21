@@ -410,6 +410,14 @@ router.get('/commodities', (req, res) => {
     if (!groups.length) groups = COMMODITY_MAP.map(c => ({ ...c, cmd_code: null }));
 
     const allTickers = [...new Set(groups.flatMap(g => g.tickers))];
+    // Nama perusahaan: query di bawah hanya menarik dari idx_daily yang tidak punya kolom nama,
+    // sehingga `last.name` selalu kosong dan tabel jatuh ke kode (tampil "BUMI | BUMI").
+    // Sumbernya company_profiles, dibaca sekali per request.
+    const nameMap = {};
+    try {
+      db.prepare('SELECT code, name FROM company_profiles').all()
+        .forEach(r => { if (r.name) nameMap[r.code] = r.name; });
+    } catch (e) { /* tabel belum ada -> tetap tampilkan kode */ }
     const dates = db.prepare('SELECT DISTINCT trade_date FROM idx_daily ORDER BY trade_date DESC LIMIT 21')
       .all().map(r => r.trade_date);
     const byCode = {};
@@ -449,7 +457,7 @@ router.get('/commodities', (req, res) => {
       const win = k => (at(k) ? pct(px(last), px(at(k))) : null);
       const base = k => (at(k) ? at(k).trade_date : null);
       return {
-        code, name: last.name || code,
+        code, name: nameMap[code] || code,
         close: last.close, prev_close: last.prev_close,
         chg_pct: pct(last.close, last.prev_close),
         chg_5d: win(5), chg_10d: win(10), chg_20d: win(20),

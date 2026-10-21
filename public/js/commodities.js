@@ -212,7 +212,7 @@ function cmdTable(cmd){
     var fn=s.fnet_val||0;
     h+='<tr style="border-top:1px solid var(--b1,var(--b1))">';
     h+='<td style="padding:4px 8px"><span style="color:var(--bl);font-weight:700;cursor:pointer;font-family:monospace" onclick="if(typeof gsOpen===\'function\')gsOpen(\''+s.code+'\')">'+s.code+'</span></td>';
-    h+='<td style="padding:4px 8px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.name||'')+'</td>';
+    h+='<td title="'+esc(s.name||s.code)+'" style="padding:4px 8px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.name||'')+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600">'+(s.close||0).toLocaleString()+'</td>';
     h+='<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:600;color:'+(chg>0?'var(--gn)':chg<0?'var(--rd)':'#888')+'">'+(chg>0?'+':'')+chg.toFixed(2)+'%</td>';
     h+=hcell(s.chg_5d,s.base_5d)+hcell(s.chg_10d,s.base_10d)+hcell(s.chg_20d,s.base_20d);
