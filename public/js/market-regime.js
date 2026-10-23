@@ -79,13 +79,16 @@ function renderMR(el) {
   h += mrSection('2', '📋 Monitor lintas aset', mrKpiStrip(d.internals, d.monitor) + mrRenderMonitor(d.monitor));
 
   // ── 3. Kurva & likuiditas ──
+  // L3 dirombak (23 Okt 2026): dua blok ini sebelumnya hanya tabel angka. Sekarang tiap blok
+  // punya chart di atas tabel — kurva dengan pembanding 1 bulan lalu, likuiditas dengan riwayat
+  // 30 bulan. Tabel tetap ada karena angka eksak + status kesegaran tidak boleh hilang.
   h += mrSection('3', '📐 Kurva &amp; likuiditas',
     '<div id="mr-liq-box">' + mrRenderLiquidity(d.liquidity) + '</div>'
     + '<div style="border-top:1px solid var(--b1);margin:10px 0 8px"></div>'
     + '<div id="mr-curve-box"></div>');
 
   // ── 4. Internals IDX ──
-  h += mrSection('4', '🇮🇩 Internals IDX', mrRenderInternals(d.internals));
+  h += mrSection('4', '🇮🇩 Internals IDX', mrRenderInternals(d.internals, d));
 
   // ── 5. Coverage: tidak ditampilkan di Market Regime (permintaan owner 20 Okt 2026).
   // Penanda basi tetap ada di baris tabel (⏸/◔) dan di tooltip; data mentahnya tetap
@@ -95,10 +98,16 @@ function renderMR(el) {
   h += mrSection('6', '📰 Hot News', '<div id="mr-news"><div style="color:var(--t3);font-size:11px">⏳ Loading headlines...</div></div>');
 
   h += '</div>';
+  // Instance chart lama harus dibuang SEBELUM innerHTML diganti: kalau tidak, ResizeObserver
+  // mereka menembak pada elemen yang sudah lepas dari DOM dan melempar error di console.
+  mrDisposeSectionCharts();
   el.innerHTML = h;
 
-  // Kurva: data sudah ada di payload, tidak ada fetch kedua.
+  // Kurva & likuiditas: data sudah ada di payload, tidak ada fetch kedua.
+  // Chart dipasang SETELAH innerHTML terpasang — LWC butuh lebar nyata elemen kontainer.
   setTimeout(function () { mrRenderCurveTo($('mr-curve-box'), d.curve); }, 0);
+  setTimeout(function () { mrDrawLiquidity(d.liquidity); }, 0);
+  setTimeout(function () { mrRenderInternalsCharts(d.internals); }, 0);
   setTimeout(function () { mrRenderNews('mr-news'); }, 200);
 }
 
@@ -461,16 +470,175 @@ function mrMountSparkCharts(scope) {
 // Kalau window.LightweightCharts tidak ada (CDN/lokal gagal muat, tes DOM tanpa JS vendor),
 // fungsi jatuh ke SVG lama — panel tetap terisi, tidak ada layar kosong.
 var MR_SPARK_CHARTS = [];
+// Chart bagian L3/L4 dipisah dari chart drill-down baris. Dulu semuanya satu array, dan
+// mrCloseSeriesDetail() (dipanggil tiap kali baris monitor diklik) membuang SEMUA chart —
+// temuan uji 23 Okt: setelah klik satu baris, canvas likuiditas/kurva/IHSG/flow jadi 0.
+var MR_SECTION_CHARTS = [];
 
-function mrDisposeSparkCharts() {
-  for (var i = 0; i < MR_SPARK_CHARTS.length; i++) {
-    var ch = MR_SPARK_CHARTS[i];
+function mrDisposeCharts(arr) {
+  for (var i = 0; i < arr.length; i++) {
+    var ch = arr[i];
     try { if (ch.__mrRO) ch.__mrRO.disconnect(); } catch (e) {}
     try { if (ch.__mrDisposed) ch.__mrDisposed(); } catch (e) {}
     try { ch.remove(); } catch (e) { /* sudah lepas dari DOM */ }
   }
-  MR_SPARK_CHARTS = [];
+  arr.length = 0;
 }
+
+function mrDisposeSparkCharts() {
+  mrDisposeCharts(MR_SPARK_CHARTS);
+}
+
+function mrDisposeSectionCharts() {
+  mrDisposeCharts(MR_SECTION_CHARTS);
+}
+
+// ── Tinggi chart: satu sumber untuk kontainer DAN canvas ──
+// Sebelumnya tiap chart punya angka sendiri (110–200 px) dan canvas-nya dibuat dengan angka
+// terpisah dari tinggi kontainer. Begitu keduanya berbeda, canvas meluber atau menyisakan celah.
+// Aturan sekarang: tinggi ditentukan CSS clamp() pada kontainer (`mrChartCss`), dan canvas
+// membaca clientHeight kontainer. `mrChartH` hanya cadangan angka untuk kasus kontainer masih
+// tersembunyi (clientHeight = 0) saat chart dibuat.
+var MR_CHART_H = { liq: 360, curve: 380, hist: 300, ihsg: 310, flow: 270, spark: 230 };
+
+// Tinggi kontainer ditulis sebagai CSS clamp(), BUKAN angka px hasil hitung saat render.
+// Alasan: tinggi px yang dipanggang ke inline style tidak berubah saat jendela di-resize —
+// sudah diuji: viewport 577 px -> 900 px, kontainer tetap 317 px. Dengan clamp() + vh,
+// kontainer ikut viewport, dan ResizeObserver meneruskan perubahan itu ke canvas.
+// CATATAN: satuan vh = persen tinggi viewport, jadi angkanya 28–42, BUKAN hasil kali basis.
+// Percobaan pertama memakai base×0.62 sebagai vh (223vh) — semua chart mentok ke batas atas.
+var MR_CHART_CSS = {
+  liq:   'clamp(340px, 40vh, 520px)',
+  curve: 'clamp(360px, 44vh, 560px)',
+  hist:  'clamp(300px, 36vh, 460px)',
+  ihsg:  'clamp(320px, 40vh, 520px)',
+  flow:  'clamp(280px, 34vh, 440px)',
+  spark: 'clamp(200px, 26vh, 320px)'
+};
+
+function mrChartCss(kind) {
+  return MR_CHART_CSS[kind] || 'clamp(200px, 30vh, 380px)';
+}
+
+function mrChartH(kind) {
+  var base = MR_CHART_H[kind] || 240;
+  var vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 900;
+  return Math.max(Math.round(base * 0.7), Math.min(Math.round(base * 1.5), Math.round(vh * 0.55) || base));
+}
+// `spec.height`, `spec.series` = [{type:'line'|'bars', data:[{time,value}], color, title}] .
+// Semua chart yang dibuat lewat sini otomatis masuk MR_SPARK_CHARTS sehingga render ulang
+// (ganti tab / refresh) tidak meninggalkan instance yatim.
+function mrLwcCreate(el, spec) {
+  var LWC = (typeof window !== 'undefined') ? window.LightweightCharts : null;
+  if (!LWC || typeof LWC.createChart !== 'function' || !el) return null;
+  var th = mrSparkTheme();
+  var cs = getComputedStyle(document.documentElement);
+  var chart;
+  try {
+    chart = LWC.createChart(el, {
+      width: el.clientWidth || 600,
+      // Tinggi ikut kontainer, bukan angka sendiri: kontainer yang menentukan (mrChartH), canvas
+      // menyesuaikan. Kalau spec.height diberikan, itu hanya cadangan saat clientHeight = 0
+      // (panel masih tersembunyi).
+      height: el.clientHeight || spec.height || 200,
+      layout: {
+        background: { type: 'solid', color: th.bg },
+        textColor: th.text,
+        fontFamily: (cs.getPropertyValue('--fm') || 'monospace').trim() || 'monospace',
+        // 10 px: chart sekarang 2–3× lebih tinggi, jadi label 9 px terlihat kecil dan sumbu waktu
+        // (bulan/tanggal) sulit dibaca. 10 px masih muat di kolom sempit 480 px.
+        fontSize: 10,
+        attributionLogo: true      // syarat lisensi Apache-2.0 Lightweight Charts
+      },
+      grid: { vertLines: { visible: false }, horzLines: { color: th.grid, style: 2 } },
+      // Sumbu kiri dipakai hanya kalau ada seri dengan satuan berbeda (mis. JISDOR IDR/USD
+      // berdampingan dengan SRBI Rp tn). Dua skala terpisah = dua satuan, bukan dua sumbu curang.
+      leftPriceScale: { visible: !!spec.leftScale, borderColor: th.grid, scaleMargins: { top: 0.14, bottom: 0.14 } },
+      rightPriceScale: {
+        borderColor: th.grid,
+        scaleMargins: { top: 0.14, bottom: 0.14 },
+        // label harga di kanan; satuan ditulis di judul/legenda, bukan di setiap label
+        priceFormat: spec.priceFormat || { type: 'price', precision: spec.precision == null ? 2 : spec.precision, minMove: spec.minMove || 0.01 }
+      },
+      timeScale: { borderColor: th.grid, timeVisible: false, secondsVisible: false },
+      crosshair: { mode: 1 },
+      handleScroll: false,
+      handleScale: false,
+      localization: { locale: 'en-US' }
+    });
+  } catch (e) { return null; }
+
+  var created = 0;
+  var needLeft = !!spec.leftScale;
+  (spec.series || []).forEach(function (s) { if (s.scale === 'left') needLeft = true; });
+  (spec.series || []).forEach(function (s) {
+    try {
+      var scaleId = s.scale === 'left' ? 'left' : 'right';
+      if (s.type === 'bars') {
+        var h = chart.addSeries(LWC.HistogramSeries, {
+          color: s.color, priceLineVisible: false, lastValueVisible: false, base: 0,
+          priceScaleId: scaleId,
+          priceFormat: s.priceFormat || spec.priceFormat || { type: 'price', precision: 2, minMove: 0.01 }
+        });
+        h.setData(s.data);
+      } else {
+        var ln = chart.addSeries(LWC.LineSeries, {
+          color: s.color, lineWidth: s.width || 2,
+          priceLineVisible: false, lastValueVisible: true,
+          priceScaleId: scaleId,
+          priceFormat: s.priceFormat || spec.priceFormat || undefined,
+          crosshairMarkerVisible: true, crosshairMarkerRadius: 3,
+          title: s.title || ''
+        });
+        ln.setData(s.data);
+      }
+      created++;
+    } catch (e) { /* seri gagal: chart tetap hidup dengan seri lain */ }
+  });
+  if (needLeft) { try { chart.applyOptions({ leftPriceScale: { visible: true, borderColor: th.grid, scaleMargins: { top: 0.14, bottom: 0.14 } } }); } catch (e) {} }
+  if (!created) { try { chart.remove(); } catch (e) {} return null; }
+  chart.timeScale().fitContent();
+
+  var disposed = false;
+  chart.__mrDisposed = function () { disposed = true; };
+  var ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(function () {
+    if (disposed) return;
+    // Lebar DAN tinggi: chart di panel ini tinggi-nya mengikuti viewport (mrChartH), jadi saat
+    // window di-resize canvas harus ikut, bukan hanya melebar.
+    try { chart.applyOptions({ width: el.clientWidth || 600, height: el.clientHeight || spec.height || 200 }); } catch (e) {}
+  }) : null;
+  if (ro) ro.observe(el);
+  chart.__mrRO = ro;
+  MR_SPARK_CHARTS.push(chart);
+  return chart;
+}
+
+// Sama seperti mrLwcCreate, tetapi terdaftar sebagai chart bagian (L3/L4) yang hanya dibuang
+// saat seluruh panel di-render ulang — bukan saat baris monitor dibuka/ditutup.
+function mrLwcCreateSection(el, spec) {
+  var ch = mrLwcCreate(el, spec);
+  if (ch) {
+    // mrLwcCreate mendaftarkan ke MR_SPARK_CHARTS; pindahkan ke daftar bagian.
+    var idx = MR_SPARK_CHARTS.indexOf(ch);
+    if (idx >= 0) MR_SPARK_CHARTS.splice(idx, 1);
+    MR_SECTION_CHARTS.push(ch);
+  }
+  return ch;
+}
+
+// Ubah {dates:[...], values:[...]} -> titik LWC; tanggal non-ISO dibuang bersama nilainya.
+function mrLwcPoints(dates, values, transform) {
+  var pts = [];
+  for (var i = 0; i < values.length; i++) {
+    var d = (dates && dates[i]) ? String(dates[i]).slice(0, 10) : null;
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    var v = transform ? transform(values[i], i) : values[i];
+    if (v === null || v === undefined || isNaN(v)) continue;
+    pts.push({ time: d, value: Number(v) });
+  }
+  return pts;
+}
+
 
 function mrSparkTheme() {
   // Warna dibaca dari CSS variable supaya tema terang/gelap Banyu Langit tetap berlaku;
@@ -487,67 +655,13 @@ function mrSparkTheme() {
 }
 
 function mrSparkLwc(el, vals, dates, color) {
-  var LWC = (typeof window !== 'undefined') ? window.LightweightCharts : null;
-  if (!LWC || typeof LWC.createChart !== 'function') return false;
-  var th = mrSparkTheme();
-  var chart;
-  try {
-    chart = LWC.createChart(el, {
-      width: el.clientWidth || 600,
-      height: 140,
-      layout: {
-        background: { type: 'solid', color: th.bg },
-        textColor: th.text,
-        fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--fm') || 'monospace',
-        fontSize: 9,
-        // Notifikasi TradingView wajib tetap terlihat (syarat lisensi Apache-2.0).
-        attributionLogo: true
-      },
-      grid: { vertLines: { visible: false }, horzLines: { color: th.grid, style: 2 } },
-      rightPriceScale: { borderColor: th.grid, scaleMargins: { top: 0.12, bottom: 0.12 } },
-      timeScale: { borderColor: th.grid, timeVisible: false, secondsVisible: false },
-      crosshair: { mode: 1 },
-      handleScroll: false,
-      handleScale: false,
-      localization: { locale: 'en-US' }
-    });
-  } catch (e) {
-    return false;   // versi API berbeda: biarkan pemanggil memakai fallback SVG
-  }
-  var line = chart.addSeries(LWC.LineSeries, {
-    color: color,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    crosshairMarkerVisible: true,
-    crosshairMarkerRadius: 3
+  var pts = mrLwcPoints(dates, vals);
+  if (pts.length < 2) return false;
+  var ch = mrLwcCreate(el, {
+    height: mrChartH('spark'),
+    series: [{ type: 'line', data: pts, color: color, width: 2 }]
   });
-  // Tanggal ISO ('2026-09-11') diterima LWC sebagai business day; titik tanpa tanggal valid dibuang
-  // bersama nilainya supaya tidak ada bar yang salah tempat.
-  var pts = [];
-  for (var i = 0; i < vals.length; i++) {
-    var d = (dates && dates[i]) ? String(dates[i]).slice(0, 10) : null;
-    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    pts.push({ time: d, value: Number(vals[i]) });
-  }
-  if (pts.length < 2) { try { chart.remove(); } catch (e) {} return false; }
-  line.setData(pts);
-  chart.timeScale().fitContent();
-
-  // Resize: panel hidup di dalam tabel yang lebarnya bergantung viewport/scrollbar.
-  // Callback WAJIB tahan terhadap instance yang sudah dibuang: ResizeObserver bisa menembak
-  // sekali lagi setelah dispose, dan applyOptions pada chart ter-dispose melempar
-  // "Object is disposed" — error yang tidak mematikan UI tapi mengotori console.
-  var disposed = false;
-  chart.__mrDisposed = function () { disposed = true; };
-  var ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(function () {
-    if (disposed) return;
-    try { chart.applyOptions({ width: el.clientWidth || 600 }); } catch (e) {}
-  }) : null;
-  if (ro) ro.observe(el);
-  chart.__mrRO = ro;
-  MR_SPARK_CHARTS.push(chart);
-  return true;
+  return !!ch;
 }
 
 function mrSparkSvg(vals, dates) {
@@ -654,7 +768,7 @@ function mrSeriesDetailHtml(it) {
   } else {
     // Kontainer kosong: chart dipasang SETELAH baris masuk DOM (butuh lebar nyata elemen).
     // data-* = nilai yang sama dengan payload; tidak ada request tambahan.
-    h += '<div class="mr-spark-lwc" style="height:140px;width:100%;margin-top:6px"'
+    h += '<div class="mr-spark-lwc" style="height:' + mrChartCss('spark') + ';width:100%;margin-top:6px"'
       + ' data-vals=\'' + JSON.stringify(spark) + '\''
       + ' data-dates=\'' + JSON.stringify(it.spark_dates || []) + '\'></div>';
   }
@@ -698,6 +812,9 @@ function mrRenderLiquidity(liq) {
   if (!liq || !liq.items || !liq.items.length) return '<div style="color:var(--t3);font-size:11px">SRBI/JISDOR tidak tersedia.</div>';
   var h = '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Likuiditas domestik '
     + '<span style="font-weight:400;color:var(--t3)">· seri bulanan · terakhir ' + esc(liq.as_of || '—') + '</span></div>';
+  // Chart riwayat: SRBI (Rp tn) di sumbu kanan, JISDOR (IDR/USD) di sumbu kiri — beda satuan,
+  // beda skala. Tabel di bawah tetap jadi tempat angka eksak; chart hanya menjawab arah.
+  h += '<div id="mr-liq-chart" style="height:' + mrChartCss('liq') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px;margin-bottom:8px"></div>';
   h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
   h += '<thead><tr>';
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Seri</th>'
@@ -740,7 +857,44 @@ function mrRenderLiquidity(liq) {
   });
   h += '</table>';
   h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">' + esc(liq.note || '') + '</div>';
+  // Chart TIDAK digambar di sini: fungsi ini masih membangun string, kontainernya belum ada di
+  // DOM. renderMR memanggil mrDrawLiquidity setelah innerHTML terpasang (lihat setTimeout).
   return h;
+}
+
+// Chart likuiditas: level SRBI per komponen (Rp tn, sumbu kanan) + JISDOR (IDR/USD, sumbu kiri).
+// 30 titik terakhir dari `spark` seri monitor. Tanggalnya tanggal rilis bulanan, jadi jarak antar
+// titik ~1 bulan — bukan harian. Chart TIDAK memperpanjang garis melewati tanggal rilis terakhir:
+// level SRBI Agustus 2026 tidak boleh dibaca sebagai "hari ini".
+function mrDrawLiquidity(liq) {
+  var el = $('mr-liq-chart'); if (!el) return;
+  var picked = (liq.items || []).filter(function (x) {
+    return !x.missing && x.spark && x.spark.length > 1 && x.spark_dates && x.spark_dates.length > 1;
+  });
+  if (!picked.length) {
+    el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Riwayat likuiditas tidak tersedia (seri tidak membawa spark).</div>';
+    return;
+  }
+  var colors = ['#5470c6', '#f0a020', '#9aa4b2', '#22c55e'];
+  var series = [];
+  picked.forEach(function (x, i) {
+    var isFx = (x.unit || '').indexOf('IDR') === 0;
+    var col = isFx ? mrCssColor('var(--gn)') : colors[i % colors.length];
+    series.push({
+      type: 'line',
+      data: mrLwcPoints(x.spark_dates, x.spark),
+      color: col,
+      width: isFx ? 1.6 : 2,
+      title: x.label + (x.unit ? ' (' + x.unit + ')' : ''),
+      scale: isFx ? 'left' : 'right',
+      priceFormat: isFx ? { type: 'price', precision: 0, minMove: 1 }
+        : { type: 'price', precision: 2, minMove: 0.01 }
+    });
+  });
+  var ch = mrLwcCreateSection(el, { height: mrChartH('spark'), leftScale: series.some(function (s) { return s.scale === 'left'; }), series: series });
+  if (!ch) {
+    el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Lightweight Charts tidak termuat.</div>';
+  }
 }
 
 // ═══ 3b. Kurva imbal hasil SUN — 11 tenor, hari ini vs 1W vs 1M ═══
@@ -810,7 +964,18 @@ function mrRenderCurveTo(box, d) {
   });
   h += '</div>';
 
-  h += '<div id="mr-curve-chart" style="height:200px;background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+  h += '<div id="mr-curve-chart" style="height:' + mrChartCss('curve') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+
+  // Riwayat level tenor kunci (sumbu waktu). Ditulis setelah tabel Δ supaya urutan bacanya:
+  // bentuk kurva hari ini -> arah 12 bulan -> angka eksak per tenor.
+  var histDates = (d.history && d.history.dates) || [];
+  if (histDates.length) {
+    h += '<div style="font-size:9px;color:var(--t3);margin:10px 0 4px">Riwayat tenor kunci '
+      + '<b style="color:var(--t2)">3Y · 10Y · 30Y</b> · ' + histDates.length + ' titik · '
+      + esc(histDates[0]) + ' → ' + esc(histDates[histDates.length - 1])
+      + (d.history.step > 1 ? ' (sampling 1/' + d.history.step + ' sesi)' : '') + '</div>';
+    h += '<div id="mr-curve-history" style="height:' + mrChartCss('hist') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+  }
 
   h += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px">';
   h += '<tr style="border-bottom:1px solid var(--b2)">';
@@ -853,63 +1018,148 @@ function mrDrawCurve(d) {
   var c = BL.init(el, 'mr-curve');
   if (!c) return;
   var labels = (d.tenors || []).map(function (t) { return t.tenor; });
-  var vals = (d.tenors || []).map(function (t) { return (t.on_curve !== false && t.close !== null) ? t.close : null; });
-  var known = vals.filter(function (v) { return v !== null; });
-  var pad = known.length ? Math.max(0.05, (Math.max.apply(null, known) - Math.min.apply(null, known)) * 0.25) : 0.5;
+  function level(t) { return (t.on_curve !== false && t.close !== null && t.close !== undefined) ? t.close : null; }
+  // Tiga potret kurva di satu sumbu tenor. Sumbu-x di sini ORDINAL (1M..30Y), bukan waktu —
+  // karena itu ECharts, bukan Lightweight Charts: memaksa sumbu waktu pada tenor akan mengarang
+  // jarak antar-tenor yang tidak linier (30Y = 360 bulan vs 1Y = 12 bulan).
+  var series = [
+    { name: 'Hari ini (' + (d.as_of || '—') + ')', key: 'now', width: 2.4, dash: null, area: true },
+    { name: '1 minggu lalu', key: 'w', width: 1.6, dash: 'dotted', area: false },
+    { name: '1 bulan lalu', key: 'm', width: 1.6, dash: 'dashed', area: false }
+  ];
+  var data = {};
+  series.forEach(function (s) {
+    data[s.key] = (d.tenors || []).map(function (t) {
+      var base = level(t);
+      if (base === null) return null;
+      if (s.key === 'now') return base;
+      var bp = s.key === 'w' ? t.chg_5d_bp : t.chg_20d_bp;
+      // chg_*_bp sudah dihitung server dari bar tenor itu sendiri; menurunkannya di UI dengan
+      // asumsi lain (mis. bar terdekat) akan menghasilkan kurva pembanding yang tidak sinkron
+      // dengan kolom Δ di tabel bawahnya.
+      return (bp === null || bp === undefined) ? null : base - bp / 100;
+    });
+  });
+  var known = [].concat(data.now, data.w, data.m).filter(function (v) { return v !== null; });
+  if (!known.length) return;
+  var pad = Math.max(0.05, (Math.max.apply(null, known) - Math.min.apply(null, known)) * 0.12);
+  var colors = { now: '#5470c6', w: '#f0a020', m: '#9aa4b2' };
   c.setOption({
     tooltip: {
       trigger: 'axis', textStyle: { fontSize: 9 },
       formatter: function (ps) {
-        var p = ps[0];
-        var t = (d.tenors || [])[p.dataIndex] || {};
+        var t = (d.tenors || [])[ps[0].dataIndex] || {};
         var s = '<b>' + esc(t.tenor || '') + '</b> · ' + esc(d.as_of || '') + '<br/>';
-        if (p.value === null || p.value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
-        return s + mrNum(p.value) + '% · Δ1D ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ1W ' + mrFmtBp(t.chg_5d_bp)
-          + ' bp · Δ1M ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+        if (ps[0].value === null || ps[0].value === undefined) return s + '— (tidak ada bar; terakhir ' + esc(t.date || '-') + ')';
+        s += 'hari ini ' + mrNum(ps[0].value) + '% · Δ1D ' + mrFmtBp(t.chg_1d_bp) + ' bp · Δ1W '
+          + mrFmtBp(t.chg_5d_bp) + ' bp · Δ1M ' + mrFmtBp(t.chg_20d_bp) + ' bp';
+        return s;
       }
     },
-    grid: BL.grid({ top: 14, bottom: 22, left: 46, right: 12 }),
+    legend: {
+      top: 0, right: 0, itemWidth: 10, itemHeight: 8, itemGap: 8,
+      textStyle: { fontSize: 8, color: '#8a97a8' }
+    },
+    grid: BL.grid({ top: 24, bottom: 22, left: 46, right: 12 }),
     xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 8 } },
     yAxis: {
       type: 'value', scale: true,
-      min: known.length ? Math.min.apply(null, known) - pad : null,
-      max: known.length ? Math.max.apply(null, known) + pad : null,
+      min: Math.min.apply(null, known) - pad,
+      max: Math.max.apply(null, known) + pad,
       axisLabel: { fontSize: 8, formatter: function (v) { return Number(v).toFixed(2) + '%'; } },
       splitLine: { lineStyle: { color: '#1e2836', type: 'dashed' } }
     },
-    series: [{
-      name: 'Yield', type: 'line', data: vals, connectNulls: false,
-      symbol: 'circle', symbolSize: 5,
-      lineStyle: { width: 2, color: '#5470c6' }, itemStyle: { color: '#5470c6' },
-      areaStyle: { color: 'rgba(84,112,198,0.10)' },
-      markPoint: {
-        symbolSize: 34,
-        label: { fontSize: 8, color: '#e0e6ed' },
-        // Anotasi = pasangan slope 10Y−3Y. Pilih lewat LABEL tenor, JANGAN lewat `months`
-        // (10Y = 120 bulan, bukan 10) — cacat review t_b042b106 r1.
-        data: ['10Y', '3Y'].map(function (tenorLabel) {
-          var t = (d.tenors || []).filter(function (x) {
-            return x.tenor === tenorLabel && x.close !== null && x.close !== undefined && x.on_curve !== false;
-          })[0];
-          if (!t) return null;
-          var idx = labels.indexOf(t.tenor);
-          if (idx < 0) return null;
-          return { name: t.tenor, coord: [idx, t.close], value: t.tenor };
-        }).filter(Boolean)
-      }
-    }]
+    series: series.map(function (s) {
+      return {
+        name: s.name, type: 'line', data: data[s.key], connectNulls: false,
+        symbol: s.key === 'now' ? 'circle' : 'none', symbolSize: 5, smooth: false,
+        lineStyle: { width: s.width, color: colors[s.key], type: s.dash || 'solid' },
+        itemStyle: { color: colors[s.key] },
+        areaStyle: s.area ? { color: 'rgba(84,112,198,0.10)' } : null
+      };
+    })
   }, true);
+
+  // Riwayat level tiga tenor kunci — sumbu WAKTU, karena itu Lightweight Charts. Pembanding
+  // kurva di atas menjawab \"bentuk hari ini vs sebulan lalu\"; chart ini menjawab \"arah\".
+  mrDrawCurveHistory(d);
+}
+
+function mrDrawCurveHistory(d) {
+  var el = $('mr-curve-history'); if (!el) return;
+  var hist = d.history || null;
+  if (!hist || !hist.dates || !hist.dates.length) {
+    el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Riwayat kurva tidak tersedia.</div>';
+    return;
+  }
+  var pick = ['3Y', '10Y', '30Y'];
+  var palette = { '3Y': 'var(--gn)', '10Y': 'var(--bl)', '30Y': 'var(--am)' };
+  var series = [];
+  pick.forEach(function (label) {
+    var t = (hist.tenors || []).filter(function (x) { return x.tenor === label; })[0];
+    if (!t) return;
+    var pts = mrLwcPoints(hist.dates, t.values);
+    if (pts.length < 2) return;
+    series.push({ type: 'line', data: pts, color: mrCssColor(palette[label]), width: 2, title: label });
+  });
+  if (!series.length) {
+    el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Riwayat tenor kunci tidak tersedia.</div>';
+    return;
+  }
+  var ch = mrLwcCreateSection(el, { height: mrChartH('hist'), precision: 2, minMove: 0.001, series: series });
+  if (!ch) {
+    el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Lightweight Charts tidak termuat.</div>';
+  }
+}
+
+// CSS variable -> nilai warna nyata; LWC tidak membaca var() di canvas.
+function mrCssColor(v) {
+  if (!v || v.indexOf('var(') !== 0) return v || '#8a97a8';
+  var name = v.slice(4, -1).trim();
+  return (getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim() || '#8a97a8';
 }
 
 // ═══ 4. Internals IDX ═══
-function mrRenderInternals(it) {
+function mrRenderInternals(it, mrData) {
   if (!it || !it.as_of) return '<div style="color:var(--t3);font-size:11px">Internals IDX tidak tersedia.</div>';
   var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">sesi <b style="color:var(--t2)">' + esc(it.as_of)
     + '</b> · jendela ' + (it.sessions || 0) + ' sesi (dari ' + esc(it.window_from || '—') + ') · harga di-MA memakai harga terkoreksi aksi korporasi</div>';
 
   // IHSG + foreign flow + tape + breadth: tabel dua kolom supaya sejajar
   var ihsg = it.ihsg || {}, br = it.breadth || {}, ff = it.foreign_flow || {}, tp = it.tape || {};
-  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
+
+  // ── strip visual: breadth sebagai meter, bukan tiga angka dalam satu sel ──
+  // Ambang 50% bukan "netral secara ekonomi" — itu hanya titik tengah skala 0–100 pada sumbu
+  // yang sama; warna di bawah 50% berarti mayoritas emiten di bawah MA-nya, bukan sinyal jual.
+  h += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px">';
+  [['MA20', br.pct_above_ma20], ['MA50', br.pct_above_ma50], ['MA200', br.pct_above_ma200]].forEach(function (pair) {
+    var k = pair[0], v = pair[1];
+    var has = (v !== null && v !== undefined && !isNaN(v));
+    var pct = has ? Math.max(0, Math.min(100, Number(v))) : 0;
+    var col = !has ? 'var(--t3)' : pct >= 60 ? 'var(--gn)' : pct >= 40 ? 'var(--am)' : 'var(--rd)';
+    h += '<div style="flex:1 1 120px;min-width:110px">'
+      + '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);margin-bottom:2px">'
+      + '<span>' + k + '</span><b style="color:' + col + ';font-family:var(--fm)">' + (has ? mrNum(v) + '%' : '—') + '</b></div>'
+      + '<div style="height:5px;background:var(--b1);border-radius:3px;overflow:hidden">'
+      + '<div style="width:' + pct + '%;height:100%;background:' + col + '"></div></div></div>';
+  });
+  h += '</div>';
+
+  // ── chart IHSG 40 sesi + foreign net per sesi ──
+  var ih = it.ihsg_history || null;
+  if (ih && ih.dates && ih.dates.length > 1) {
+    h += '<div style="font-size:9px;color:var(--t3);margin:2px 0 3px">IHSG · ' + ih.dates.length + ' sesi ('
+      + esc(ih.dates[0]) + ' → ' + esc(ih.dates[ih.dates.length - 1]) + ')</div>';
+    h += '<div id="mr-ihsg-chart" style="height:' + mrChartCss('ihsg') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+  }
+  var flowSeries = (ff.series || []).filter(function (x) { return x && x.date; });
+  if (flowSeries.length > 1) {
+    h += '<div style="font-size:9px;color:var(--t3);margin:8px 0 3px">Foreign net per sesi (Rp tn) · '
+      + (ff.sessions || flowSeries.length) + ' sesi · hijau = net beli, merah = net jual</div>';
+    h += '<div id="mr-flow-chart" style="height:' + mrChartCss('flow') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
+  }
+
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm);margin-top:8px">';
   h += '<thead><tr>';
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Blok</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Nilai</th>'
@@ -950,6 +1200,28 @@ function mrRenderInternals(it) {
   if (sec && (sec.top || sec.bottom)) {
     h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Rotasi sektor '
       + '<span style="font-weight:400;color:var(--t3)">· sama bobot (equal weight) · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
+    // Bar 20D per sektor: satu sumbu nol, urut dari terkuat. Angka 1D/20D tetap di tabel bawah —
+    // bar ini hanya memindahkan \"siapa menguat\" dari kolom angka ke panjang batang.
+    var secAll = (sec.top || []).concat(sec.bottom || []).filter(function (x) { return x && x.chg_20d !== null && x.chg_20d !== undefined; });
+    if (secAll.length > 2) {
+      var maxAbs = Math.max.apply(null, secAll.map(function (x) { return Math.abs(x.chg_20d); })) || 1;
+      secAll.sort(function (a, b) { return b.chg_20d - a.chg_20d; });
+      h += '<div style="margin-bottom:8px">';
+      secAll.forEach(function (x) {
+        var w = Math.max(1, Math.round(Math.abs(x.chg_20d) / maxAbs * 50));
+        var pos = x.chg_20d >= 0;
+        h += '<div style="display:flex;align-items:center;gap:6px;font-size:9px;line-height:15px">'
+          + '<span style="width:118px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t3)">' + esc(x.sector) + '</span>'
+          + '<span style="flex:1;display:flex;height:6px;background:transparent">'
+          + (pos ? '<span style="width:50%"></span>' : '<span style="width:' + (50 - w) + '%;margin-left:auto"></span>')
+          + '<span style="width:' + w + '%;background:' + mrColor(x.chg_20d) + ';border-radius:2px"></span>'
+          + (pos ? '<span style="width:' + (50 - w) + '%"></span>' : '<span style="width:50%"></span>')
+          + '</span>'
+          + '<span style="width:46px;text-align:right;font-family:var(--fm);color:' + mrColor(x.chg_20d) + '">' + mrSigned(x.chg_20d, '%') + '</span></div>';
+      });
+      h += '<div style="font-size:8px;color:var(--t3);margin-top:2px">20 sesi · garis tengah = 0% · skala maks ±' + mrNum(maxAbs) + '%</div>';
+      h += '</div>';
+    }
     h += '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
       + '<colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%">'
       + '<col style="width:16%"><col style="width:10%"><col style="width:26%"></colgroup>';
@@ -991,6 +1263,48 @@ function mrRenderInternals(it) {
   return h;
 }
 
+// Chart L4: IHSG (level, sumbu kanan) dan foreign net per sesi (bar, sumbu kiri dikali -1? tidak:
+// keduanya beda besaran sama sekali, jadi foreign flow punya chart sendiri).
+// Kenapa dipisah: menumpuk Rp tn di atas level IHSG 5.400 memaksa dua skala pada satu sumbu visual;
+// pembaca akan menyimpulkan korelasi dari kemiringan garis yang tidak sebanding.
+function mrRenderInternalsCharts(it) {
+  if (!it) return;
+  var ih = it.ihsg_history || null;
+  var el = $('mr-ihsg-chart');
+  if (el && ih && ih.dates && ih.dates.length > 1) {
+    var pts = mrLwcPoints(ih.dates, ih.close);
+    if (pts.length > 1) {
+      var ch = mrLwcCreateSection(el, {
+        height: mrChartH('ihsg'),
+        precision: 2, minMove: 0.01,
+        series: [{ type: 'line', data: pts, color: mrCssColor('var(--bl)'), width: 2 }]
+      });
+      if (!ch) el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Lightweight Charts tidak termuat.</div>';
+    } else {
+      el.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Riwayat IHSG tidak cukup untuk digambar.</div>';
+    }
+  }
+
+  var ff = (it.foreign_flow && it.foreign_flow.series) || [];
+  var fel = $('mr-flow-chart');
+  if (fel && ff.length > 1) {
+    // Bar per sesi: nilai net dalam Rp tn (skala -1..+1 khas pasar ini), warna per tanda.
+    var green = mrCssColor('var(--gn)'), red = mrCssColor('var(--rd)');
+    var bars = ff.map(function (x) {
+      return {
+        time: String(x.date).slice(0, 10),
+        value: Math.round(x.net / 1e9) / 1000,   // rupiah -> Rp tn, 3 desimal
+        color: x.net >= 0 ? green : red
+      };
+    }).filter(function (b) { return /^\d{4}-\d{2}-\d{2}$/.test(b.time); });
+    var ch2 = mrLwcCreateSection(fel, {
+      height: mrChartH('flow'),
+      series: [{ type: 'bars', data: bars, color: green }],
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 }
+    });
+    if (!ch2) fel.innerHTML = '<div style="color:var(--t3);font-size:10px;padding:8px">Lightweight Charts tidak termuat.</div>';
+  }
+}
 // ═══ 5. Coverage strip ═══
 // Menggantikan tombol refresh yang sudah dihapus: sebutkan apa yang tidak kita punya, bernama.
 // Semua daftar di bawah berasal dari payload.coverage — sumber yang SAMA dengan penanda ⏸/◔ di

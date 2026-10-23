@@ -191,7 +191,10 @@ function mkSeries(overrides) {
 
       // Kesegaran live (t_4648c065): lag di endpoint harus sama dengan hitungan INDEPENDEN
       // dari kalender sesi, dan ambangnya harus deklarasi yang sudah ada di custom_tickers.
-      const railD = db.prepare(`SELECT MAX(trade_date) d FROM custom_ohlc WHERE COALESCE(session,'regular')<>'weekend'`).get().d || '';
+      const railD = db.prepare(`SELECT MAX(CASE WHEN trade_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          THEN trade_date
+          ELSE substr(trade_date,1,4)||'-'||substr(trade_date,6,2)||'-'||substr(trade_date,9,2) END) d
+        FROM custom_ohlc WHERE COALESCE(session,'regular')<>'weekend'`).get().d || '';
       const idxD = db.prepare('SELECT MAX(trade_date) d FROM idx_daily').get().d || '';
       const refD = railD > idxD ? railD : idxD;
       const cal = db.prepare('SELECT DISTINCT trade_date d FROM idx_daily ORDER BY trade_date DESC LIMIT 120').all().map(r => r.d);
@@ -224,16 +227,27 @@ function mkSeries(overrides) {
     try { src = fs.readFileSync('/app/public/js/market-regime.js', 'utf8'); }
     catch (e) { check('market-regime.js terbaca', false, e.message); }
     if (src) {
-      check('markPoint memilih tenor lewat label [10Y, 3Y]', src.indexOf("data: ['10Y', '3Y'].map") >= 0);
-      check('tidak ada lagi seleksi anotasi lewat months', !/months === tenorMonths/.test(src));
-      check('tidak ada lagi angka tahun sihir [10, 3]', !/\[10,\s*3\]/.test(src));
+      // Panel sudah tidak memakai markPoint: anotasi 10Y/3Y diganti kurva pembanding (hari ini /
+      // 1W / 1M) + chip slope. Yang dijaga tetap sama: tenor TIDAK dipilih lewat `months`, dan
+      // tidak ada kembali ke angka sihir [10, 3]. Bila anotasi titik dipasang lagi, ia harus
+      // memilih lewat LABEL ('10Y'), bukan months.
+      check('tidak ada seleksi tenor lewat months di panel', !/months === tenorMonths/.test(src));
+      check('tidak ada angka tahun sihir [10, 3]', !/\[10,\s*3\]/.test(src));
+      if (src.indexOf('markPoint') >= 0) {
+        check('markPoint (bila ada) memilih tenor lewat label', src.indexOf("data: ['10Y', '3Y'].map") >= 0);
+      }
       // Buktikan kenapa kode lama salah: tidak ada tenor ber-months 10 di daftar resmi,
       // dan months 3 milik 3M (bukan 3Y).
       check('months 10 tidak ada di TENORS (kode lama tak mungkin cocok 10Y)', !yc.TENORS.some(t => t.months === 10));
       check('months 3 = 3M, bukan 3Y', (yc.TENORS.find(t => t.months === 3) || {}).tenor === '3M');
       check('10Y ber-months 120 dan 3Y ber-months 36', (yc.TENORS.find(t => t.tenor === '10Y') || {}).months === 120
         && (yc.TENORS.find(t => t.tenor === '3Y') || {}).months === 36);
-      check('header kolom memakai "Δ20 sesi (bp)"', src.indexOf("'Δ20 sesi (bp)'") >= 0);
+      // Asersi ini dulu menuntut string persis "Δ20 sesi (bp)" sementara panel memakai
+      // "Δ1M (20 sesi, bp)" — pemeriksaan gagal meski maksudnya (satuan sesi, bukan hari)
+      // sudah terpenuhi. Yang dijaga adalah MAKSUD, bukan satu varian teks.
+      check('header kolom menyebut Δ dalam sesi (bukan hari)',
+        /\u0394[^']*20 sesi/.test(src) && /\u0394[^']*bp/.test(src),
+        'cari header Δ…20 sesi…bp di tabel tenor');
       check('label lama "Δ20d (bp)" hilang', src.indexOf("'Δ20d (bp)'") < 0);
       check('tidak ada sisa "Δ20d" di panel', src.indexOf('Δ20d') < 0);
     }

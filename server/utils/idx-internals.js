@@ -75,6 +75,18 @@ function buildInternals(db, opts) {
     }
   } catch (e) { ihsg = null; }
 
+  // ── IHSG: riwayat 60 sesi (chart) + regime ──
+  // `regime` di bawah adalah label kondisi 20-sesi, bukan skor gabungan. Chart L4 memakai
+  // `history` ini supaya panel bisa menunjukkan IHSG terhadap breadth pada tanggal yang sama,
+  // bukan dua sumber tanggal berbeda.
+  let ihsgHistory = null;
+  try {
+    const rowsAll = db.prepare("SELECT trade_date AS d, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 60").all();
+    if (rowsAll.length >= 2) {
+      ihsgHistory = { dates: rowsAll.map(r => r.d).reverse(), close: rowsAll.map(r => r.close).reverse() };
+    }
+  } catch (e) { ihsgHistory = null; }
+
   // ── Bulk window (satu query) ──
   const rows = db.prepare(
     `SELECT code, trade_date, ca_adj(close, code, trade_date) AS ac,
@@ -154,13 +166,23 @@ function buildInternals(db, opts) {
     const prev20 = last20.slice(1).map(d => byDate.get(d).value).filter(v => v > 0);
     const vMa20 = prev20.length ? prev20.reduce((a, b) => a + b, 0) / prev20.length : 0;
     const t = byDate.get(last20[0]);
+    // Seri harian 20 sesi (ASC = terlama dulu) untuk chart: foreign net per sesi + nilai
+    // transaksi. Dikirim terpisah dari ringkasan 5D/20D supaya chart tidak perlu menurunkan
+    // angka sendiri dari total.
+    const flowSeries = last20.slice().reverse().map(d => ({
+      date: d,
+      net: Math.round(byDate.get(d).fnet),
+      value: Math.round(byDate.get(d).value),
+    }));
     tape = {
       as_of: last20[0],
       value_today: Math.round(vToday),
       value_ma20: Math.round(vMa20),
       value_ratio: vMa20 > 0 ? r2(vToday / vMa20) : null,
       advancers: t.adv, decliners: t.dec, ara: t.ara, arb: t.arb, members: t.n,
+      series: flowSeries,
     };
+    foreign_flow.series = flowSeries;
   }
 
   // ── Sektor: 1D & 20D equal weight (pakai harga terkoreksi untuk 20D) ──
@@ -260,7 +282,7 @@ function buildInternals(db, opts) {
   } catch (e) { ownership = null; }
 
   return {
-    as_of: asOf, available: true, ihsg, breadth, foreign_flow, tape, sectors, ownership,
+    as_of: asOf, available: true, ihsg, ihsg_history: ihsgHistory, breadth, foreign_flow, tape, sectors, ownership,
     sessions: dates.length,
     window_from: dates[0],
   };

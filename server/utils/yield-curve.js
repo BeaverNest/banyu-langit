@@ -48,13 +48,73 @@ const SLOPES = [
 
 const REGULAR_SESSION = "COALESCE(session,'regular')<>'weekend'";
 const LOOKBACK_DATES = 60;   // jendela pencarian tanggal kurva (sesi)
-const SERIES_LIMIT = 90;     // bar per tenor: cukup untuk Δ1d, Δ20d, dan anchor yang mundur
+const SERIES_LIMIT = 400;    // bar per tenor: cukup untuk Δ1d/Δ20d, anchor mundur, dan riwayat
+                             // chart 12 bulan (~250 sesi). Dulu 90 — cukup untuk Δ, TIDAK cukup
+                             // untuk chart, dan memotong riwayat jadi ~4 bulan tanpa gejala.
 const DENOM = 100;           // persen -> basis poin
 
 const r1 = (v) => (v == null || !Number.isFinite(v)) ? null : Math.round(v * 10) / 10;
 
 function isNum(v) {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+/**
+ * Riwayat kurva untuk chart panel: satu titik per tanggal, per tenor.
+ *
+ * Kenapa dibangun di server, bukan di UI: UI tidak boleh menyambung bar dari tanggal berbeda
+ * dan tidak boleh menghitung slope sendiri. Di sini setiap tanggal HANYA memuat tenor yang
+ * benar-benar punya bar di tanggal itu (null kalau tidak) — persis aturan assembleCurve.
+ * `dates` dibatasi `months` bulan terakhir (default 12) dan `step` = jarak sampling supaya
+ * 12 bulan tetap ~50 titik, bukan 250.
+ */
+function buildCurveHistory(seriesByCode, opts) {
+  const o = opts || {};
+  const months = o.months || 12;
+  const maxPoints = o.maxPoints || 60;
+  const codes = TENORS.map(t => t.code);
+
+  // union tanggal dari 11 tenor, urut ASC, dibatasi jendela bulan
+  const all = new Set();
+  for (const c of codes) for (const r of (seriesByCode[c] || [])) all.add(r.date);
+  const sorted = Array.from(all).sort();
+  if (!sorted.length) return { dates: [], tenors: [], months };
+
+  const last = sorted[sorted.length - 1];
+  const cutoff = new Date(Date.parse(last + 'T00:00:00Z'));
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  let dates = sorted.filter(d => d >= cutoffStr);
+
+  // turunkan resolusi dengan langkah bulat; tanggal terakhir SELALU ikut (titik "hari ini")
+  const step = Math.max(1, Math.ceil(dates.length / maxPoints));
+  if (step > 1) {
+    const sampled = dates.filter((_, i) => i % step === 0);
+    if (sampled[sampled.length - 1] !== dates[dates.length - 1]) sampled.push(dates[dates.length - 1]);
+    dates = sampled;
+  }
+
+  // peta tanggal -> close per tenor (hanya bar yang ada di tanggal itu)
+  const map = {};
+  for (const c of codes) {
+    const m = {};
+    for (const r of (seriesByCode[c] || [])) m[r.date] = isNum(r.close) ? r.close : null;
+    map[c] = m;
+  }
+  // Tanggal TERDEPAN yang tidak punya titik untuk satu tenor pun tidak informatif (mis. tenor
+  // yang riwayatnya lebih pendek menarik sumbu ke kiri dengan deretan null). Buang tanggal
+  // terdepan selama SETENGAH tenor belum punya bar di tanggal itu — aturan yang sama semangatnya
+  // dengan `coverage` di assembleCurve: jangan menggambar kurva dari cakupan yang tipis.
+  const minCover = Math.ceil(codes.length / 2);
+  const cov = (d) => codes.reduce((n, c) => n + (map[c][d] == null ? 0 : 1), 0);
+  let lead = 0;
+  while (lead < dates.length - 1 && cov(dates[lead]) < minCover) lead++;
+  if (lead > 0) dates = dates.slice(lead);
+  const tenors = TENORS.map(t => ({
+    code: t.code, tenor: t.tenor, months: t.months,
+    values: dates.map(d => (map[t.code][d] === undefined ? null : map[t.code][d])),
+  }));
+  return { dates, tenors, months, step };
 }
 
 /** Baca 11 seri tenor dari custom_ohlc. Satu query per tenor (11 × ≤90 baris), urut DESC. */
@@ -296,7 +356,17 @@ function buildYieldCurve(db, opts) {
     try { freshnessCtx = freshnessUtil.buildContext(db); }
     catch (e) { freshnessCtx = null; }   // tanpa kalender -> state 'na', kurva tetap dikirim
   }
-  return assembleCurve(series, Object.assign({}, o, { freshnessCtx }));
+  const out = assembleCurve(series, Object.assign({}, o, { freshnessCtx }));
+  // Riwayat (chart) memakai seri yang SAMA dengan kurva; tidak ada query kedua dan tidak ada
+  // jalur baca lain. `months` bisa dinaikkan lewat opts.historyMonths tanpa mengubah kurva.
+  try {
+    out.history = out.available
+      ? buildCurveHistory(series, { months: o.historyMonths || 12, maxPoints: o.historyMaxPoints || 60 })
+      : { dates: [], tenors: [], months: o.historyMonths || 12 };
+  } catch (e) {
+    out.history = { dates: [], tenors: [], months: o.historyMonths || 12, error: String(e.message || e) };
+  }
+  return out;
 }
 
 module.exports = { TENORS, SLOPES, assembleCurve, readSeries, buildYieldCurve, chooseAnchor, curveFreshness };

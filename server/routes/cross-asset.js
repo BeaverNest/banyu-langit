@@ -82,6 +82,10 @@ router.get('/cross-asset', (req, res) => {
           status: s.status,
           state: s.state, stale: s.stale, aged: s.aged,
           lag_sessions: s.lag_sessions, expected_lag_sessions: s.expected_lag_sessions,
+          // Riwayat 30 titik untuk chart blok likuiditas. Diteruskan apa adanya dari seri monitor
+          // (bukan query kedua): SRBI bulanan, jadi 30 titik = 2,5 tahun, bukan 30 hari.
+          spark: Array.isArray(s.spark) ? s.spark : null,
+          spark_dates: Array.isArray(s.spark_dates) ? s.spark_dates : null,
         };
       }),
     };
@@ -130,6 +134,7 @@ router.get('/cross-asset', (req, res) => {
         sessions: internals.sessions,
         window_from: internals.window_from,
         ihsg: internals.ihsg,
+        ihsg_history: internals.ihsg_history || null,
         breadth: internals.breadth,
         foreign_flow: internals.foreign_flow,
         tape: internals.tape,
