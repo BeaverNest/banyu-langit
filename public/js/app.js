@@ -52,7 +52,7 @@ function stab(n,el){
   if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
   if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
-  if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;}
+  if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;if(typeof loadScreener==='function')loadScreener();}
   if(n==='pf'&&!tabLoaded.pf){tabLoaded.pf=true;if(typeof loadPortfolio==='function')loadPortfolio();}
   if(n==='bt'&&!tabLoaded.bt){tabLoaded.bt=true;if(typeof loadBacktest==='function')loadBacktest();}
 
@@ -82,6 +82,7 @@ function anaSubTab(n,b){
   $('ana-'+n).classList.add('on');
   if(n==='regime'&&typeof loadMarketRegime==='function')loadMarketRegime();
   if(n==='usdaily'&&typeof loadUSDaily==='function')loadUSDaily();
+  if(n==='screener'&&typeof loadScreener==='function')loadScreener();
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
   if(n==='correlation'&&typeof loadCorrelationView==='function')loadCorrelationView();
