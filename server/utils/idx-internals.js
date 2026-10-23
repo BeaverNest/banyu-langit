@@ -132,7 +132,9 @@ function buildInternals(db, opts) {
     if (pc > 0) {
       const chg = (r.close - pc) / pc;
       if (chg > 0) b.adv++; else if (chg < 0) b.dec++;
-      const araPct = pc < 500 ? 0.35 : pc <= 5000 ? 0.25 : 0.20;
+      // Batas tier ARA: 200 / 5.000 (diverifikasi dari tape 23 Okt 2026, lihat
+      // server/routes/backtest.js::araPct). Kode lama memakai 500.
+      const araPct = pc < 200 ? 0.35 : pc <= 5000 ? 0.25 : 0.20;
       if (chg >= araPct * 0.995) b.ara++;
       if (chg <= -0.15 * 0.995) b.arb++;
     }

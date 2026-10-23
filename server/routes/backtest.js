@@ -787,10 +787,21 @@ router.get('/dates', (req, res) => {
 // ═══ FRIKSI IDX — konstanta DIVERIFIKASI dari rail kita sendiri, 2026-10-17 ═══
 // Tangga tick : 963/963 close pada 2026-10-16 persis kelipatan tick pitanya.
 // ARB -15%    : lantai terendah yang pernah tercetak (Agu-Okt 2026) = -15,00%.
-// ARA bertingkat: +35% (<500), +25% (500-5.000), +20% (>5.000) — maksimum tercetak per pita.
+// ARA bertingkat: +35% (<200), +25% (200-5.000), +20% (>5.000) — maksimum tercetak per pita.
+// Batas 200 (bukan 500) diverifikasi 23 Okt 2026: band 200-500 mencetak 25,00% tepat
+// dan TIDAK PERNAH melewatinya, sementara band <200 mencetak 34,97-35,00% sepanjang 2024-2026.
 // Kalau bursa mengubah aturan, VERIFIKASI ULANG dari rail sebelum memakai ulang angka ini.
 function idxTick(p) { return p < 200 ? 1 : p < 500 ? 2 : p < 2000 ? 5 : p < 5000 ? 10 : 25; }
-function araPct(prev) { return prev < 500 ? 0.35 : prev <= 5000 ? 0.25 : 0.20; }
+// Batas tier ARA diukur dari tape sendiri (idx_daily, bar dengan open+prev_close sah,
+// 2024-2026): max open gain per band = 35,00% (<200), 25,00% (200-5.000), 20,00%
+// (>=5.000). Batas antara tier pertama dan kedua ada di **200**, bukan 500.
+//
+// Kode lama `prev < 500 ? 0.35` memberi band 200-500 plafon 35%, padahal tape
+// menunjukkan band itu tidak pernah melewati 25,00% (0 dari 29.316 bar pada 2025,
+// 0 dari 28.929 pada 2026). Jadi kode lama TERLALU LONGGAR: order beli diloloskan
+// pada bar yang sebenarnya sudah mentok ceiling, yaitu membeli saham yang baru gap
+// +25..35%. Memperbaikinya membuat hasil lebih buruk — dan itu arah yang benar.
+function araPct(prev) { return prev < 200 ? 0.35 : prev <= 5000 ? 0.25 : 0.20; }
 const ARB_PCT = 0.15;
 // Default friksi (retail IDX all-in): 0,15% beli + 0,25% jual, plafon likuiditas 5% nilai transaksi.
 const FEE_BUY_DEFAULT = 0.15, FEE_SELL_DEFAULT = 0.25, LIQ_CAP_DEFAULT = 5;

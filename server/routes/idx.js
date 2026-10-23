@@ -4771,7 +4771,10 @@ module.exports = function(upload) {
           for (const r of rows) {
             const chg = (r.close - r.prev_close) * 1.0 / r.prev_close;
             if (chg > 0) adv++; else if (chg < 0) dec++;
-            const araPct = r.prev_close < 500 ? 0.35 : r.prev_close <= 5000 ? 0.25 : 0.20;
+            // Batas tier ARA: 200 / 5.000 (diverifikasi dari tape 23 Okt 2026, lihat
+            // server/routes/backtest.js::araPct). Kode lama memakai 500 sehingga band
+            // 200-500 dihitung memakai plafon 35% dan statistik ARA terlalu kecil.
+            const araPct = r.prev_close < 200 ? 0.35 : r.prev_close <= 5000 ? 0.25 : 0.20;
             if (chg >= araPct * 0.995) ara++;
             if (chg <= -0.15 * 0.995) arb++;
           }
