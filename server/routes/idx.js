@@ -5913,12 +5913,17 @@ module.exports = function(upload) {
       // Hari TANPA transaksi (suspensi/iliquid) tetap ditampilkan di chart — jangan dihapus —
       // tapi OHLC-nya dinormalkan ke close supaya low=0 tidak menarik sumbu ke nol.
       // Fakta "tidak diperdagangkan" disimpan di no_trade untuk label/legenda.
+      // Catatan: setelah perbaikan price-adjust (23 Okt 2026) `ao` benar-benar berisi
+      // open_price dan bisa 0 untuk saham tipis yang tidak melaporkan open, jadi chart
+      // butuh fallback sendiri — mesin backtest sengaja TIDAK diberi fallback agar
+      // fillBlocked menolak bar seperti itu.
       const chartData = data.map((r) => {
         const noTrade = Number(r.volume || 0) === 0 && (!r.al || r.al <= 0);
         const px = r.ac;
+        const ao = r.ao > 0 ? r.ao : px;
         return {
           date: r.trade_date,
-          open: noTrade ? px : r.ao,
+          open: noTrade ? px : ao,
           high: noTrade ? px : r.ah,
           low: noTrade ? px : r.al,
           close: r.ac,

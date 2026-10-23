@@ -70,6 +70,30 @@ function factorForRow(factors, actions, date) {
 
 // Terapkan ke field harga (ac/ao/ah/al) dan volume (disesuaikan ke basis terbaru).
 // Volume lama dikali 1/faktor agar setara lembar hari ini (split menambah lembar).
+//
+// BUG (23 Okt 2026): pemetaan default {open:'ao'} membaca row.open, padahal SQL
+// backtest/screener memilih kolom `open_price`. Hasilnya r.open === undefined dan
+// fallback diam-diam memakai r.close, sehingga ao SELALU = ac. Akibatnya eksekusi
+// "di open" sebenarnya mengisi di close dan gerbang ARA/ARB membandingkan close,
+// bukan open. Fallback sekarang hanya berlaku untuk field yang memang tidak
+// disediakan sumber (bukan untuk salah nama kolom), dan `ac` tidak pernah
+// mengambil alih field lain.
+const PRICE_SOURCE_ALIAS = {
+  open: ['open', 'open_price'],
+  high: ['high', 'high_price'],
+  low: ['low', 'low_price'],
+  close: ['close', 'close_price'],
+};
+
+function pickPrice(r, src) {
+  const names = PRICE_SOURCE_ALIAS[src] || [src];
+  for (const n of names) {
+    const v = r[n];
+    if (v != null) return v;
+  }
+  return null;
+}
+
 function adjustRows(rows, factors, opts) {
   const o = opts || {};
   const dateKey = o.dateKey || 'trade_date';
@@ -80,7 +104,11 @@ function adjustRows(rows, factors, opts) {
     const f = cf[i];
     const r = rows[i];
     for (const src of Object.keys(priceFields)) {
-      const raw = r[src] != null ? r[src] : r.close;
+      // Jangan pernah menyalin close ke field lain: bar tanpa transaksi harus tetap
+      // terbaca "tidak ada harga" (0/null) agar gerbang fillBlocked menolaknya,
+      // bukan diberi harga palsu seolah bisa dieksekusi.
+      const raw = pickPrice(r, src);
+      if (raw == null) { r[priceFields[src]] = null; continue; }
       r[priceFields[src]] = f === 1 ? raw : Math.round(raw * f);
     }
     for (const src of Object.keys(volFields)) {
