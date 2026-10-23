@@ -406,6 +406,7 @@ function mrCloseSeriesDetail() {
   for (var i = 0; i < openRows.length; i++) openRows[i].parentNode.removeChild(openRows[i]);
   var sel = document.querySelectorAll('table.mr-mon tr.mr-row[data-open="1"]');
   for (var j = 0; j < sel.length; j++) sel[j].removeAttribute('data-open');
+  mrDisposeSparkCharts();   // instance LWC hidup di panel yang baru dibuang
 }
 
 function mrRowDetail(tr) {
@@ -423,10 +424,132 @@ function mrRowDetail(tr) {
   row.innerHTML = '<td colspan="6" style="padding:8px 10px;background:var(--bg1);'
     + 'border-bottom:1px solid var(--b2);font-family:var(--fm)">' + mrSeriesDetailHtml(it) + '</td>';
   tr.parentNode.insertBefore(row, tr.nextSibling);
+  mrMountSparkCharts(row);
 }
 
-// Sparkline = SVG poligraf inline, bukan chart library: 30 titik tidak butuh kanvas, dan
-// import ECharts untuk 78 baris (bila semua dibuka) akan menambah beban render tanpa manfaat.
+// Pasang LWC di setiap kontainer .mr-spark-lwc pada panel yang baru masuk DOM.
+// Fallback: bila LightweightCharts tidak tersedia, gambar ulang dengan SVG lama (tampilan
+// tetap informatif, hanya kehilangan sumbu waktu & tooltip bawaan).
+function mrMountSparkCharts(scope) {
+  var boxes = (scope || document).querySelectorAll('.mr-spark-lwc');
+  for (var i = 0; i < boxes.length; i++) {
+    var el = boxes[i];
+    if (el.getAttribute('data-mounted') === '1') continue;
+    var vals = [], dates = [];
+    try {
+      vals = JSON.parse(el.getAttribute('data-vals') || '[]');
+      dates = JSON.parse(el.getAttribute('data-dates') || '[]');
+    } catch (e) { vals = []; dates = []; }
+    if (vals.length < 2) { el.parentNode.removeChild(el); continue; }
+    var col = vals[vals.length - 1] >= vals[0] ? mrSparkTheme().up : mrSparkTheme().down;
+    var mounted = false;
+    try { mounted = mrSparkLwc(el, vals, dates, col); } catch (e) { mounted = false; }
+    if (mounted) {
+      el.setAttribute('data-mounted', '1');
+    } else {
+      var wrap = document.createElement('div');
+      wrap.innerHTML = mrSparkSvg(vals, dates);
+      el.parentNode.replaceChild(wrap, el);
+    }
+  }
+}
+
+// Sparkline drill-down = Lightweight Charts v5 (Apache-2.0, TradingView), bukan SVG manual.
+// Alasan: sumbu waktu ikut benar (gap akhir pekan/libur tidak diratakan seperti polyline
+// index-per-titik), crosshair + tooltip bawaan, dan panel bisa di-zoom/di-pan tanpa kode hover
+// sendiri. Library-nya disajikan lokal (public/js/vendor) supaya atribusi & lisensi terkendali.
+// Kalau window.LightweightCharts tidak ada (CDN/lokal gagal muat, tes DOM tanpa JS vendor),
+// fungsi jatuh ke SVG lama — panel tetap terisi, tidak ada layar kosong.
+var MR_SPARK_CHARTS = [];
+
+function mrDisposeSparkCharts() {
+  for (var i = 0; i < MR_SPARK_CHARTS.length; i++) {
+    var ch = MR_SPARK_CHARTS[i];
+    try { if (ch.__mrRO) ch.__mrRO.disconnect(); } catch (e) {}
+    try { if (ch.__mrDisposed) ch.__mrDisposed(); } catch (e) {}
+    try { ch.remove(); } catch (e) { /* sudah lepas dari DOM */ }
+  }
+  MR_SPARK_CHARTS = [];
+}
+
+function mrSparkTheme() {
+  // Warna dibaca dari CSS variable supaya tema terang/gelap Banyu Langit tetap berlaku;
+  // LWC menggambar di canvas sendiri sehingga tidak mewarisi warna teks induknya.
+  var cs = getComputedStyle(document.documentElement);
+  var g = function (n, d) { var v = (cs.getPropertyValue(n) || '').trim(); return v || d; };
+  return {
+    up: g('--gn', '#00e676'),
+    down: g('--rd', '#ff3d00'),
+    text: g('--t3', '#555555'),
+    grid: g('--b1', '#1e1e1e'),
+    bg: 'transparent'
+  };
+}
+
+function mrSparkLwc(el, vals, dates, color) {
+  var LWC = (typeof window !== 'undefined') ? window.LightweightCharts : null;
+  if (!LWC || typeof LWC.createChart !== 'function') return false;
+  var th = mrSparkTheme();
+  var chart;
+  try {
+    chart = LWC.createChart(el, {
+      width: el.clientWidth || 600,
+      height: 140,
+      layout: {
+        background: { type: 'solid', color: th.bg },
+        textColor: th.text,
+        fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--fm') || 'monospace',
+        fontSize: 9,
+        // Notifikasi TradingView wajib tetap terlihat (syarat lisensi Apache-2.0).
+        attributionLogo: true
+      },
+      grid: { vertLines: { visible: false }, horzLines: { color: th.grid, style: 2 } },
+      rightPriceScale: { borderColor: th.grid, scaleMargins: { top: 0.12, bottom: 0.12 } },
+      timeScale: { borderColor: th.grid, timeVisible: false, secondsVisible: false },
+      crosshair: { mode: 1 },
+      handleScroll: false,
+      handleScale: false,
+      localization: { locale: 'en-US' }
+    });
+  } catch (e) {
+    return false;   // versi API berbeda: biarkan pemanggil memakai fallback SVG
+  }
+  var line = chart.addSeries(LWC.LineSeries, {
+    color: color,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: true,
+    crosshairMarkerRadius: 3
+  });
+  // Tanggal ISO ('2026-09-11') diterima LWC sebagai business day; titik tanpa tanggal valid dibuang
+  // bersama nilainya supaya tidak ada bar yang salah tempat.
+  var pts = [];
+  for (var i = 0; i < vals.length; i++) {
+    var d = (dates && dates[i]) ? String(dates[i]).slice(0, 10) : null;
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    pts.push({ time: d, value: Number(vals[i]) });
+  }
+  if (pts.length < 2) { try { chart.remove(); } catch (e) {} return false; }
+  line.setData(pts);
+  chart.timeScale().fitContent();
+
+  // Resize: panel hidup di dalam tabel yang lebarnya bergantung viewport/scrollbar.
+  // Callback WAJIB tahan terhadap instance yang sudah dibuang: ResizeObserver bisa menembak
+  // sekali lagi setelah dispose, dan applyOptions pada chart ter-dispose melempar
+  // "Object is disposed" — error yang tidak mematikan UI tapi mengotori console.
+  var disposed = false;
+  chart.__mrDisposed = function () { disposed = true; };
+  var ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(function () {
+    if (disposed) return;
+    try { chart.applyOptions({ width: el.clientWidth || 600 }); } catch (e) {}
+  }) : null;
+  if (ro) ro.observe(el);
+  chart.__mrRO = ro;
+  MR_SPARK_CHARTS.push(chart);
+  return true;
+}
+
 function mrSparkSvg(vals, dates) {
   // Lebar mengikuti tabel (viewBox diskalakan). Hover memakai koordinat viewBox yang sama.
   var w = 1000, hgt = 140, pad = 8;
@@ -529,7 +652,11 @@ function mrSeriesDetailHtml(it) {
     h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">spark tidak tersedia ('
       + spark.length + ' titik di payload)</div>';
   } else {
-    h += mrSparkSvg(spark, it.spark_dates || []);
+    // Kontainer kosong: chart dipasang SETELAH baris masuk DOM (butuh lebar nyata elemen).
+    // data-* = nilai yang sama dengan payload; tidak ada request tambahan.
+    h += '<div class="mr-spark-lwc" style="height:140px;width:100%;margin-top:6px"'
+      + ' data-vals=\'' + JSON.stringify(spark) + '\''
+      + ' data-dates=\'' + JSON.stringify(it.spark_dates || []) + '\'></div>';
   }
   h += '</div>';
   return h;
