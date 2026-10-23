@@ -53,6 +53,12 @@ const YAHOO_SYMBOL_MAP = {
   'USDIDR': 'USDIDR=X', 'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X',
   'USDJPY': 'USDJPY=X', 'AUDUSD': 'AUDUSD=X', 'USDCNY': 'USDCNY=X',
   'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
+  // Valuta tambahan (permintaan owner 23 Okt 2026): regional + pasangan utama.
+  // Semua sudah dicek hidup di Yahoo 23 Okt 2026 (5 bar terakhir masing-masing).
+  'USDSGD': 'USDSGD=X', 'USDKRW': 'USDKRW=X', 'USDTHB': 'USDTHB=X',
+  'USDCHF': 'USDCHF=X', 'NZDUSD': 'NZDUSD=X',
+  'USDPHP': 'USDPHP=X', 'USDVND': 'USDVND=X', 'USDINR': 'USDINR=X',
+  'USDHKD': 'USDHKD=X', 'EURIDR': 'EURIDR=X', 'SGDIDR': 'SGDIDR=X',
   // Macro (dipakai blok Macro Signals: VIX, DXY, US10Y). BDI TIDAK tersedia di Yahoo
   // (^BDI/BDIY/BDI=F semuanya 404) — jangan dipetakan ke simbol palsu.
   'DXY': 'DX-Y.NYB', 'US10Y': '^TNX',

@@ -48,9 +48,26 @@ const DECLARED = {
   IXIC: ['index', 'price'], KLCI: ['index', 'price'], KOSPI: ['index', 'price'],
   NIKKEI: ['index', 'price'], SPX: ['index', 'price'], STI: ['index', 'price'],
 
-  // ── Valuta ──
+  // ── Valuta (semua 'price': % bermakna, level > 0) ──
   USDIDR: ['IDR/USD', 'price'],
   USDCNY: ['CNY/USD', 'price'],
+  EURUSD: ['USD/EUR', 'price'],
+  GBPUSD: ['USD/GBP', 'price'],
+  USDJPY: ['JPY/USD', 'price'],
+  AUDUSD: ['USD/AUD', 'price'],
+  USDSGD: ['SGD/USD', 'price'],
+  USDKRW: ['KRW/USD', 'price'],
+  USDTHB: ['THB/USD', 'price'],
+  USDCHF: ['CHF/USD', 'price'],
+  NZDUSD: ['USD/NZD', 'price'],
+  EURJPY: ['JPY/EUR', 'price'],
+  GBPJPY: ['JPY/GBP', 'price'],
+  USDPHP: ['PHP/USD', 'price'],
+  USDVND: ['VND/USD', 'price'],
+  USDINR: ['INR/USD', 'price'],
+  USDHKD: ['HKD/USD', 'price'],
+  EURIDR: ['IDR/EUR', 'price'],
+  SGDIDR: ['IDR/SGD', 'price'],
 
   // ── Komoditas (kontrak yang jelas saja; sisanya NULL + dilaporkan) ──
   XAUUSD: ['USD/oz', 'price'],
