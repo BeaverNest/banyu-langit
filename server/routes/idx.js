@@ -1268,6 +1268,7 @@ module.exports = function(upload) {
 
   // ═══ COMPOSITE SCORE — Multi-factor ranking engine ═══
   router.post('/composite-score', (req, res) => {
+    return res.status(410).json({ ok:false, error:'composite-score sudah dipensiunkan (UI dan pemakainya dihapus)' });
     try {
       const { w_fundamental, w_valuation, w_momentum, w_demand, w_foreign } = req.body || {};
       const wF = parseFloat(w_fundamental) || 25;
@@ -1660,6 +1661,7 @@ module.exports = function(upload) {
 
   // GET latest scores (no recalculation)
   router.get('/composite-score', (req, res) => {
+    return res.status(410).json({ ok:false, error:'composite-score sudah dipensiunkan (UI dan pemakainya dihapus)' });
     try {
       const td = req.query.date || latestIdxDate();
       if (!td) return res.json({ data: [], trade_date: null });
@@ -1671,6 +1673,7 @@ module.exports = function(upload) {
 
   // ═══ BACKFILL SCORES — calculate for historical dates ═══
   router.post('/composite-score/backfill', (req, res) => {
+    return res.status(410).json({ ok:false, error:'composite-score sudah dipensiunkan (UI dan pemakainya dihapus)' });
     try {
       const { from, to, w_fundamental, w_valuation, w_momentum, w_demand, w_foreign, point_in_time, fund_source, fund_lag_days } = req.body || {};
       if (!from || !to) return res.status(400).json({ error: 'from and to required (YYYY-MM-DD)' });
@@ -2155,6 +2158,7 @@ module.exports = function(upload) {
 
   // Scored dates list
   router.get('/composite-score/dates', (req, res) => {
+    return res.status(410).json({ ok:false, error:'composite-score sudah dipensiunkan (UI dan pemakainya dihapus)' });
     try {
       const rows = db.prepare('SELECT calc_date, COUNT(*) as stocks, ROUND(AVG(score_composite),1) as avg_score FROM daily_scores GROUP BY calc_date ORDER BY calc_date DESC LIMIT 250').all();
       res.json({ dates: rows });
@@ -2163,6 +2167,7 @@ module.exports = function(upload) {
 
   // ═══ CLEAR BACKFILL DATA ═══
   router.post('/composite-score/clear', (req, res) => {
+    return res.status(410).json({ ok:false, error:'composite-score sudah dipensiunkan (UI dan pemakainya dihapus)' });
     try {
       const { from, to, all } = req.body || {};
       let deleted = 0;
@@ -3244,6 +3249,7 @@ module.exports = function(upload) {
   // (calc_date, code)), so drive it over HTTP instead of duplicating its logic.
   // Failures are reported back in the caller's payload, never swallowed.
   async function refreshScores(afterDate) {
+    return { attempted: false, skipped: 'composite-score sudah dipensiunkan' };
     const port = parseInt(process.env.PORT) || 3000;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 180000);
