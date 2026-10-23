@@ -40,13 +40,13 @@ async function loadPBScores() {
   var st = $('pb-score-status');
   if (st) st.textContent = 'Loading scores...';
   try {
-    var r = await fetch('/api/idx/composite-score');
+    var r = await fetch('/api/idx/metrics?limit=500');
     var d = await r.json();
-    if (d.data && d.data.length) {
-      pbScoreData = d.data;
-      if (st) st.textContent = d.data.length + ' stocks scored';
+    if (d.rows && d.rows.length) {
+      pbScoreData = d.rows;
+      if (st) st.textContent = d.rows.length + ' saham (metrik)';
     } else {
-      if (st) st.textContent = 'No scores — run Calculate in Composite Score tab first';
+      if (st) st.textContent = 'Tidak ada data metrik';
     }
   } catch (e) { if (st) st.textContent = ''; }
 }
@@ -248,7 +248,7 @@ function renderCorrResult() {
     h += '<div style="border:1px solid var(--b1);border-radius:8px;overflow:hidden;background:var(--bg2);margin-bottom:12px">';
     h += '<div style="padding:5px 10px;font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;border-bottom:1px solid var(--b1);background:var(--bgH)">Score + Correlation Profile</div>';
     h += '<div style="overflow-x:auto"><table class="bei-tbl" style="font-size:10px"><thead><tr>';
-    h += '<th class="al">Code</th><th class="ar">Score</th><th class="ar">Fund</th><th class="ar">Value</th><th class="ar">Mom</th><th class="al">Sector</th><th class="ar">Avg Corr</th><th class="ar">Max Corr</th><th class="al">Most Correlated</th>';
+    h += '<th class="al">Code</th><th class="ar">Ret20d</th><th class="ar">PER</th><th class="ar">PBV</th><th class="ar">RelVol</th><th class="al">Sector</th><th class="ar">Avg Corr</th><th class="ar">Max Corr</th><th class="al">Most Correlated</th>';
     h += '</tr></thead><tbody>';
 
     codes.forEach(function(code, i) {
@@ -265,16 +265,15 @@ function renderCorrResult() {
       avgC = n > 1 ? avgC / (n - 1) : 0;
       var acC = avgC > 0.6 ? 'color:var(--rd)' : avgC > 0.3 ? 'color:var(--am)' : 'color:var(--gn)';
       var mcC = maxC > 0.7 ? 'color:var(--rd)' : maxC > 0.5 ? 'color:var(--am)' : 'color:var(--gn)';
-      var compScore = sc.score_composite || 0;
-      var hue = compScore >= 70 ? '142' : compScore >= 50 ? '45' : compScore >= 30 ? '25' : '0';
-      var bg = 'hsla(' + hue + ',' + Math.min(80, compScore) + '%,50%,0.15)';
+      var compScore = sc.ret_20d == null ? 0 : sc.ret_20d;
+      var bg = '';
 
       h += '<tr>';
       h += '<td class="al"><span class="code" onclick="gsOpen(\'' + esc(code) + '\')">' + esc(code) + '</span></td>';
-      h += '<td class="ar" style="font-weight:700;background:' + bg + '">' + compScore.toFixed(2) + '</td>';
-      h += '<td class="ar">' + (sc.score_fundamental || 0).toFixed(2) + '</td>';
-      h += '<td class="ar">' + (sc.score_valuation || 0).toFixed(2) + '</td>';
-      h += '<td class="ar">' + (sc.score_momentum || 0).toFixed(2) + '</td>';
+      h += '<td class="ar" style="font-weight:700">' + (sc.ret_20d == null ? '–' : sc.ret_20d.toFixed(2)) + '</td>';
+      h += '<td class="ar">' + (sc.per == null ? '–' : sc.per.toFixed(2)) + '</td>';
+      h += '<td class="ar">' + (sc.pbv == null ? '–' : sc.pbv.toFixed(2)) + '</td>';
+      h += '<td class="ar">' + (sc.rel_vol == null ? '–' : sc.rel_vol.toFixed(2)) + '</td>';
       h += '<td class="al" style="font-size:9px">' + esc(sc.sector || '-') + '</td>';
       h += '<td class="ar" style="font-weight:600;' + acC + '">' + avgC.toFixed(2) + '</td>';
       h += '<td class="ar" style="font-weight:600;' + mcC + '">' + maxC.toFixed(2) + '</td>';
@@ -367,7 +366,7 @@ function renderBuilderUI() {
 // ═══ SMART BUILD ═══
 async function runSmartBuild() {
   if (pbLoading) return;
-  if (!pbScoreData || !pbScoreData.length) { $('sb-status').textContent = '❌ No scores — run Calculate in Composite Score tab first'; return; }
+  if (!pbScoreData || !pbScoreData.length) { $('sb-status').textContent = '❌ Tidak ada data metrik'; return; }
 
   sbMaxPos = parseInt(($('sb-pos') || {}).value) || 5;
   sbMaxCorr = parseFloat(($('sb-corr') || {}).value) || 0.55;
@@ -438,9 +437,9 @@ async function runSmartBuild() {
       }
 
       if (ok) {
-        selected.push({ code: code, score: (scoreMap[code] || {}).score_composite || 0, rank: i + 1 });
+        selected.push({ code: code, score: (scoreMap[code] || {}).ret_20d || 0, rank: i + 1 });
       } else {
-        skipped.push({ code: code, score: (scoreMap[code] || {}).score_composite || 0, rank: i + 1, reason: 'corr ' + maxCorrWith.corr.toFixed(2) + ' with ' + maxCorrWith.code });
+        skipped.push({ code: code, score: (scoreMap[code] || {}).ret_20d || 0, rank: i + 1, reason: 'corr ' + maxCorrWith.corr.toFixed(2) + ' with ' + maxCorrWith.code });
       }
     }
 

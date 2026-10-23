@@ -148,7 +148,7 @@ function sdRenderTab(tabId) {
     if (tabId === 'fundachart') sdDrawFundaCharts(d);
     if (tabId === 'analysis') {
       if (d.scoring) sdDrawRadar(d.scoring);
-      if (d.score_history && d.score_history.length >= 3) sdDrawScoreChart(d.score_history);
+      
       sdDrawAnalysisCharts(d);
     }
     if (tabId === 'ownership' && d.ownership) sdDrawOwnershipCharts(d.ownership);
@@ -586,19 +586,19 @@ function sdTabAnalysis(d) {
 
   // Score radar + values
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">5-FACTOR SCORE</div>';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">METRIK</div>';
   if (d.scoring) {
-    h += '<div id="sd-radar-chart" style="width:100%;height:280px"></div>';
     h += '<table class="bei-tbl" style="font-size:12px"><tbody>';
-    [{ k: 'score_composite', l: 'Composite', c: 'var(--bl)', bold: true },
-     { k: 'score_fundamental', l: 'Fundamental', c: '#22c55e' },
-     { k: 'score_valuation', l: 'Valuation', c: '#0ea5e9' },
-     { k: 'score_momentum', l: 'Momentum', c: '#f59e0b' },
-     { k: 'score_demand', l: 'Demand', c: '#a855f7' },
-     { k: 'score_foreign', l: 'Foreign', c: '#ef4444' }].forEach(function(f) {
-      var val = Math.round(d.scoring[f.k] || 0);
-      var vc = val >= 70 ? '#22c55e' : val <= 30 ? '#ef4444' : f.c;
-      h += '<tr><td class="al" style="color:var(--t3)">' + f.l + '</td><td class="ar" style="font-weight:' + (f.bold ? '800' : '700') + ';font-family:var(--fm);color:' + vc + ';font-size:' + (f.bold ? '14px' : '12px') + '">' + val + '</td></tr>';
+    [{ k: 'ma20_pct', l: 'vs MA20', c: 'var(--t1)', suffix: '%' },
+     { k: 'ma200_pct', l: 'vs MA200', c: 'var(--t1)', suffix: '%' },
+     { k: 'rsi14', l: 'RSI 14', c: 'var(--t1)', suffix: '' },
+     { k: 'ret_5d', l: 'Ret 5D', c: 'var(--t1)', suffix: '%' },
+     { k: 'ret_20d', l: 'Ret 20D', c: 'var(--t1)', suffix: '%' },
+     { k: 'rel_vol', l: 'Rel Vol', c: 'var(--t1)', suffix: 'x' },
+     { k: 'fnet_5d', l: 'FNet 5D', c: 'var(--t1)', suffix: ' M' }].forEach(function(f) {
+      var val = (d.scoring[f.k] == null ? null : Math.round(d.scoring[f.k] * 100) / 100);
+      var vc = f.c;
+      h += '<tr><td class="al" style="color:var(--t3)">' + f.l + '</td><td class="ar" style="font-weight:' + ('700') + ';font-family:var(--fm);color:' + vc + ';font-size:' + (f.bold ? '14px' : '12px') + '">' + val + '</td></tr>';
     });
     h += '</tbody></table>';
   } else {
@@ -611,13 +611,7 @@ function sdTabAnalysis(d) {
 
   h += '</div>'; // end 2-col
 
-  // Score history chart
-  if (d.score_history && d.score_history.length >= 3) {
-    h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">SCORE TREND</div>';
-    h += '<div id="sd-score-chart" style="width:100%;height:' + sdChartHeight(380, 0.45, 560) + 'px"></div>';
-    h += '</div>';
-  }
+  // Grafik tren skor dihapus bersama metode skor komposit.
 
   // Historis tambahan (dari 500 bar harga)
   if (d.chart && d.chart.length >= 60) {

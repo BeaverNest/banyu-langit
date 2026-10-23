@@ -75,6 +75,7 @@ app.use('/api/idx', require('./routes/cross-asset'));
 // idx.js sudah 6 ribu baris dan tidak perlu ditumbuhi blok baru.
 app.use('/api/idx', require('./routes/us-daily'));
 app.use('/api/us', require('./routes/us-screen'));
+app.use('/api/idx', require('./routes/idx-metrics'));
 app.use('/api/screener', screenerRoutes);
 app.use('/api/backtest', require('./routes/backtest'));
 app.use('/api/portfolio', require('./routes/portfolio'));

@@ -42,3 +42,11 @@ Kalau sebuah kartu tidak menyebut kontrak ini, anggap kontrak ini tetap mengikat
 - Perubahan UI **tidak boleh** mengubah route data atau rumus skor. Kalau perlu, buat kartu terpisah.
 - Berkas yang dipakai bersama (mis. `server/routes/idx.js`) di-commit **per-hunk**; jangan menyapu perubahan penulis lain.
 - Setiap kartu UI wajib menyebut: berkas yang disentuh, angka contoh sebelum/sesudah, dan cara memverifikasi (biasanya ukur lebar kolom / hitung angka >2 desimal di halaman).
+
+## 7. Tidak ada skor komposit
+
+Skor gabungan (composite/fundamental/valuation/momentum/demand/foreign) **dihapus dari UI**.
+Bobotnya manual dan dua komponennya tidak punya padanan di pasar lain, sehingga angka yang
+terlihat sebanding sebenarnya tidak. Yang ditampilkan hanya besaran yang bisa dihitung ulang
+dari data mentah: return, jarak ke MA, RSI, rasio volume, arus asing, PER/PBV/ROE.
+Sumber: `GET /api/idx/metrics`.
