@@ -118,14 +118,6 @@ var AFL_VARIABLES = {
     {v:'F3',tip:'Net foreign 3 hari lalu'},
     {v:'F4',tip:'Net foreign 4 hari lalu'}
   ],
-  'Scoring': [
-    {v:'Score',d:'Composite',tip:'Skor komposit 5-faktor (0-100). >70 = bagus, <30 = jelek. Weighted average dari Fund+Val+Mom+Demand+Foreign'},
-    {v:'ScoreFund',tip:'Skor fundamental (0-100). Berdasarkan ROE, NPM, revenue growth'},
-    {v:'ScoreVal',tip:'Skor valuasi (0-100). Berdasarkan PER, PBV relatif terhadap median sektoral'},
-    {v:'ScoreMom',tip:'Skor momentum (0-100). Berdasarkan price return dan trend MA'},
-    {v:'ScoreDemand',tip:'Skor demand (0-100). Berdasarkan bid ratio, rel volume, freq spike'},
-    {v:'ScoreForeign',tip:'Skor foreign smart money (0-100). Berdasarkan FNet 10d/20d, accumulation streak'}
-  ],
   'Fundamental': [
     {v:'PER',tip:'Price to Earnings Ratio. <10 = murah, >30 = mahal. PER < 0 berarti rugi'},
     {v:'PBV',tip:'Price to Book Value. <1 = di bawah nilai buku, >3 = premium'},
@@ -380,6 +372,9 @@ function scrOpenModal(){
   h+='</div></div>';
 
   // Variable grid — table-like: category label left, vars right
+  h+='<div style="padding:6px 12px;border-top:1px solid var(--b1);flex-shrink:0">';
+  h+='<input id="scr-var-q" placeholder="cari indikator (mis. RSI, volume, foreign)" oninput="scrFilterVars(this.value)" style="width:100%;background:var(--bg0);border:1px solid var(--b1);border-radius:4px;padding:6px 9px;color:var(--t1);font-size:12px;outline:none">';
+  h+='</div>';
   h+='<div class="scr-modal-vars">';
   var cats=Object.keys(AFL_VARIABLES);
   for(var ci=0;ci<cats.length;ci++){
@@ -569,3 +564,21 @@ function aflShowTip(e){
   el.style.left=x+'px';el.style.top=y+'px';
 }
 function aflHideTip(){var el=document.getElementById('afl-tooltip');if(el)el.style.display='none';}
+
+function scrFilterVars(q){
+  q=(q||'').toUpperCase().trim();
+  var rows=document.querySelectorAll('.scr-var-row');
+  rows.forEach(function(row){
+    var catEl=row.querySelector('.scr-var-cat');
+    var cat=catEl?catEl.textContent:'';
+    var btns=row.querySelectorAll('.scr-var-btn');
+    var shown=0;
+    btns.forEach(function(b){
+      var txt=(b.textContent||'').toUpperCase();
+      var hit=!q||txt.indexOf(q)>=0||cat.toUpperCase().indexOf(q)>=0;
+      b.style.display=hit?'':'none';
+      if(hit)shown++;
+    });
+    row.style.display=shown?'':'none';
+  });
+}
