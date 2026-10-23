@@ -118,6 +118,23 @@ var AFL_VARIABLES = {
     {v:'F3',tip:'Net foreign 3 hari lalu'},
     {v:'F4',tip:'Net foreign 4 hari lalu'}
   ],
+  'Indikator Lanjutan': [
+    {v:'RSI14',tip:'Relative Strength Index 14 hari. <30 oversold, >70 overbought'},
+    {v:'ATR14',tip:'Average True Range 14 hari (satuan harga) — volatilitas untuk stop'},
+    {v:'ATRpct',d:'(%)',tip:'ATR sebagai persen harga. >5% = volatil, <2% = tenang'},
+    {v:'ADX14',tip:'Kekuatan tren (>25 trending, <20 sideways). Arah lihat DI+/DI-'},
+    {v:'DIplus',tip:'DI+ (tekanan beli). DI+ > DI- = tren naik'},
+    {v:'DIminus',tip:'DI- (tekanan jual). DI- > DI+ = tren turun'},
+    {v:'Ret5',d:'(%)',tip:'Return 5 hari'},
+    {v:'Ret20',d:'(%)',tip:'Return 20 hari (1 bulan)'},
+    {v:'Ret60',d:'(%)',tip:'Return 60 hari (3 bulan)'},
+    {v:'RS_IHSG',d:'(%)',tip:'Kekuatan relatif vs IHSG: Ret20 saham dikurangi Ret20 IHSG. Positif = mengalahkan pasar'},
+    {v:'Pos52',d:'(0-100)',tip:'Posisi harga dalam rentang 52 minggu. 100 = di puncak, 0 = di dasar'},
+    {v:'BB_PctB',d:'(0-100)',tip:'Posisi dalam Bollinger Bands 20,2. >100 = di atas band atas'},
+    {v:'BB_Width',d:'(%)',tip:'Lebar Bollinger relatif harga. <5% = squeeze (calon breakout)'},
+    {v:'GapPct',d:'(%)',tip:'Gap pembukaan vs penutupan sebelumnya'},
+    {v:'RangePct',d:'(%)',tip:'(High-Low)/Close hari ini — lebar ayunan intraday'}
+  ],
   'Fundamental': [
     {v:'PER',tip:'Price to Earnings Ratio. <10 = murah, >30 = mahal. PER < 0 berarti rugi'},
     {v:'PBV',tip:'Price to Book Value. <1 = di bawah nilai buku, >3 = premium'},
@@ -337,7 +354,7 @@ function renderScreenerUI(){
   // Create tooltip container
   if(!document.getElementById('afl-tooltip')){
     var tipDiv=document.createElement('div');tipDiv.id='afl-tooltip';
-    tipDiv.style.cssText='display:none;position:fixed;z-index:9999;padding:8px 12px;background:#1a2332;border:1px solid var(--b2);border-radius:6px;font-size:11px;color:var(--t1);max-width:280px;line-height:1.5;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,0.4)';
+    tipDiv.style.cssText='display:none;position:fixed;z-index:9999;padding:8px 12px;background:var(--bg2);border:1px solid var(--b2);border-radius:6px;font-size:11px;color:var(--t1);max-width:280px;line-height:1.5;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,0.4)';
     document.body.appendChild(tipDiv);
   }
 }

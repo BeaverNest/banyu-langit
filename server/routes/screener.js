@@ -1,4 +1,64 @@
 const express = require('express');
+
+// ═══ INDIKATOR TAMBAHAN (RSI, ATR, ADX, Bollinger) ═════════════════════════
+function calcRSI(closes, n = 14) {
+  if (closes.length < n + 1) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const ch = closes[i] - closes[i - 1]; if (ch > 0) g += ch; else l -= ch; }
+  g /= n; l /= n;
+  let rsi = 100 - 100 / (1 + g / (l || 1e-9));
+  for (let i = n + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1];
+    g = (g * (n - 1) + Math.max(ch, 0)) / n;
+    l = (l * (n - 1) + Math.max(-ch, 0)) / n;
+    rsi = 100 - 100 / (1 + g / (l || 1e-9));
+  }
+  return Math.round(rsi * 100) / 100;
+}
+
+function calcATR(highs, lows, closes, n = 14) {
+  if (closes.length < n + 1) return null;
+  const tr = [];
+  for (let i = 1; i < closes.length; i++) {
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  let atr = tr.slice(0, n).reduce((a, x) => a + x, 0) / n;
+  for (let i = n; i < tr.length; i++) atr = (atr * (n - 1) + tr[i]) / n;
+  return Math.round(atr * 100) / 100;
+}
+
+function calcADX(highs, lows, closes, n = 14) {
+  const len = closes.length;
+  if (len < n * 2) return null;
+  const tr = [], pdm = [], ndm = [];
+  for (let i = 1; i < len; i++) {
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+    const up = highs[i] - highs[i - 1], dn = lows[i - 1] - lows[i];
+    pdm.push(up > dn && up > 0 ? up : 0);
+    ndm.push(dn > up && dn > 0 ? dn : 0);
+  }
+  let atr = tr.slice(0, n).reduce((a, x) => a + x, 0);
+  let sp = pdm.slice(0, n).reduce((a, x) => a + x, 0);
+  let sn = ndm.slice(0, n).reduce((a, x) => a + x, 0);
+  const dx = [];
+  for (let i = n; i < tr.length; i++) {
+    atr = atr - atr / n + tr[i];
+    sp = sp - sp / n + pdm[i];
+    sn = sn - sn / n + ndm[i];
+    const pdi = atr > 0 ? 100 * sp / atr : 0;
+    const ndi = atr > 0 ? 100 * sn / atr : 0;
+    dx.push(pdi + ndi > 0 ? 100 * Math.abs(pdi - ndi) / (pdi + ndi) : 0);
+  }
+  if (dx.length < n) return null;
+  let adx = dx.slice(0, n).reduce((a, x) => a + x, 0) / n;
+  for (let i = n; i < dx.length; i++) adx = (adx * (n - 1) + dx[i]) / n;
+  const lastAtr = atr / n;
+  return {
+    adx: Math.round(adx * 100) / 100,
+    pdi: Math.round((lastAtr > 0 ? 100 * (sp / n) / lastAtr : 0) * 100) / 100,
+    ndi: Math.round((lastAtr > 0 ? 100 * (sn / n) / lastAtr : 0) * 100) / 100,
+  };
+}
 const { db, latestIdxDate } = require('../db');
 const { loadFactors, adjustRows, fallbackRatioActions } = require('../utils/price-adjust');
 
@@ -151,6 +211,11 @@ router.post('/run', (req, res) => {
     const caMap = loadConfirmedCAs();
     const caFactors = loadFactors(db);
     const results = [];
+    let ihsgRet20 = 0;
+    try {
+      const im = db.prepare("SELECT close FROM market_index_constructed ORDER BY trade_date DESC LIMIT 21").all().map(r => r.close);
+      if (im.length >= 21 && im[im.length - 1] > 0) ihsgRet20 = (im[0] / im[im.length - 1] - 1) * 100;
+    } catch (e) {}
 
     for (const stock of stocks) {
       let tech = {};
@@ -291,6 +356,7 @@ function detectNeeds(formula) {
     freq: /TICKRATIO|ISBLOCK|ISRETAIL|ISSMART|ISDRYUP|BLOCKTRADE|RETAILFRENZY|SMARTACCUM|DRYUP|RELFREQ/i.test(formula),
     fund: /SECTOR|INDUSTRY|BOARD/i.test(formula),
     divown: /DIVYIELD|DIVCOUNT|RICOUNT|FOREIGNPCT|LIVEPER|LIVEPBV|EPS\b|BOOKVAL/i.test(formula),
+    ind: /RSI14|ATR14|ATRPCT|ADX14|DIPLUS|DIMINUS|RET5\b|RET20\b|RET60\b|RS_IHSG|POS52|BB_PCTB|BB_WIDTH|GAPPCT|RANGEPCT/i.test(formula),
   };
 }
 
@@ -316,9 +382,9 @@ router.post('/formula', (req, res) => {
     const fundMap = {};
     if (fm) db.prepare('SELECT * FROM idx_fundamental WHERE snapshot_month=?').all(fm).forEach(f => { fundMap[f.code] = f; });
 
-    const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol || needs.freq) ? bulkLoadHistory(td) : {};
-    const caMap = (needs.ma || needs.macd || needs.stoch) ? loadConfirmedCAs() : {};
-    const caFactors = (needs.ma || needs.macd || needs.stoch) ? loadFactors(db) : {};
+    const histMap = (needs.ma || needs.macd || needs.stoch || needs.hhv || needs.foreign || needs.relvol || needs.freq || needs.ind) ? bulkLoadHistory(td) : {};
+    const caMap = (needs.ma || needs.macd || needs.stoch || needs.ind) ? loadConfirmedCAs() : {};
+    const caFactors = (needs.ma || needs.macd || needs.stoch || needs.ind) ? loadFactors(db) : {};
 
     // ── Bulk-load dividend, ownership, CA data for new variables ──
     let divMap = {}, bpMap = {}, riMap = {};
@@ -351,6 +417,12 @@ router.post('/formula', (req, res) => {
     
     const results = [];
 
+    let ihsgRet20 = 0;
+    try {
+      const im = db.prepare("SELECT close FROM market_index_constructed ORDER BY trade_date DESC LIMIT 21").all().map(r => r.close);
+      if (im.length >= 21 && im[im.length - 1] > 0) ihsgRet20 = (im[0] / im[im.length - 1] - 1) * 100;
+    } catch (e) {}
+
     for (const stock of stocks) {
       const fund = fundMap[stock.code] || {};
       const hist = histMap[stock.code] || [];
@@ -360,6 +432,37 @@ router.post('/formula', (req, res) => {
       if (hist.length >= 5) {
         const adjusted = adjustSeries(hist, caFactors[stock.code], caMap[stock.code]);
         const closes = adjusted.map(h => h.ac);
+        const highsA = adjusted.map(adjHigh);
+        const lowsA = adjusted.map(adjLow);
+        {
+          const last = closes[closes.length - 1];
+          const rsi = calcRSI(closes, 14);
+          const atr = calcATR(highsA, lowsA, closes, 14);
+          const adx = calcADX(highsA, lowsA, closes, 14);
+          if (rsi != null) { extraCtx.RSI14 = rsi; tech.RSI14 = rsi; }
+          if (atr != null) { extraCtx.ATR14 = atr; tech.ATR14 = atr; extraCtx.ATRpct = last > 0 ? Math.round(atr / last * 10000) / 100 : 0; tech.ATRpct = extraCtx.ATRpct; }
+          if (adx) { extraCtx.ADX14 = adx.adx; extraCtx.DIplus = adx.pdi; extraCtx.DIminus = adx.ndi; }
+          const ret = (k) => closes.length > k && closes[closes.length - 1 - k] > 0
+            ? Math.round((last / closes[closes.length - 1 - k] - 1) * 10000) / 100 : 0;
+          extraCtx.Ret5 = ret(5); extraCtx.Ret20 = ret(20); extraCtx.Ret60 = ret(60);
+          extraCtx.RS_IHSG = Math.round((extraCtx.Ret20 - ihsgRet20) * 100) / 100;
+          const w52 = closes.slice(-252);
+          if (w52.length >= 60) {
+            const hi = Math.max(...w52), lo = Math.min(...w52);
+            extraCtx.Pos52 = hi > lo ? Math.round((last - lo) / (hi - lo) * 10000) / 100 : 50;
+          }
+          if (closes.length >= 20) {
+            const w = closes.slice(-20);
+            const ma = w.reduce((a, x) => a + x, 0) / 20;
+            const sd = Math.sqrt(w.reduce((a, x) => a + (x - ma) * (x - ma), 0) / 20);
+            const up = ma + 2 * sd, lo2 = ma - 2 * sd;
+            extraCtx.BB_PctB = up > lo2 ? Math.round((last - lo2) / (up - lo2) * 10000) / 100 : 50;
+            extraCtx.BB_Width = ma > 0 ? Math.round((up - lo2) / ma * 10000) / 100 : 0;
+          }
+          const prevC = closes.length >= 2 ? closes[closes.length - 2] : 0;
+          if (prevC > 0 && stock.open_price > 0) extraCtx.GapPct = Math.round((stock.open_price / prevC - 1) * 10000) / 100;
+          if (stock.high > 0 && stock.low > 0 && stock.close > 0) extraCtx.RangePct = Math.round((stock.high - stock.low) / stock.close * 10000) / 100;
+        }
         
         if (needs.ma) {
           const highs = adjusted.map(adjHigh);
@@ -497,6 +600,12 @@ router.post('/formula', (req, res) => {
         DivCount: divMap[stock.code] ? divMap[stock.code].count : 0,
         RICount: riMap[stock.code] || 0,
         ForeignPct: bpMap[stock.code] || 0,
+        RSI14: extraCtx.RSI14 ?? 0, ATR14: extraCtx.ATR14 ?? 0, ATRpct: extraCtx.ATRpct ?? 0,
+        ADX14: extraCtx.ADX14 ?? 0, DIplus: extraCtx.DIplus ?? 0, DIminus: extraCtx.DIminus ?? 0,
+        Ret5: extraCtx.Ret5 ?? 0, Ret20: extraCtx.Ret20 ?? 0, Ret60: extraCtx.Ret60 ?? 0,
+        RS_IHSG: extraCtx.RS_IHSG ?? 0, Pos52: extraCtx.Pos52 ?? 0,
+        BB_PctB: extraCtx.BB_PctB ?? 0, BB_Width: extraCtx.BB_Width ?? 0,
+        GapPct: extraCtx.GapPct ?? 0, RangePct: extraCtx.RangePct ?? 0,
         ...extraCtx,
       };
 
