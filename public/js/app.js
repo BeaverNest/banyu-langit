@@ -86,7 +86,6 @@ function anaSubTab(n,b){
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
   if(n==='correlation'&&typeof loadCorrelationView==='function')loadCorrelationView();
-  if(n==='scoring'&&typeof loadScoring==='function')loadScoring();
   if(n==='portbuilder'&&typeof loadPortfolioBuilder==='function')loadPortfolioBuilder();
   if(n==='stockdetail'&&typeof loadStockDetail==='function')loadStockDetail();
 }
