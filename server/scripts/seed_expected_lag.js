@@ -93,6 +93,12 @@ const DECLARED = {
   // 11 tenor SUN — diukur 0 sesi hilang / 70 sesi (lihat catatan di kepala berkas).
   ID1M: 0, ID3M: 0, ID6M: 0, ID1Y: 0, ID3Y: 0, ID5Y: 0,
   ID15Y: 0, ID20Y: 0, ID25Y: 0, ID30Y: 0,
+  // 19 seri valuta (investing/1..2214) — diukur 0 sesi hilang / 81 sesi IDX
+  // (jendela 1 Jul – 23 Okt 2026, probe read-only 23 Okt 2026). Pindah dari Yahoo
+  // karena Yahoo menyisipkan bar Sabtu/Minggu untuk FX; investing tidak.
+  USDIDR: 0, USDCNY: 0, EURUSD: 0, GBPUSD: 0, USDJPY: 0, USDCHF: 0, AUDUSD: 0,
+  NZDUSD: 0, EURJPY: 0, GBPJPY: 0, USDSGD: 0, USDTHB: 0, USDHKD: 0, USDINR: 0,
+  USDKRW: 0, EURIDR: 0, USDPHP: 0, USDVND: 0, SGDIDR: 0,
 };
 
 const isInvesting = s => String(s || '').startsWith('investing/');
