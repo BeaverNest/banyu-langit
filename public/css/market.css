@@ -215,7 +215,7 @@ table.mr-mon tr.mr-detail>td{background:var(--bg1)}
 .mr-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 10px;border-bottom:1px solid var(--b1);background:var(--bg2)}
 .mr-card-t{font-size:10px;font-weight:700;color:var(--t1)}
 .mr-card-m{font-size:9px;color:var(--t3);white-space:nowrap}
-.mr-card-b{max-height:320px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+.mr-card-b{max-height:320px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
 .mr-card-b table.mr-mon thead th{position:sticky;top:0;background:var(--bg1);z-index:2;box-shadow:inset 0 -1px 0 var(--b1)}
 .mr-card-b table.mr-mon tbody tr:nth-child(even)>td{background:rgba(127,127,127,.04)}
 @media(max-width:900px){.mr-grid{grid-template-columns:1fr}}

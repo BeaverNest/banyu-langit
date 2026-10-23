@@ -328,8 +328,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
   var h = '<table class="mr-mon" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
     + '<colgroup><col style="width:38%"><col style="width:14%">'
     + '<col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>'
-    + '<thead><tr style="color:var(--t3)">';
-  h += '';
+    + '<thead><tr style="color:var(--t3)">'
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>';
   caps.forEach(function (c) {
