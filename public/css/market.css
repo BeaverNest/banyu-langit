@@ -202,3 +202,20 @@ table.mr-mon tr.mr-row{cursor:pointer}
 table.mr-mon tr.mr-row:hover>td{background:var(--bgH)}
 table.mr-mon tr.mr-row[data-open="1"]>td{background:var(--bgH)}
 table.mr-mon tr.mr-detail>td{background:var(--bg1)}
+
+/* ═══ Market Regime — strip KPI + grid kartu per kelas aset ═══ */
+.mr-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0 0 12px}
+.mr-kpi-t{border:1px solid var(--b1);border-radius:6px;padding:6px 9px;background:var(--bg1)}
+.mr-kpi-k{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--t3)}
+.mr-kpi-v{font-size:16px;font-weight:700;font-family:var(--fm);line-height:1.25;color:var(--t1)}
+.mr-kpi-c{font-size:10px;font-family:var(--fm)}
+.mr-mon-note{font-size:9px;color:var(--t3);margin-bottom:8px}
+.mr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:10px;align-items:start}
+.mr-card{border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg1)}
+.mr-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 10px;border-bottom:1px solid var(--b1);background:var(--bg2)}
+.mr-card-t{font-size:10px;font-weight:700;color:var(--t1)}
+.mr-card-m{font-size:9px;color:var(--t3);white-space:nowrap}
+.mr-card-b{max-height:320px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+.mr-card-b table.mr-mon thead th{position:sticky;top:0;background:var(--bg1);z-index:2;box-shadow:inset 0 -1px 0 var(--b1)}
+.mr-card-b table.mr-mon tbody tr:nth-child(even)>td{background:rgba(127,127,127,.04)}
+@media(max-width:900px){.mr-grid{grid-template-columns:1fr}}

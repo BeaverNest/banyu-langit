@@ -76,7 +76,7 @@ function renderMR(el) {
   // "Berubah hari ini" tidak ditampilkan (permintaan owner 20 Okt 2026).
 
   // ── 2. Monitor lintas aset ──
-  h += mrSection('2', '📋 Monitor lintas aset', mrRenderMonitor(d.monitor));
+  h += mrSection('2', '📋 Monitor lintas aset', mrKpiStrip(d.internals, d.monitor) + mrRenderMonitor(d.monitor));
 
   // ── 3. Kurva & likuiditas ──
   h += mrSection('3', '📐 Kurva &amp; likuiditas',
@@ -219,6 +219,43 @@ function mrMonChg(v, isPct, neutral) {
   return '<span style="color:' + c + '">' + mrSigned(v, isPct ? '%' : '') + '</span>';
 }
 
+
+// ═══ Strip KPI: 4 angka yang menentukan "hari ini risk-on atau risk-off" ═══
+// Semua nilai sudah ada di payload (internals + monitor); 0 request tambahan.
+function mrKpiStrip(it, mon) {
+  var tiles = [];
+  var ih = (it && it.ihsg) || null;
+  if (ih && ih.level != null) {
+    tiles.push({ k: 'IHSG', v: mrNum(ih.level), c: ih.chg_1d, pct: true, sub: 'regime ' + (ih.regime || '—') });
+  }
+  var ff = (it && it.foreign_flow) || null;
+  if (ff && ff.net_today != null) {
+    tiles.push({ k: 'Asing hari ini', v: mrRpTn(ff.net_today), c: null, pct: false, sub: '5D ' + mrRpTn(ff.net_5d) });
+  }
+  var want = { USDIDR: 'USD/IDR', US10Y: 'US 10Y', VIX: 'VIX', ID10Y: 'SUN 10Y' };
+  var found = {};
+  ((mon && mon.groups) || []).forEach(function (g) {
+    (g.items || []).forEach(function (x) { if (want[x.code]) found[x.code] = x; });
+  });
+  Object.keys(want).forEach(function (code) {
+    var x = found[code]; if (!x) return;
+    tiles.push({ k: want[code], v: (x.last == null ? '—' : mrNum(x.last)), c: x.chg_1, pct: x.kind === 'price', sub: '' });
+  });
+  if (!tiles.length) return '';
+  var h = '<div class="mr-kpi">';
+  tiles.slice(0, 5).forEach(function (t) {
+    var col = 'var(--t1)';
+    if (t.c != null && !isNaN(t.c)) col = t.c > 0 ? 'var(--gn)' : (t.c < 0 ? 'var(--rd)' : 'var(--t2)');
+    var cv = (t.c == null || isNaN(t.c)) ? '—' : (t.pct ? mrSigned(t.c, '%') : mrSigned(t.c, ''));
+    h += '<div class="mr-kpi-t"><div class="mr-kpi-k">' + esc(t.k) + '</div>'
+      + '<div class="mr-kpi-v">' + t.v + '</div>'
+      + '<div class="mr-kpi-c" style="color:' + col + '">' + cv
+      + (t.sub ? ' <span style="color:var(--t3)">· ' + esc(t.sub) + '</span>' : '') + '</div></div>';
+  });
+  h += '</div>';
+  return h;
+}
+
 function mrRenderMonitor(mon) {
   if (!mon || !mon.groups || !mon.groups.length) {
     return '<div style="color:var(--t3);font-size:11px">Tidak ada seri di custom_tickers.</div>';
@@ -226,8 +263,9 @@ function mrRenderMonitor(mon) {
   var nRows = 0;
   mon.groups.forEach(function (g) { nRows += (g.items || []).length; });
 
-  var h = '<div style="font-size:9px;color:var(--t3);margin-bottom:6px">'
-    + nRows + ' seri · ' + mon.groups.length + ' kelas aset · klik baris = detail</div>';
+  var h = '<div class="mr-mon-note">'
+    + nRows + ' seri · ' + mon.groups.length + ' kelas aset · klik baris = detail · klik header kolom = urut</div>'
+    + '<div class="mr-grid">';
 
   // Blok kecil terpisah bikin tidak rapi: 'commodity_unverified' digabung ke Komoditas.
   var groups = [];
@@ -258,10 +296,12 @@ function mrRenderMonitor(mon) {
       (parts[key] = parts[key] || []).push(it);
     });
     var domFreq = items[0].freq || 'D';
-    h += '<div style="margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1);'
-      + 'font-size:10px;font-weight:700;color:var(--t1)">' + esc(g.label || g.category)
-      + ' <span style="font-weight:400;color:var(--t3)">· ' + items.length + ' seri · '
-      + esc(MR_FREQ_WORD[domFreq] || domFreq) + '</span></div>';
+    var nStale = items.filter(function (x) { return mrRowState(x) === 'stale'; }).length;
+    h += '<div class="mr-card"><div class="mr-card-h">'
+      + '<span class="mr-card-t">' + esc(g.label || g.category) + '</span>'
+      + '<span class="mr-card-m">' + items.length + ' seri · ' + esc(MR_FREQ_WORD[domFreq] || domFreq)
+      + (nStale ? ' · <b style="color:var(--am)">' + nStale + ' basi</b>' : '') + '</span></div>'
+      + '<div class="mr-card-b">';
     Object.keys(parts).sort().forEach(function (key) {
       var rows = parts[key];
       var first = rows[0];
@@ -278,15 +318,18 @@ function mrRenderMonitor(mon) {
       }
       h += mrMonitorTable(rows, caps, isPct, unitWord);
     });
+    h += '</div></div>';
   });
+  h += '</div>';
   return h;
 }
 
 function mrMonitorTable(rows, caps, isPct, unitWord) {
   var h = '<table class="mr-mon" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
     + '<colgroup><col style="width:38%"><col style="width:14%">'
-    + '<col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>';
-  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+    + '<col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>'
+    + '<thead><tr style="color:var(--t3)">';
+  h += '';
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Instrumen</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">Last</th>';
   caps.forEach(function (c) {
@@ -295,7 +338,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
   });
   h += '<th style="text-align:right;padding:3px 6px;font-weight:600;cursor:pointer" onclick="mrSortTable(this)">'
     + 'YTD</th>'
-    + '</tr>';
+    + '</tr></thead><tbody>';
 
   rows.forEach(function (it) {
     var st = mrRowState(it);
@@ -310,7 +353,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
     }
     if (st === 'stale') mark = ' <span style="color:var(--am)" title="sumber tidak menerbitkan bar untuk ' + (it.excess_sessions || it.lag_sessions || 0) + ' sesi terakhir (ambang ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ' sesi); retry tidak menolong">⏸</span>';
     else if (st === 'aged') mark = ' <span style="color:var(--am)" title="umur data melewati kadens seri ini dan lag-nya belum dideklarasikan — bukan angka hari ini">◔</span>';
-    else if (st === 'delayed') mark = ' <span style="color:var(--t3)" title="sumber ini memang terbit terlambat ' + (it.lag_sessions || 0) + ' sesi (wajar ≤ ' + (it.expected_lag_sessions == null ? '—' : it.expected_lag_sessions) + ')">·</span>';
+    else if (st === 'delayed') mark = ''; /* penanda titik dihapus: lag wajar bukan anomali, cukup di tooltip */
 
     var unitTag = '';   // satuan hanya di tooltip, bukan di sebelah nama
     // as-of per baris (DoD3) TANPA kolom: kolom as-of & sumber dihapus dua kali oleh commit
@@ -337,7 +380,7 @@ function mrMonitorTable(rows, caps, isPct, unitWord) {
       + (it.n_bars < 2 ? '<span style="color:var(--t3)" title="seri baru punya 1 bar: YTD tidak bermakna">—</span>' : mrMonChg(it.chg_ytd, isPct, neutral)) + '</td>';
     h += '</tr>';
   });
-  h += '</table>';
+  h += '</tbody></table>';
   return h;
 }
 
@@ -530,11 +573,11 @@ function mrRenderLiquidity(liq) {
   var h = '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Likuiditas domestik '
     + '<span style="font-weight:400;color:var(--t3)">· seri bulanan · terakhir ' + esc(liq.as_of || '—') + '</span></div>';
   h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+  h += '<thead><tr>';
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Seri</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Level</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Δ1 periode</th>'
-    + '<th style="text-align:left;padding:3px 6px;font-weight:600">status</th></tr>';
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">status</th></tr></thead><tbody>';
   liq.items.forEach(function (x) {
     if (x.missing) {
       h += '<tr class="mr-liq" data-state="missing" style="border-bottom:1px solid var(--b1)">'
@@ -741,10 +784,10 @@ function mrRenderInternals(it) {
   // IHSG + foreign flow + tape + breadth: tabel dua kolom supaya sejajar
   var ihsg = it.ihsg || {}, br = it.breadth || {}, ff = it.foreign_flow || {}, tp = it.tape || {};
   h += '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--fm)">';
-  h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+  h += '<thead><tr>';
     + '<th style="text-align:left;padding:3px 6px;font-weight:600">Blok</th>'
     + '<th style="text-align:right;padding:3px 6px;font-weight:600">Nilai</th>'
-    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Rincian</th></tr>';
+    + '<th style="text-align:left;padding:3px 6px;font-weight:600">Rincian</th></tr></thead><tbody>';
 
   var regimeTxt = ihsg.regime === 'bull' ? 'bull' : ihsg.regime === 'mild_bull' ? 'mild bull'
     : ihsg.regime === 'bear' ? 'bear' : ihsg.regime === 'mild_bear' ? 'mild bear' : 'sideways';
@@ -784,7 +827,7 @@ function mrRenderInternals(it) {
     h += '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
       + '<colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%">'
       + '<col style="width:16%"><col style="width:10%"><col style="width:26%"></colgroup>';
-    h += '<tr style="color:var(--t3);border-bottom:1px solid var(--b1)">'
+    h += '</thead><tbody>';
       + '<th style="text-align:left;padding:3px 6px;font-weight:600">Sektor</th>'
       + '<th style="text-align:right;padding:3px 6px;font-weight:600">1D</th>'
       + '<th style="text-align:right;padding:3px 6px;font-weight:600">20D</th>'
