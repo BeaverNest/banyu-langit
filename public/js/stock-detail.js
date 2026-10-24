@@ -20,6 +20,309 @@ function sdChartHeight(minH, ratio, maxH) {
   return H;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// LWC CORE — pengganti BL.init/setOption (ECharts) khusus panel Stock Information
+// ═══════════════════════════════════════════════════════════════════════════════
+// Alasan migrasi: ECharts dan D3 di app ini dimuat dari cdnjs, sementara Lightweight
+// Charts sudah divendor lokal. Terbukti di sesi ini: saat halaman dibuka, `echarts`
+// belum termuat sehingga semua chart Stock Information tampil sebagai div kosong
+// tanpa satu pun pesan error — user tidak tahu chart-nya gagal, bukan kosong.
+// LWC v5.0.8 lokal menghilangkan ketergantungan itu dan (untuk chart finansial)
+// memberi crosshair + zoom yang lebih baik.
+
+var SD_CHARTS = {};        // id kontainer -> { chart, ro, disposed }
+var LWC = (typeof window !== 'undefined') ? window.LightweightCharts : null;
+
+function sdChartTheme() {
+  var cs = getComputedStyle(document.documentElement);
+  var g = function (n, d) { var v = (cs.getPropertyValue(n) || '').trim(); return v || d; };
+  return {
+    up: g('--gn', '#22c55e'),
+    down: g('--rd', '#ef4444'),
+    text: g('--t3', '#8a9bb5'),
+    grid: g('--b1', '#1e2836'),
+    bg: 'transparent',
+    font: (g('--fm', 'monospace') || 'monospace').replace(/["']/g, '')
+  };
+}
+
+// Container tinggi: CSS clamp, bukan px yang dipanggang saat render. Tinggi px tidak
+// berubah ketika jendela di-resize (terukur di panel lain: viewport 577->900 px,
+// kontainer tetap 317 px). clamp() + vh membuat kontainer ikut viewport.
+function sdChartCss(min, vh, max) { return 'clamp(' + min + 'px, ' + vh + 'vh, ' + max + 'px)'; }
+
+function sdYmd(t) {
+  if (t == null) return '';
+  if (typeof t === 'string') return t.slice(0, 10);
+  if (typeof t === 'object' && t.year) {
+    return t.year + '-' + String(t.month).padStart(2, '0') + '-' + String(t.day).padStart(2, '0');
+  }
+  if (typeof t === 'number') return new Date(t * 1000).toISOString().slice(0, 10);
+  return '';
+}
+
+// LWC menolak data yang tidak naik ketat (duplicate time = throw, urutan turun = blank).
+// Semua seri lewat sini supaya tidak ada satu pun chart yang mati diam-diam.
+function sdLwcData(points) {
+  var seen = {}, out = [];
+  (points || []).forEach(function (p) {
+    if (!p || p.time == null) return;
+    var t = sdYmd(p.time);
+    if (!t) return;
+    var isObj = (typeof p.value === 'object' && p.value !== null);
+    // Baris OHLC tidak punya `value` — tanpa cabang ini seluruh seri candle dibuang
+    // oleh filter dan chart harga hanya berisi garis MA (terlihat "jadi line chart").
+    var isOhlc = p.open != null && p.high != null && p.low != null && p.close != null;
+    if (isOhlc) { seen[t] = p; return; }
+    if (!isObj && (p.value == null || !isFinite(p.value))) return;
+    seen[t] = p; // duplikat: yang terakhir menang
+  });
+  Object.keys(seen).sort().forEach(function (t) { out.push(seen[t]); });
+  return out;
+}
+
+function sdLwcDispose(id) {
+  var rec = SD_CHARTS[id];
+  if (!rec) return;
+  if (rec.ro) { try { rec.ro.disconnect(); } catch (e) {} }
+  rec.disposed = true;
+  try { rec.chart.remove(); } catch (e) {}
+  delete SD_CHARTS[id];
+}
+
+function sdLwcDisposeTab() {
+  Object.keys(SD_CHARTS).forEach(sdLwcDispose);
+}
+
+// Label sumbu waktu untuk data periodik ("23 Q3", "2021", "20 FY") yang bukan tanggal.
+// Tanpa ini sumbu menampilkan "Sep '23" sementara judul dan tooltip memakai label
+// kuartal yang sama dengan tabel di atasnya — dua bahasa untuk satu titik data.
+function sdTickFormatter(labels) {
+  var map = labels || {};
+  var seen = {};   // "Oct '26" dua kali di tepi kanan: tick bulan terakhir muncul lagi
+  return function (time) {   // sebagai tick tepi. Tick pertama dipertahankan, duplikat dikosongkan.
+    var t = sdYmd(time);
+    if (map[t]) {
+      var lbl = map[t];
+      if (seen[lbl]) return '';
+      seen[lbl] = 1;
+      return lbl;
+    }
+    var d = new Date(t + 'T00:00:00Z');
+    if (isNaN(d.getTime())) return t;
+    var mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var key = mo[d.getUTCMonth()] + " '" + String(d.getUTCFullYear()).slice(2);
+    if (seen[key]) return '';
+    seen[key] = 1;
+    return key;
+  };
+}
+
+// Bangun chart kosong di kontainer `id`. Mengembalikan objek chart LWC atau null.
+function sdLwc(id, opts) {
+  var el = document.getElementById(id);
+  if (!el) return null;
+  if (!LWC || typeof LWC.createChart !== 'function') {
+    el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px;color:var(--t3)">Chart library tidak termuat</div>';
+    return null;
+  }
+  sdLwcDispose(id);
+  opts = opts || {};
+  var th = sdChartTheme();
+
+  var chart;
+  try {
+    chart = LWC.createChart(el, {
+      width: el.clientWidth || 600,
+      height: el.clientHeight || opts.height || 240,
+      layout: {
+        background: { type: 'solid', color: th.bg },
+        textColor: th.text,
+        fontFamily: th.font,
+        fontSize: 10,
+        attributionLogo: true   // syarat lisensi Apache-2.0 Lightweight Charts
+      },
+      grid: { vertLines: { visible: false }, horzLines: { color: th.grid, style: 2 } },
+      leftPriceScale: {
+        visible: !!opts.leftScale,
+        borderColor: th.grid,
+        minimumWidth: opts.leftWidth || 58,
+        scaleMargins: opts.leftMargins || { top: 0.15, bottom: 0.10 }
+      },
+      rightPriceScale: {
+        visible: true,
+        borderColor: th.grid,
+        minimumWidth: opts.rightWidth || 58,
+        scaleMargins: opts.rightMargins || { top: 0.12, bottom: 0.10 }
+      },
+      timeScale: {
+        borderColor: th.grid,
+        timeVisible: false,
+        secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+        tickMarkFormatter: sdTickFormatter(opts.labels)
+      },
+      crosshair: { mode: 1, vertLine: { color: th.grid, width: 1, style: 3 }, horzLine: { color: th.grid, width: 1, style: 3 } },
+      handleScroll: true,
+      handleScale: true,
+      localization: { locale: 'en-US' }
+    });
+  } catch (e) {
+    el.innerHTML = '<div style="padding:10px;font-size:10px;color:var(--t3)">Chart gagal dibuat</div>';
+    return null;
+  }
+
+  var rec = { chart: chart, ro: null, disposed: false };
+  SD_CHARTS[id] = rec;
+
+  chart.__sdDisposed = function () { rec.disposed = true; };
+  if (typeof ResizeObserver !== 'undefined') {
+    rec.ro = new ResizeObserver(function () {
+      // Chart LWC tetap hidup setelah chart.remove() kalau observer tidak diputus:
+      // callback-nya memanggil applyOptions pada objek mati -> "Object is disposed".
+      if (rec.disposed) return;
+      try { chart.applyOptions({ width: el.clientWidth || 600, height: el.clientHeight || opts.height || 240 }); } catch (e) {}
+    });
+    rec.ro.observe(el);
+  }
+  return chart;
+}
+
+// Tambah satu seri ke chart. s = { type, data, color, title, scale, width, fmt }
+//   type: 'line' | 'area' | 'bars' | 'candle' | 'baseline'
+//   scale: 'right' (default) | 'left'
+//   fmt: { type:'custom', formatter: fn, minMove } untuk label sumbu harga
+function sdSeries(chart, s) {
+  if (!chart || !LWC) return null;
+  var th = sdChartTheme();
+  var data = sdLwcData(s.data);
+  if (!data.length) return null;
+  var pscale = s.scale === 'left' ? 'left' : 'right';
+  var common = {
+    priceScaleId: pscale,
+    priceLineVisible: false,
+    lastValueVisible: !!s.lastValue,
+    crosshairMarkerVisible: true,
+    crosshairMarkerRadius: 3,
+    title: s.title || ''
+  };
+  // Label sumbu LWC default memakai 2 desimal penuh: "120000.00" memakan lebar dan
+  // sulit dibaca. Untuk nilai besar pakai pemisah ribuan tanpa desimal; seri persen
+  // tetap 1 desimal lewat s.fmt yang eksplisit.
+  common.priceFormat = s.fmt || {
+    type: 'custom',
+    minMove: 0.01,
+    formatter: function (v) {
+      var a = Math.abs(v);
+      if (a >= 10000) return Math.round(v).toLocaleString('en-US');
+      if (a >= 100) return String(Math.round(v));
+      return (Math.round(v * 100) / 100).toString();
+    }
+  };
+
+  var ser = null;
+  try {
+    if (s.type === 'candle') {
+      ser = chart.addSeries(LWC.CandlestickSeries, Object.assign({}, common, {
+        upColor: th.up, downColor: th.down,
+        borderUpColor: th.up, borderDownColor: th.down,
+        wickUpColor: th.up, wickDownColor: th.down,
+        priceFormat: s.fmt || { type: 'price', precision: 0, minMove: 1 }
+      }));
+      ser.setData(data);
+    } else if (s.type === 'bars') {
+      ser = chart.addSeries(LWC.HistogramSeries, Object.assign({}, common, {
+        color: s.color,
+        base: 0,
+        priceFormat: s.fmt || { type: 'price', precision: 2, minMove: 0.01 }
+      }));
+      ser.setData(data);
+    } else if (s.type === 'baseline') {
+      ser = chart.addSeries(LWC.BaselineSeries, Object.assign({}, common, {
+        baseValue: { type: 'price', price: 0 },
+        topLineColor: s.color || th.up, topFillColor1: sdAlpha(s.color || th.up, 0.28), topFillColor2: sdAlpha(s.color || th.up, 0.02),
+        bottomLineColor: s.colorDown || th.down, bottomFillColor1: sdAlpha(s.colorDown || th.down, 0.02), bottomFillColor2: sdAlpha(s.colorDown || th.down, 0.28),
+        lineWidth: s.width || 2,
+        priceFormat: s.fmt || { type: 'price', precision: 2, minMove: 0.01 }
+      }));
+      ser.setData(data);
+    } else if (s.type === 'area') {
+      ser = chart.addSeries(LWC.AreaSeries, Object.assign({}, common, {
+        lineColor: s.color, topColor: sdAlpha(s.color, 0.30), bottomColor: sdAlpha(s.color, 0.01),
+        lineWidth: s.width || 2,
+        priceFormat: s.fmt || { type: 'price', precision: 2, minMove: 0.01 }
+      }));
+      ser.setData(data);
+    } else {
+      ser = chart.addSeries(LWC.LineSeries, Object.assign({}, common, {
+        color: s.color,
+        lineWidth: s.width || 2,
+        lineStyle: s.dashed ? LWC.LineStyle.Dashed : LWC.LineStyle.Solid,
+        priceFormat: s.fmt || undefined
+      }));
+      ser.setData(data);
+    }
+  } catch (e) {
+    return null;
+  }
+  return ser;
+}
+
+function sdAlpha(hex, a) {
+  if (typeof hex !== 'string') return 'rgba(120,120,120,' + a + ')';
+  var h = hex.trim();
+  if (h.charAt(0) !== '#') return h;
+  if (h.length === 4) h = '#' + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
+  var n = parseInt(h.slice(1), 16);
+  if (isNaN(n)) return h;
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+// Garis referensi horizontal (pengganti ECharts markLine): median, nol, 50%.
+function sdRefLine(ser, price, text, color) {
+  if (!ser || !isFinite(price)) return;
+  try {
+    ser.createPriceLine({
+      price: price,
+      color: color || '#7d8fa8',
+      lineWidth: 1,
+      lineStyle: LWC.LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: text || ''
+    });
+  } catch (e) {}
+}
+
+// Konversi label periode -> tanggal akhir periode, untuk sumbu waktu LWC.
+// '23 Q3' -> 2023-09-30 · '20 FY' -> 2020-12-31 · '2021' -> 2021-12-31
+function sdPeriodDate(label) {
+  var s = String(label == null ? '' : label).trim();
+  var m;
+  if ((m = s.match(/^(\d{4})$/))) return m[1] + '-12-31';
+  if ((m = s.match(/^(\d{2})\s*Q([1-4])$/i))) {
+    var y = 2000 + parseInt(m[1], 10);
+    var q = parseInt(m[2], 10);
+    var md = ['03-31', '06-30', '09-30', '12-31'][q - 1];
+    return y + '-' + md;
+  }
+  if ((m = s.match(/^(\d{2})\s*FY$/i))) return (2000 + parseInt(m[1], 10)) + '-12-31';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return null;
+}
+
+// Ambil tanggal + label untuk satu baris data periodik. `row.period` (ISO) dipakai
+// lebih dulu karena itu tanggal laporan sebenarnya; label hanya cadangan.
+function sdPeriodPoint(row, labelKeys) {
+  var keys = labelKeys || ['period', 'period_label', 'label', 'year'];
+  for (var i = 0; i < keys.length; i++) {
+    var d = sdPeriodDate(row[keys[i]]);
+    if (d) return { t: d, l: row.label || row.period_label || row.year || d };
+  }
+  return null;
+}
+
+
 function loadStockDetail() {
   var el = $('sd-content'); if (!el) return;
   renderSDShell(el);
@@ -91,7 +394,8 @@ function renderSDBody() {
   h += '</div>';
 
   // ═══ PRICE CHART — Candlestick + MA ribbon only ═══
-  h += '<div id="sd-price-chart" style="width:100%;height:' + sdChartHeight(440, 0.55, 640) + 'px;margin-bottom:6px"></div>';
+  h += '<div id="sd-price-chart" style="width:100%;height:' + sdChartCss(380, 46, 620) + ';margin-bottom:2px"></div>';
+  h += sdPriceLegend();
 
   // ═══ TAB BAR ═══
   var tabs = [
@@ -110,11 +414,16 @@ function renderSDBody() {
   h += '</div>';
 
   // ═══ TAB CONTENT ═══
-  h += '<div id="sd-tab-content" style="flex:1;overflow-y:auto"></div>';
+  // `#sd-body` sudah scroller (flex:1 + overflow-y:auto). Anak ini TIDAK boleh punya
+  // overflow sendiri: `flex:1` tidak berlaku di induk non-flex, jadi tingginya ikut
+  // konten dan seluruh isi yang melebihi 457 px terpotong tanpa bisa di-scroll
+  // (terukur: sd-tab-content 1350 px di dalam sd-body 457 px, chart ke-7 tidak pernah tampil).
+  h += '<div id="sd-tab-content"></div>';
 
+  sdLwcDisposeTab();
   body.innerHTML = h;
 
-  // Draw price chart (simplified — candlestick + MA only)
+  // Draw price chart (candlestick + MA, Lightweight Charts lokal)
   setTimeout(function() { sdDrawPriceChartClean(d); }, 50);
 
   // Render active tab
@@ -147,14 +456,23 @@ function sdRenderTab(tabId) {
   else if (tabId === 'flow') h = sdTabFlow(d);
   else if (tabId === 'news') h = sdTabNews(d);
 
+  // Buang chart LWC milik tab sebelumnya SEBELUM markup diganti: kalau tidak,
+  // instance lama tetap menempel di kontainer yang sudah dihapus dan ResizeObserver-nya
+  // terus memanggil applyOptions pada objek mati ("Object is disposed").
+  sdLwcDisposeTab();
   el.innerHTML = h;
+
+  // Price chart hidup di luar `sd-tab-content` (di atas bar tab), jadi mengganti tab
+  // TIDAK menghapus markas-nya — tapi sdLwcDisposeTab() di atas tetap membuang
+  // instance-nya. Tanpa gambar ulang di sini, pindah tab sekali membuat chart harga
+  // kosong sampai user memuat ulang ticker.
+  setTimeout(function() { sdDrawPriceChartClean(d); }, 30);
 
   // Deferred chart rendering per tab
   setTimeout(function() {
     if (tabId === 'financials') sdDrawFinCharts(d);
     if (tabId === 'fundachart') sdDrawFundaCharts(d);
     if (tabId === 'analysis') {
-      if (d.scoring) sdDrawRadar(d.scoring);
       
       sdDrawAnalysisCharts(d);
     }
@@ -314,64 +632,9 @@ function sdTabFinancials(d) {
 }
 
 // Chart Financials (dipanggil deferred dari sdRenderTab)
-function sdDrawFinCharts(d) {
-  var q = d.quarterly || [], hist = d.fund_history || [], band = d.valuation_band || [];
-  var axis = { axisLabel: { fontSize: 8, color: '#7d8fa8' }, axisLine: { lineStyle: { color: '#1e2836' } } };
-
-  var e1 = document.getElementById('sd-fin-rev');
-  if (e1 && q.length) {
-    var c1 = BL.init(e1, 'sd-fin-rev'); if (c1) c1.setOption({
-      grid: { left: 46, right: 34, top: 14, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      xAxis: Object.assign({ type: 'category', data: q.map(function (x) { return x.label; }) }, axis),
-      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: function (v) { return BL.fmtRp(v * 1e6); } }, splitLine: { lineStyle: { color: '#141c27' } } },
-              { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
-      series: [
-        { name: 'Revenue', type: 'bar', data: q.map(function (x) { return x.sales; }), itemStyle: { color: '#3b82f6' } },
-        { name: 'Profit', type: 'bar', data: q.map(function (x) { return x.profit; }), itemStyle: { color: '#22c55e' } },
-        { name: 'NPM', type: 'line', yAxisIndex: 1, data: q.map(function (x) { return x.npm; }), symbolSize: 3, lineStyle: { width: 1 }, itemStyle: { color: '#f59e0b' } }
-      ]
-    });
-  }
-
-  var e2 = document.getElementById('sd-fin-band');
-  if (e2 && band.length) {
-    var per = band.map(function (x) { return x.per; });
-    var vals = per.filter(function (v) { return v != null; }).sort(function (a, b) { return a - b; });
-    var med = vals.length ? vals[Math.floor(vals.length / 2)] : null;
-    var c2 = BL.init(e2, 'sd-fin-band'); if (c2) c2.setOption({
-      grid: { left: 40, right: 14, top: 12, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      xAxis: Object.assign({ type: 'category', data: band.map(function (x) { return x.label; }) }, axis),
-      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}x' }, splitLine: { lineStyle: { color: '#141c27' } } },
-      series: [{
-        type: 'line', data: per, symbolSize: 3, lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' },
-        markLine: med ? { silent: true, symbol: 'none', data: [{ yAxis: med, label: { formatter: 'median {c}x', fontSize: 8 }, lineStyle: { color: '#7d8fa8', type: 'dashed' } }] } : undefined
-      }]
-    });
-  }
-
-  var e3 = document.getElementById('sd-fin-bs');
-  if (e3 && hist.length) {
-    var hh = hist.slice(-8);
-    var c3 = BL.init(e3, 'sd-fin-bs'); if (c3) c3.setOption({
-      grid: { left: 48, right: 14, top: 14, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: Object.assign({ type: 'category', data: hh.map(function (x) { return x.period_label; }) }, axis),
-      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: function (v) { return BL.fmtRp(v * 1e6); } }, splitLine: { lineStyle: { color: '#141c27' } } },
-      series: [
-        { name: 'Assets', type: 'line', data: hh.map(function (x) { return x.assets; }), symbolSize: 2, itemStyle: { color: '#3b82f6' } },
-        { name: 'Equity', type: 'line', data: hh.map(function (x) { return x.equity; }), symbolSize: 2, itemStyle: { color: '#22c55e' } },
-        { name: 'Liabilities', type: 'line', data: hh.map(function (x) { return x.liabilities; }), symbolSize: 2, itemStyle: { color: '#ef4444' } }
-      ]
-    });
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TAB: FUNDACHART — Annual/Quarterly toggle
-// ═══════════════════════════════════════════════════════════════
+// `sdFcMode` deklarasi modul — dulu menempel di blok ini dan ikut terhapus saat
+// fungsi chart lama diganti; tanpa deklarasi, membuka tab Fundachart langsung
+// ReferenceError dan seluruh tab tidak tampil.
 var sdFcMode = 'annual';
 
 function sdTabFundachart(d) {
@@ -385,7 +648,7 @@ function sdTabFundachart(d) {
     return '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">' +
       '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">' + title +
       ' <span style="font-weight:400;color:var(--t3)">(' + sub + ')</span></div>' +
-      '<div id="' + id + '" style="width:100%;height:' + h + 'px"></div></div>';
+      '<div id="' + id + '" style="width:100%;height:' + (typeof h === 'number' ? h + 'px' : h) + '"></div></div>';
   }
 
   var mode = sdFcMode === 'annual' ? 'Annual' : 'Quarterly';
@@ -402,132 +665,21 @@ function sdTabFundachart(d) {
   h += '</div>';
 
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-  h += card('sd-fc-rp', 'REVENUE &amp; PROFIT + NPM', mode, sdChartHeight(300, 0.34, 400));
-  h += card('sd-fc-er', 'EPS &amp; ROE', mode, sdChartHeight(300, 0.34, 400));
-  h += card('sd-fc-mg', 'MARGIN TREND', mode, sdChartHeight(280, 0.32, 380));
-  h += card('sd-fc-gr', 'PERTUMBUHAN YoY', mode, sdChartHeight(280, 0.32, 380));
-  h += card('sd-fc-bs', 'NERACA &amp; DER', mode, sdChartHeight(300, 0.34, 400));
-  if (sdFcMode === 'annual') h += card('sd-fc-dps', 'DIVIDEN PER SAHAM', 'tahunan', sdChartHeight(300, 0.34, 400));
+  var CH = sdChartCss(280, 34, 400);
+  h += card('sd-fc-rp', 'REVENUE &amp; PROFIT + NPM', mode, CH);
+  h += card('sd-fc-er', 'EPS &amp; ROE', mode, CH);
+  h += card('sd-fc-mg', 'MARGIN TREND', mode, CH);
+  h += card('sd-fc-gr', 'PERTUMBUHAN YoY', mode, CH);
+  h += card('sd-fc-bs', 'NERACA &amp; DER', mode, CH);
+  if (sdFcMode === 'annual') h += card('sd-fc-dps', 'DIVIDEN PER SAHAM', 'tahunan', CH);
   if (d.daily_valuation && d.daily_valuation.length >= 5) {
-    h += card('sd-fc-val', 'LIVE PER · PBV · PRICE', 'harian', sdChartHeight(300, 0.34, 400));
+    h += card('sd-fc-val', 'LIVE PER · PBV · PRICE', 'harian', CH);
   }
   h += '</div>';
   return h;
 }
 
 function sdFcToggle(mode) { sdFcMode = mode; sdRenderTab('fundachart'); }
-
-function sdDrawFundaCharts(d) {
-  var ann = d.annual_series || [], q = d.quarterly || [];
-  var rows = (sdFcMode === 'annual' && ann.length) ? ann : q;
-  if (!rows.length) return;
-  var labels = rows.map(function (r) { return r.label || r.year || r.period; });
-  var axisX = { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: labels.length > 8 ? 30 : 0 }, axisLine: { lineStyle: { color: '#1e2836' } } };
-  var axisY = function (fmt) { return { type: 'value', axisLabel: { fontSize: 8, formatter: fmt }, splitLine: { lineStyle: { color: '#141c27' } } }; };
-  var fmtRpAx = function (v) { return BL.fmtRp(v * 1e9); };   // nilai dalam miliar
-  var grid = { left: 52, right: 42, top: 22, bottom: 24 };
-  var leg = { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 };
-
-  var el1 = document.getElementById('sd-fc-rp');
-  if (el1) {
-    var c1 = BL.init(el1, 'sd-fc-rp'); if (c1) c1.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
-      yAxis: [axisY(fmtRpAx), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
-      series: [
-        { name: 'Revenue', type: 'bar', data: rows.map(function (r) { return r.sales; }), itemStyle: { color: 'rgba(59,130,246,0.75)' }, barMaxWidth: 26 },
-        { name: 'Profit', type: 'bar', data: rows.map(function (r) { return r.profit; }), itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 26 },
-        { name: 'NPM', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.npm; }), symbolSize: 4, lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
-      ]
-    });
-  }
-
-  var el2 = document.getElementById('sd-fc-er');
-  if (el2) {
-    var c2 = BL.init(el2, 'sd-fc-er'); if (c2) c2.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
-      yAxis: [axisY('{value}'), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { show: false } }],
-      series: [
-        { name: 'EPS', type: 'bar', data: rows.map(function (r) { return r.eps; }), itemStyle: { color: 'rgba(14,165,233,0.75)' }, barMaxWidth: 26 },
-        { name: 'ROE', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.roe; }), symbolSize: 4, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } }
-      ]
-    });
-  }
-
-  // Margins: NPM / ROA / ROE
-  var el3 = document.getElementById('sd-fc-mg');
-  if (el3) {
-    var c3 = BL.init(el3, 'sd-fc-mg'); if (c3) c3.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
-      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } }],
-      series: [
-        { name: 'NPM', type: 'line', data: rows.map(function (r) { return r.npm; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } },
-        { name: 'ROA', type: 'line', data: rows.map(function (r) { return r.roa; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#38bdf8' }, itemStyle: { color: '#38bdf8' } },
-        { name: 'ROE', type: 'line', data: rows.map(function (r) { return r.roe; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } }
-      ]
-    });
-  }
-
-  // Growth YoY
-  var step = sdFcMode === 'annual' ? 1 : 4;
-  var gSales = [], gProfit = [];
-  rows.forEach(function (r, i) {
-    var b = rows[i - step];
-    var f = function (k) { return (b && r[k] != null && b[k]) ? Math.round((r[k] - b[k]) / Math.abs(b[k]) * 10000) / 100 : null; };
-    gSales.push(f('sales')); gProfit.push(f('profit'));
-  });
-  var el4 = document.getElementById('sd-fc-gr');
-  if (el4) {
-    var c4 = BL.init(el4, 'sd-fc-gr'); if (c4) c4.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
-      yAxis: [{ type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } }],
-      series: [
-        { name: 'Revenue YoY', type: 'bar', data: gSales, itemStyle: { color: 'rgba(59,130,246,0.75)' }, barMaxWidth: 22 },
-        { name: 'Profit YoY', type: 'bar', data: gProfit, itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 22 }
-      ]
-    });
-  }
-
-  // Balance sheet + DER
-  var el5 = document.getElementById('sd-fc-bs');
-  if (el5) {
-    var c5 = BL.init(el5, 'sd-fc-bs'); if (c5) c5.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg, xAxis: axisX,
-      yAxis: [axisY(fmtRpAx), { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}x' }, splitLine: { show: false } }],
-      series: [
-        { name: 'Assets', type: 'line', data: rows.map(function (r) { return r.assets; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
-        { name: 'Equity', type: 'line', data: rows.map(function (r) { return r.equity; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
-        { name: 'Liabilities', type: 'line', data: rows.map(function (r) { return r.liabilities; }), symbolSize: 3, lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' } },
-        { name: 'DER', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.der; }), symbolSize: 3, lineStyle: { width: 1, type: 'dashed', color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
-      ]
-    });
-  }
-
-  // DPS per tahun
-  var el6 = document.getElementById('sd-fc-dps');
-  if (el6 && d.dps_by_year && d.dps_by_year.length) {
-    var c6 = BL.init(el6, 'sd-fc-dps'); if (c6) c6.setOption({
-      grid: grid, tooltip: { trigger: 'axis' },
-      xAxis: { type: 'category', data: d.dps_by_year.map(function (x) { return x.year; }), axisLabel: { fontSize: 9 }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: axisY('{value}'),
-      series: [{ name: 'DPS', type: 'bar', data: d.dps_by_year.map(function (x) { return x.dps; }), itemStyle: { color: 'rgba(245,158,11,0.8)' }, barMaxWidth: 30 }]
-    });
-  }
-
-  // Live valuation
-  var dv = d.daily_valuation || [];
-  var el7 = document.getElementById('sd-fc-val');
-  if (el7 && dv.length >= 5) {
-    var c7 = BL.init(el7, 'sd-fc-val'); if (c7) c7.setOption({
-      grid: grid, tooltip: { trigger: 'axis' }, legend: leg,
-      xAxis: { type: 'category', data: dv.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(dv.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: [axisY('{value}'), { type: 'value', axisLabel: { fontSize: 8, formatter: BL.fmtRp }, splitLine: { show: false } }],
-      series: [
-        { name: 'PER', type: 'line', data: dv.map(function (r) { return r.live_per; }), symbol: 'none', lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
-        { name: 'PBV', type: 'line', data: dv.map(function (r) { return r.live_pbv; }), symbol: 'none', lineStyle: { width: 1.5, color: '#a855f7' }, itemStyle: { color: '#a855f7' } }
-      ]
-    });
-  }
-}
 
 function sdTabAnalysis(d) {
   var h = '';
@@ -625,10 +777,10 @@ function sdTabAnalysis(d) {
     h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
     h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
     h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">JARAK KE MA <span style="font-weight:400;color:var(--t3)">(250 sesi, %)</span></div>';
-    h += '<div id="sd-an-ma" style="width:100%;height:' + sdChartHeight(280, 0.32, 380) + 'px"></div></div>';
+    h += '<div id="sd-an-ma" style="width:100%;height:' + sdChartCss(260, 32, 380) + '"></div></div>';
     h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
     h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">ARUS ASING <span style="font-weight:400;color:var(--t3)">(60 sesi, bar = harian, garis = kumulatif)</span></div>';
-    h += '<div id="sd-an-ff" style="width:100%;height:' + sdChartHeight(280, 0.32, 380) + 'px"></div></div>';
+    h += '<div id="sd-an-ff" style="width:100%;height:' + sdChartCss(260, 32, 380) + '"></div></div>';
     h += '</div>';
   }
 
@@ -726,9 +878,9 @@ function sdTabOwnership(d) {
     // Kanan: grafik riwayat
     h += '<div>';
     h += '<div style="font-size:10px;font-weight:700;color:var(--t2);margin-bottom:4px">KOMPOSISI LOKAL vs ASING <span style="font-weight:400;color:var(--t3)">(' + hist.length + ' snapshot)</span></div>';
-    h += '<div id="sd-own-hist" style="width:100%;height:190px"></div>';
+    h += '<div id="sd-own-hist" style="width:100%;height:' + sdChartCss(220, 26, 320) + '"></div>';
     h += '<div style="font-size:10px;font-weight:700;color:var(--t2);margin:8px 0 4px">TREN KATEGORI UTAMA <span style="font-weight:400;color:var(--t3)">(lokal + asing, % saham beredar)</span></div>';
-    h += '<div id="sd-own-cat" style="width:100%;height:190px"></div>';
+    h += '<div id="sd-own-cat" style="width:100%;height:' + sdChartCss(220, 26, 320) + '"></div>';
     h += '</div>';
 
     h += '</div></div>';
@@ -843,15 +995,15 @@ function sdTabFlow(d) {
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
   h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">KUMULATIF ARUS ASING vs HARGA <span style="font-weight:400;color:var(--t3)">(120 sesi)</span></div>';
-  h += '<div id="sd-fnet-chart" style="width:100%;height:250px"></div></div>';
+  h += '<div id="sd-fnet-chart" style="width:100%;height:' + sdChartCss(280, 32, 400) + '"></div></div>';
   h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
   h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">BID RATIO <span style="font-weight:400;color:var(--t3)">(sesi tersedia)</span></div>';
-  h += '<div id="sd-bo-chart" style="width:100%;height:250px"></div></div>';
+  h += '<div id="sd-bo-chart" style="width:100%;height:' + sdChartCss(280, 32, 400) + '"></div></div>';
   h += '</div>';
 
   h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
   h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">GROSS ASING: BELI vs JUAL <span style="font-weight:400;color:var(--t3)">(60 sesi, miliar Rp)</span></div>';
-  h += '<div id="sd-gross-chart" style="width:100%;height:220px"></div>';
+  h += '<div id="sd-gross-chart" style="width:100%;height:' + sdChartCss(260, 30, 380) + '"></div>';
   h += '<div style="font-size:9px;color:var(--t3);margin-top:4px">Net negatif bisa berarti asing menjual, atau sekadar tidak membeli — dua hal yang berbeda.</div></div>';
 
   // ── Tabel 20 sesi ──
@@ -912,200 +1064,401 @@ function sdTabNews(d) {
 // ═══════════════════════════════════════════════════════════════
 // PRICE CHART — Clean: Candlestick + MA Ribbon only
 // ═══════════════════════════════════════════════════════════════
-function sdDrawPriceChartClean(d) {
-  var el = $('sd-price-chart'); if (!el) return;
-  var c = BL.init(el, 'sd-price'); if (!c) return;
-  var chart = d.chart || [];
-  var dates = chart.map(function(r) { return r.date; });
-  var ohlc = chart.map(function(r) { return [r.open, r.close, r.low, r.high]; });
-  var closes = chart.map(function(r) { return r.close; });
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRICE CHART — Candlestick + MA (Lightweight Charts, lokal)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Catatan migrasi: ECharts versi lama memakai dataZoom slider + legend HTML. LWC
+// memberi scroll/zoom lewat drag dan wheel di time scale, dan legend diganti baris
+// chip HTML di atas chart (sdPriceLegend) karena series title di price scale hanya
+// menampilkan satu label terakhir.
+function sdPriceLegend() {
+  var ma = [[5, '#0ea5e9'], [10, '#22c55e'], [20, '#f59e0b'], [50, '#ef4444'], [200, '#a855f7']];
+  var h = '<div style="display:flex;gap:10px;align-items:center;font-size:9px;color:var(--t3);padding:0 2px 3px;font-family:var(--fm)">';
+  h += '<span style="font-weight:600;color:var(--t2)">MA</span>';
+  ma.forEach(function (m) {
+    h += '<span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:9px;height:2px;background:' + m[1] + '"></span>' + m[0] + '</span>';
+  });
+  h += '<span style="margin-left:auto">drag / scroll = zoom</span>';
+  h += '</div>';
+  return h;
+}
 
-  function calcMALine(period) {
-    var result = [];
+function sdDrawPriceChartClean(d) {
+  var chart = d.chart || [];
+  if (chart.length < 2) return;
+  var c = sdLwc('sd-price-chart', { rightWidth: 62, labels: null });
+  if (!c) return;
+
+  var closes = chart.map(function (r) { return r.close; });
+
+  function ma(period) {
+    var out = [], sum = 0;
     for (var i = 0; i < closes.length; i++) {
-      if (i < period - 1) { result.push(null); continue; }
-      var sum = 0;
-      for (var j = i - period + 1; j <= i; j++) sum += closes[j];
-      result.push(Math.round(sum / period));
+      sum += closes[i];
+      if (i >= period) sum -= closes[i - period];
+      if (i >= period - 1) out.push({ time: chart[i].date, value: Math.round(sum / period * 100) / 100 });
     }
-    return result;
+    return out;
   }
 
-  var maColors = { 5: '#0ea5e9', 10: '#22c55e', 20: '#f59e0b', 50: '#ef4444', 200: '#a855f7' };
-  var maSeries = [5, 10, 20, 50, 200].map(function(p) {
-    return { name: 'MA' + p, type: 'line', data: calcMALine(p), symbol: 'none', lineStyle: { width: p >= 50 ? 1.5 : 1, color: maColors[p], opacity: 0.8 }, itemStyle: { color: maColors[p] }, connectNulls: true, silent: true, z: 1 };
+  var th = sdChartTheme();
+  sdSeries(c, {
+    type: 'candle',
+    title: d.code || '',
+    data: chart.map(function (r) { return { time: r.date, open: r.open, high: r.high, low: r.low, close: r.close }; })
   });
 
-  var zS = Math.max(0, 100 - Math.min(100, 250 / dates.length * 100));
+  var maSpec = [[5, '#0ea5e9', 1], [10, '#22c55e', 1], [20, '#f59e0b', 1], [50, '#ef4444', 1], [200, '#a855f7', 1]];
+  maSpec.forEach(function (m) {
+    sdSeries(c, { type: 'line', data: ma(m[0]), color: m[1], width: m[2], title: 'MA' + m[0] });
+  });
 
-  c.setOption({
-    tooltip: {
-      trigger: 'axis', textStyle: { fontSize: 10 },
-      formatter: function(params) {
-        if (!params || !params.length) return '';
-        var h = '<div style="font-size:10px;color:#888;margin-bottom:3px">' + params[0].axisValue + '</div>';
-        params.forEach(function(p) {
-          if (p.seriesType === 'candlestick' && p.data) {
-            h += '<div style="font-size:10px">O:' + (p.data[1]||0).toLocaleString() + ' H:' + (p.data[4]||0).toLocaleString() + ' L:' + (p.data[3]||0).toLocaleString() + ' C:' + (p.data[2]||0).toLocaleString() + '</div>';
-          } else if (p.seriesName && p.seriesName.indexOf('MA') === 0 && p.value != null) {
-            h += '<div style="font-size:9px;color:' + p.color + '">' + p.seriesName + ': ' + p.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>';
-          }
-        });
-        return h;
-      }
-    },
-    legend: { top: 0, right: 10, textStyle: { fontSize: 8 }, itemWidth: 12, itemHeight: 2, data: ['MA5','MA10','MA20','MA50','MA200'] },
-    grid: { left: 55, right: 10, top: 22, bottom: 36 },
-    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 8, formatter: function(v) { return v.substring(5); } } },
-    yAxis: { type: 'value', scale: true, position: 'right', axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#1e2836', type: 'dashed' } } },
-    dataZoom: [
-      { type: 'inside', start: zS, end: 100 },
-      { type: 'slider', height: 14, bottom: 2, borderColor: '#2a3444', fillerColor: 'rgba(84,112,198,0.15)', textStyle: { fontSize: 7, color: '#6b7a8d' } }
-    ],
-    series: [
-      { type: 'candlestick', data: ohlc, z: 2, itemStyle: { color: '#26A69A', color0: '#EF5350', borderColor: '#26A69A', borderColor0: '#EF5350' } },
-      maSeries[0], maSeries[1], maSeries[2], maSeries[3], maSeries[4]
-    ]
-  }, true);
+  // Tampilkan 250 sesi terakhir, sisanya bisa digeser. Tanpa ini seluruh 1.640 sesi
+  // dimampatkan dan candle tidak terbaca.
+  // 250 sesi di 1.200 px menghasilkan ~4,8 px per bar: body candle tinggal 2 px dan
+  // terbaca sebagai garis. 150 sesi memberi ~8 px per bar, cukup untuk body + wick.
+  var n = chart.length;
+  var WIN = 150;
+  var from = Math.max(0, n - WIN);
+  try {
+    c.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: n - 0.5 });
+    // barSpacing dihitung dari lebar panel / jumlah bar yang ingin terlihat. Untuk seri
+    // pendek (mis. DPS 7 tahun) nilai itu membuat satu bar memenuhi setengah layar dan
+    // skala harga jadi hanya mencakup sebagian kecil nilai. Batasi juga oleh jumlah data.
+    if (n > 20) c.timeScale().applyOptions({ barSpacing: Math.max(3, Math.min(12, 1100 / Math.min(WIN, n))) });
+  } catch (e) {}
+
+  if (th && c) { try { c.applyOptions({ rightPriceScale: { minimumWidth: 62 } }); } catch (e) {} }
 }
 
-// ═══ HELPER CARDS ═══
-function sdFlowCard(label, val) {
-  var cls = val > 0 ? 'var(--gn)' : val < 0 ? 'var(--rd)' : 'var(--t2)';
-  return '<div style="padding:8px 12px;border-radius:6px;background:var(--bgH);text-align:center;min-width:80px;flex:1"><div style="font-size:14px;font-weight:700;font-family:var(--fm);color:' + cls + '">' + fmtRp(val || 0) + '</div><div style="font-size:10px;color:var(--t3);margin-top:1px">' + label + '</div></div>';
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: FINANCIALS — 3 chart
+// ═══════════════════════════════════════════════════════════════════════════════
+function sdDrawFinCharts(d) {
+  var q = d.quarterly || [], hist = d.fund_history || [], band = d.valuation_band || [];
+
+  // ── 1. Revenue & Profit + NPM ──
+  // LWC tidak punya grouped bar: dua batang di sumbu waktu yang sama akan saling
+  // menimpa, dan laba yang lebih kecil tertutup pendapatan — atau lebih buruk,
+  // terbaca seolah "porsi" dari pendapatan. Jadi Revenue tetap batang, Profit jadi
+  // garis. Dua besaran yang sama-satuan tetap bisa dibandingkan di satu sumbu.
+  if (q.length) {
+    var labels = {};
+    var rev = [], prof = [], npm = [];
+    q.forEach(function (x) {
+      var t = sdPeriodDate(x.period) || sdPeriodDate(x.label);
+      if (!t) return;
+      labels[t] = x.label;
+      if (x.sales != null) rev.push({ time: t, value: x.sales });
+      if (x.profit != null) prof.push({ time: t, value: x.profit });
+      if (x.npm != null) npm.push({ time: t, value: x.npm });
+    });
+    var c1 = sdLwc('sd-fin-rev', { labels: labels, rightWidth: 46 });
+    if (c1) {
+      sdSeries(c1, { type: 'bars', data: rev, color: sdAlpha('#3b82f6', 0.62), title: 'Revenue', fmt: { type: 'price', precision: 0, minMove: 1 } });
+      sdSeries(c1, { type: 'line', data: prof, color: '#22c55e', width: 2, title: 'Profit' });
+      try { c1.timeScale().fitContent(); } catch (e) {}
+    }
+  }
+
+  // ── 2. Valuation band (PER) + median ──
+  if (band.length) {
+    var bl = {}, per = [];
+    band.forEach(function (x) {
+      var t = sdPeriodDate(x.period) || sdPeriodDate(x.label);
+      if (!t || x.per == null) return;
+      bl[t] = x.label;
+      per.push({ time: t, value: x.per });
+    });
+    var sorted = per.map(function (p) { return p.value; }).sort(function (a, b) { return a - b; });
+    var med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    var c2 = sdLwc('sd-fin-band', { labels: bl, rightWidth: 40 });
+    if (c2) {
+      var s2 = sdSeries(c2, { type: 'line', data: per, color: '#3b82f6', width: 2, title: 'PER', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
+      sdRefLine(s2, med, 'median ' + (med == null ? '—' : med.toFixed(1) + 'x'), '#7d8fa8');
+      try { c2.timeScale().fitContent(); } catch (e) {}
+    }
+  }
+
+  // ── 3. Neraca: Assets / Equity / Liabilities ──
+  if (hist.length) {
+    var hh = hist.slice(-12), hl = {};
+    var A = [], E = [], L = [];
+    hh.forEach(function (x) {
+      var t = sdPeriodDate(x.period) || sdPeriodDate(x.period_label);
+      if (!t) return;
+      hl[t] = x.period_label || x.label || t;
+      if (x.assets != null) A.push({ time: t, value: x.assets });
+      if (x.equity != null) E.push({ time: t, value: x.equity });
+      if (x.liabilities != null) L.push({ time: t, value: x.liabilities });
+    });
+    var c3 = sdLwc('sd-fin-bs', { labels: hl, rightWidth: 50 });
+    if (c3) {
+      sdSeries(c3, { type: 'line', data: A, color: '#3b82f6', width: 2, title: 'Assets' });
+      sdSeries(c3, { type: 'line', data: E, color: '#22c55e', width: 2, title: 'Equity' });
+      sdSeries(c3, { type: 'line', data: L, color: '#ef4444', width: 2, title: 'Liabilities' });
+      try { c3.timeScale().fitContent(); } catch (e) {}
+    }
+  }
 }
 
-// ═══ RADAR CHART ═══
-function sdDrawRadar(sc) {
-  var el = $('sd-radar-chart'); if (!el) return;
-  var c = BL.init(el, 'sd-radar'); if (!c) return;
-  c.setOption({
-    radar: {
-      indicator: [{ name: 'Fund', max: 100 },{ name: 'Value', max: 100 },{ name: 'Mom', max: 100 },{ name: 'Demand', max: 100 },{ name: 'Foreign', max: 100 }],
-      radius: '65%', center: ['50%', '55%'],
-      axisName: { fontSize: 9, color: '#8a9bb5' },
-      splitArea: { areaStyle: { color: ['rgba(84,112,198,0.02)', 'rgba(84,112,198,0.04)'] } },
-      splitLine: { lineStyle: { color: '#1e2836' } },
-      axisLine: { lineStyle: { color: '#2a3444' } }
-    },
-    series: [{ type: 'radar', data: [{ value: [sc.score_fundamental||0, sc.score_valuation||0, sc.score_momentum||0, sc.score_demand||0, sc.score_foreign||0], areaStyle: { color: 'rgba(255,152,0,0.15)' }, lineStyle: { color: '#ff9800', width: 2 }, itemStyle: { color: '#ff9800' } }] }]
-  }, true);
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: FUNDACHART — 7 chart
+// ═══════════════════════════════════════════════════════════════════════════════
+function sdDrawFundaCharts(d) {
+  var ann = d.annual_series || [], q = d.quarterly || [];
+  var rows = (sdFcMode === 'annual' && ann.length) ? ann : q;
+  if (!rows.length) return;
+
+  var labels = {}, T = [];
+  rows.forEach(function (r) {
+    var t = sdPeriodDate(r.period) || sdPeriodDate(r.label) || sdPeriodDate(r.year);
+    if (!t) return;
+    labels[t] = r.label || r.year || r.period_label || t;
+    T.push({ t: t, r: r });
+  });
+  if (!T.length) return;
+
+  function col(key) {
+    var out = [];
+    T.forEach(function (x) { if (x.r[key] != null && isFinite(x.r[key])) out.push({ time: x.t, value: x.r[key] }); });
+    return out;
+  }
+
+  // `annual_series` tidak membawa npm/roa (hanya quarterly yang punya). Judul kartu
+  // menjanjikan NPM, jadi turunkan dari profit/sales bila field-nya tidak ada —
+  // bukan menghapus serinya dan membiarkan judul berbohong.
+  function derived(key) {
+    var have = T.some(function (x) { return x.r[key] != null && isFinite(x.r[key]); });
+    if (have) return col(key);
+    if (key === 'npm') {
+      return T.filter(function (x) { return x.r.sales > 0 && x.r.profit != null; })
+              .map(function (x) { return { time: x.t, value: Math.round(x.r.profit / x.r.sales * 10000) / 100 }; });
+    }
+    if (key === 'roa' && T.some(function (x) { return x.r.assets != null; })) {
+      return T.filter(function (x) { return x.r.assets > 0 && x.r.profit != null; })
+              .map(function (x) { return { time: x.t, value: Math.round(x.r.profit / x.r.assets * 10000) / 100 }; });
+    }
+    return [];
+  }
+
+  // 1. Revenue & Profit (Rp miliar, kanan) + NPM (%, KIRI).
+  // NPM dulu ikut sumbu kanan bersama revenue: 54% berimpit dengan 100.000 sehingga
+  // garisnya menempel di dasar dan tidak terbaca. Dua satuan = dua sumbu.
+  var c1 = sdLwc('sd-fc-rp', { labels: labels, leftScale: true, leftWidth: 44, rightWidth: 54 });
+  if (c1) {
+    sdSeries(c1, { type: 'bars', data: col('sales'), color: sdAlpha('#3b82f6', 0.62), title: 'Revenue (Rp m)', fmt: { type: 'price', precision: 0, minMove: 1 } });
+    sdSeries(c1, { type: 'line', data: col('profit'), color: '#22c55e', width: 2, title: 'Profit', fmt: { type: 'price', precision: 0, minMove: 1 } });
+    sdSeries(c1, { type: 'line', data: derived('npm'), color: '#f59e0b', width: 2, scale: 'left', title: 'NPM %', fmt: { type: 'price', precision: 1, minMove: 0.1 } });
+    try { c1.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 2. EPS & ROE — EPS batang, ROE garis (satuan beda, skala kanan dipakai ROE)
+  // Dua satuan berbeda di satu chart adalah kompromi: ROE dibaca lewat bentuk garis,
+  // bukan lewat tinggi batang EPS. Tooltip menampilkan nilai sebenarnya.
+  var c2 = sdLwc('sd-fc-er', { labels: labels, leftScale: true, leftWidth: 44, rightWidth: 46 });
+  if (c2) {
+    sdSeries(c2, { type: 'bars', data: col('eps'), color: sdAlpha('#0ea5e9', 0.62), title: 'EPS (Rp)' });
+    sdSeries(c2, { type: 'line', data: col('roe'), color: '#22c55e', width: 2, scale: 'left', title: 'ROE %', fmt: { type: 'price', precision: 1, minMove: 0.1 } });
+    try { c2.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 3. Margin trend: NPM / ROA / ROE
+  var c3 = sdLwc('sd-fc-mg', { labels: labels, rightWidth: 44 });
+  if (c3) {
+    sdSeries(c3, { type: 'line', data: derived('npm'), color: '#f59e0b', width: 2, title: 'NPM %' });
+    sdSeries(c3, { type: 'line', data: derived('roa'), color: '#38bdf8', width: 2, title: 'ROA %' });
+    sdSeries(c3, { type: 'line', data: col('roe'), color: '#22c55e', width: 2, title: 'ROE %' });
+    var s3 = sdSeries(c3, { type: 'line', data: [], color: '#fff' });
+    try { c3.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 4. Growth YoY
+  var step = sdFcMode === 'annual' ? 1 : 4;
+  var gS = [], gP = [];
+  T.forEach(function (x, i) {
+    var b = T[i - step];
+    var f = function (k) {
+      if (!b || x.r[k] == null || !b.r[k]) return null;
+      return Math.round((x.r[k] - b.r[k]) / Math.abs(b.r[k]) * 10000) / 100;
+    };
+    var vs = f('sales'), vp = f('profit');
+    if (vs != null) gS.push({ time: x.t, value: vs });
+    if (vp != null) gP.push({ time: x.t, value: vp });
+  });
+  var c4 = sdLwc('sd-fc-gr', { labels: labels, rightWidth: 44 });
+  if (c4) {
+    sdSeries(c4, { type: 'bars', data: gS, color: sdAlpha('#3b82f6', 0.62), title: 'Revenue YoY %' });
+    sdSeries(c4, { type: 'line', data: gP, color: '#22c55e', width: 2, title: 'Profit YoY %' });
+    sdRefLine(null, null, null);
+    var s4 = c4.panes && c4.panes()[0] ? c4.panes()[0].getSeries()[1] : null;
+    sdRefLine(s4, 0, '0%', '#34404f');
+    try { c4.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 5. Neraca + DER (DER skala kanan)
+  var c5 = sdLwc('sd-fc-bs', { labels: labels, leftScale: true, leftWidth: 42, rightWidth: 52 });
+  if (c5) {
+    sdSeries(c5, { type: 'line', data: col('assets'), color: '#3b82f6', width: 2, title: 'Assets' });
+    sdSeries(c5, { type: 'line', data: col('equity'), color: '#22c55e', width: 2, title: 'Equity' });
+    sdSeries(c5, { type: 'line', data: col('liabilities'), color: '#ef4444', width: 2, title: 'Liabilities' });
+    sdSeries(c5, { type: 'line', data: col('der'), color: '#f59e0b', width: 1, dashed: true, scale: 'left', title: 'DER x', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
+    try { c5.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 6. DPS per tahun
+  var dps = d.dps_by_year || [];
+  if (dps.length) {
+    var dl = {}, D = [];
+    dps.forEach(function (x) {
+      var t = sdPeriodDate(x.year);
+      if (!t) return;
+      dl[t] = String(x.year);
+      if (x.dps != null) D.push({ time: t, value: x.dps });
+    });
+    var c6 = sdLwc('sd-fc-dps', { labels: dl, rightWidth: 40 });
+    if (c6) {
+      sdSeries(c6, { type: 'bars', data: D, color: sdAlpha('#f59e0b', 0.8), title: 'DPS' });
+      try {
+        c6.timeScale().fitContent();
+        // 7 titik di 580 px -> barSpacing 74 px membuat satu bar jadi lempeng raksasa.
+        // 24 px per bar: bar ~16 px, sisa ruang untuk label tahun.
+        c6.timeScale().applyOptions({ barSpacing: 24, rightOffset: 4 });
+      } catch (e) {}
+    }
+  }
+
+  // 7. Live valuation: PER & PBV (harian, sumbu waktu asli)
+  var dv = d.daily_valuation || [];
+  if (dv.length >= 5) {
+    var PER = [], PBV = [];
+    dv.forEach(function (r) {
+      if (r.live_per != null) PER.push({ time: r.date, value: r.live_per });
+      if (r.live_pbv != null) PBV.push({ time: r.date, value: r.live_pbv });
+    });
+    var c7 = sdLwc('sd-fc-val', { rightWidth: 40 });
+    if (c7) {
+      sdSeries(c7, { type: 'line', data: PER, color: '#3b82f6', width: 2, title: 'PER' });
+      sdSeries(c7, { type: 'line', data: PBV, color: '#a855f7', width: 2, title: 'PBV', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
+      try { c7.timeScale().fitContent(); } catch (e) {}
+    }
+  }
 }
 
-// ═══ FOREIGN FLOW BAR CHART ═══
-// ═══ FLOW CHARTS ═══
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: FLOW — 3 chart
+// ═══════════════════════════════════════════════════════════════════════════════
 function sdDrawFlowCharts(d) {
   var ch = d.chart || [];
   var rows = ch.slice(-120);
   if (rows.length < 10) return;
 
-  var el1 = document.getElementById('sd-fnet-chart');
-  if (el1) {
-    var cum = [], acc = 0;
-    rows.forEach(function (r) { acc += (r.fnet || 0) / 1e9; cum.push(Math.round(acc * 10) / 10); });
-    var c1 = BL.init(el1, 'sd-fnet-chart'); if (c1) c1.setOption({
-      grid: { left: 48, right: 52, top: 24, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: { type: 'category', data: rows.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(rows.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: [
-        { type: 'value', name: 'kum (miliar)', nameTextStyle: { fontSize: 8, color: '#7d8fa8' }, axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
-        { type: 'value', name: 'harga', nameTextStyle: { fontSize: 8, color: '#7d8fa8' }, axisLabel: { fontSize: 8, formatter: function (v) { return v.toLocaleString(); } }, splitLine: { show: false } }
-      ],
-      series: [
-        { name: 'Kumulatif asing', type: 'line', data: cum, symbol: 'none', lineStyle: { width: 1.8, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' }, areaStyle: { opacity: 0.1 },
-          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 0 }] } },
-        { name: 'Harga', type: 'line', yAxisIndex: 1, data: rows.map(function (r) { return r.close; }), symbol: 'none', lineStyle: { width: 1.2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } }
-      ]
-    });
+  // 1. Kumulatif arus asing vs harga. Dua satuan: kumulatif (miliar Rp) di kanan,
+  // harga di kiri. Garis nol diberi price line supaya "kembali ke nol" terbaca.
+  var cum = [], acc = 0;
+  rows.forEach(function (r) {
+    acc += (r.fnet || 0) / 1e9;
+    cum.push({ time: r.date, value: Math.round(acc * 10) / 10 });
+  });
+  var c1 = sdLwc('sd-fnet-chart', { leftScale: true, leftWidth: 54, rightWidth: 54 });
+  if (c1) {
+    var s1 = sdSeries(c1, { type: 'area', data: cum, color: '#f59e0b', width: 2, title: 'Kum asing (miliar Rp)' });
+    sdRefLine(s1, 0, '', '#34404f');
+    sdSeries(c1, { type: 'line', data: rows.map(function (r) { return { time: r.date, value: r.close }; }), color: '#3b82f6', width: 1, scale: 'left', title: 'Harga', fmt: { type: 'price', precision: 0, minMove: 1 } });
+    try { c1.timeScale().fitContent(); } catch (e) {}
   }
 
-  var g60 = ch.slice(-60);
-  var el3 = document.getElementById('sd-gross-chart');
-  if (el3 && g60.length) {
-    var c3 = BL.init(el3, 'sd-gross-chart'); if (c3) c3.setOption({
-      grid: { left: 48, right: 14, top: 24, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: { type: 'category', data: g60.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(g60.length / 6) }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
-      series: [
-        { name: 'Beli', type: 'bar', stack: 'g', data: g60.map(function (r) { return Math.round((r.fbuy || 0) * (r.close || 0) / 1e9 * 10) / 10; }), itemStyle: { color: 'rgba(34,197,94,0.75)' }, barMaxWidth: 12 },
-        { name: 'Jual', type: 'bar', stack: 'g', data: g60.map(function (r) { return -Math.round((r.fsell || 0) * (r.close || 0) / 1e9 * 10) / 10; }), itemStyle: { color: 'rgba(239,68,68,0.75)' }, barMaxWidth: 12 }
-      ]
-    });
-  }
-
+  // 2. Bid ratio 0-100 + MA20. Ambang 50% diberi garis acuan.
   var bo = rows.filter(function (r) { return (r.bid_vol || 0) > 0 && (r.offer_vol || 0) > 0; });
-  var el2 = document.getElementById('sd-bo-chart');
-  if (el2 && bo.length >= 3) {
-    var ratio = bo.map(function (r) { var t = (r.bid_vol || 0) + (r.offer_vol || 0); return Math.round((r.bid_vol || 0) / t * 1000) / 10; });
-    var ma20 = ratio.map(function (_, i) {
-      if (i < 4) return null;
-      var k = Math.max(0, i - 19), s = 0;
-      for (var j = k; j <= i; j++) s += ratio[j];
-      return Math.round(s / (i - k + 1) * 10) / 10;
+  if (bo.length >= 3) {
+    var ratio = bo.map(function (r) {
+      var t = (r.bid_vol || 0) + (r.offer_vol || 0);
+      return { time: r.date, value: Math.round((r.bid_vol || 0) / t * 1000) / 10 };
     });
-    var c2 = BL.init(el2, 'sd-bo-chart'); if (c2) c2.setOption({
-      grid: { left: 40, right: 14, top: 24, bottom: 22 },
-      tooltip: { trigger: 'axis' },
-      legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: { type: 'category', data: bo.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(bo.length / 5) }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: { type: 'value', min: 0, max: 100, axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } },
-      series: [
-        { name: 'Bid ratio', type: 'bar', data: ratio, barMaxWidth: 10,
-          itemStyle: { color: function (p) { return p.value >= 55 ? 'rgba(34,197,94,0.8)' : p.value <= 45 ? 'rgba(239,68,68,0.8)' : 'rgba(148,163,184,0.6)'; } } },
-        { name: 'MA20', type: 'line', data: ma20, symbol: 'none', lineStyle: { width: 1.5, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' },
-          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 50 }] } }
-      ]
+    var ma20 = [];
+    for (var i = 0; i < ratio.length; i++) {
+      if (i < 4) continue;
+      var k = Math.max(0, i - 19), s = 0, n = 0;
+      for (var j = k; j <= i; j++) { s += ratio[j].value; n++; }
+      ma20.push({ time: ratio[i].time, value: Math.round(s / n * 10) / 10 });
+    }
+    var c2 = sdLwc('sd-bo-chart', { rightWidth: 44 });
+    if (c2) {
+      sdSeries(c2, { type: 'bars', data: ratio, color: sdAlpha('#94a3b8', 0.55), title: 'Bid %', fmt: { type: 'price', precision: 1, minMove: 0.1 } });
+      var s2 = sdSeries(c2, { type: 'line', data: ma20, color: '#f59e0b', width: 2, title: 'MA20' });
+      sdRefLine(s2, 50, '50%', '#34404f');
+      try { c2.timeScale().fitContent(); } catch (e) {}
+    }
+  }
+
+  // 3. Gross asing: beli vs jual. Nilai jual dikirim negatif supaya kedua sisi
+  // berada di sisi berlawanan dari nol — ini yang membuat "besar jualan" terbaca
+  // tanpa harus menebak dari warna.
+  var g60 = ch.slice(-60);
+  if (g60.length) {
+    var buy = [], sell = [];
+    g60.forEach(function (r) {
+      var b = Math.round((r.fbuy || 0) * (r.close || 0) / 1e9 * 10) / 10;
+      var s = Math.round((r.fsell || 0) * (r.close || 0) / 1e9 * 10) / 10;
+      buy.push({ time: r.date, value: b });
+      sell.push({ time: r.date, value: -s });
     });
+    var c3 = sdLwc('sd-gross-chart', { rightWidth: 48 });
+    if (c3) {
+      sdSeries(c3, { type: 'bars', data: buy, color: sdAlpha('#22c55e', 0.72), title: 'Beli' });
+      sdSeries(c3, { type: 'bars', data: sell, color: sdAlpha('#ef4444', 0.72), title: 'Jual' });
+      try { c3.timeScale().fitContent(); } catch (e) {}
+    }
   }
 }
 
-// ═══ OWNERSHIP CHARTS ═══
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: OWNERSHIP — 2 chart
+// ═══════════════════════════════════════════════════════════════════════════════
 function sdDrawOwnershipCharts(own) {
   var hist = own.history || [];
   if (hist.length < 3) return;
-  var dates = hist.map(function (h) { return h.date; });
-  var xAxis = { type: 'category', data: dates, axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor(dates.length / 6)) }, axisLine: { lineStyle: { color: '#1e2836' } } };
-  var yAxis = { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } };
 
-  var el1 = document.getElementById('sd-own-hist');
-  if (el1) {
-    var c1 = BL.init(el1, 'sd-own-hist'); if (c1) c1.setOption({
-      grid: { left: 40, right: 12, top: 24, bottom: 20 },
-      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: xAxis, yAxis: yAxis,
-      series: [
-        { name: 'Asing', type: 'line', data: hist.map(function (h) { return h.foreign_pct; }), symbol: 'none', lineStyle: { width: 2, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' }, areaStyle: { opacity: 0.12 } },
-        { name: 'Lokal', type: 'line', data: hist.map(function (h) { return h.local_pct; }), symbol: 'none', lineStyle: { width: 2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' }, areaStyle: { opacity: 0.12 } }
-      ]
-    });
+  // 1. Asing vs lokal (%)
+  var FOR = [], LOC = [];
+  hist.forEach(function (h) {
+    if (h.foreign_pct != null) FOR.push({ time: h.date, value: h.foreign_pct });
+    if (h.local_pct != null) LOC.push({ time: h.date, value: h.local_pct });
+  });
+  var c1 = sdLwc('sd-own-hist', { rightWidth: 42 });
+  if (c1) {
+    sdSeries(c1, { type: 'line', data: FOR, color: '#f59e0b', width: 2, title: 'Asing %', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
+    sdSeries(c1, { type: 'line', data: LOC, color: '#3b82f6', width: 2, title: 'Lokal %' });
+    try { c1.timeScale().fitContent(); } catch (e) {}
   }
 
-  var el2 = document.getElementById('sd-own-cat');
-  if (el2) {
-    var keys = [
-      { k: 'mf', l: 'Reksa Dana', c: '#a855f7' },
-      { k: 'id', l: 'Individu', c: '#22c55e' },
-      { k: 'cp', l: 'Korporasi', c: '#0ea5e9' },
-      { k: 'is', l: 'Asuransi', c: '#ef4444' },
-      { k: 'pf', l: 'Dana Pensiun', c: '#f59e0b' }
-    ];
-    var last = hist[hist.length - 1];
-    keys.sort(function (a, b) { return ((last.cats[b.k] || 0) - (last.cats[a.k] || 0)); });
-    var c2 = BL.init(el2, 'sd-own-cat'); if (c2) c2.setOption({
-      grid: { left: 40, right: 12, top: 24, bottom: 20 },
-      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: xAxis, yAxis: yAxis,
-      series: keys.slice(0, 4).map(function (k) {
-        return { name: k.l, type: 'line', data: hist.map(function (h) { return (h.cats || {})[k.k] || 0; }), symbol: 'none', lineStyle: { width: 1.6, color: k.c }, itemStyle: { color: k.c } };
-      })
+  // 2. Kategori pemegang saham
+  var cats = [
+    { k: 'mf', l: 'Reksa Dana', c: '#a855f7' },
+    { k: 'id', l: 'Individu', c: '#22c55e' },
+    { k: 'cp', l: 'Korporasi', c: '#0ea5e9' },
+    { k: 'is', l: 'Asuransi', c: '#ef4444' },
+    { k: 'pf', l: 'Dana Pensiun', c: '#f59e0b' }
+  ];
+  var last = hist[hist.length - 1];
+  cats.sort(function (a, b) { return ((last.cats || {})[b.k] || 0) - ((last.cats || {})[a.k] || 0); });
+  var c2 = sdLwc('sd-own-cat', { rightWidth: 42 });
+  if (c2) {
+    cats.slice(0, 4).forEach(function (k) {
+      var pts = [];
+      hist.forEach(function (h) {
+        var v = (h.cats || {})[k.k];
+        if (v != null) pts.push({ time: h.date, value: v });
+      });
+      sdSeries(c2, { type: 'line', data: pts, color: k.c, width: 2, title: k.l });
     });
+    try { c2.timeScale().fitContent(); } catch (e) {}
   }
 }
 
-// ═══ ANALYSIS: MA DISTANCE + FOREIGN FLOW ═══
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: ANALYSIS — 2 chart
+// ═══════════════════════════════════════════════════════════════════════════════
 function sdDrawAnalysisCharts(d) {
   var rows = (d.chart || []).slice(-250);
   if (rows.length < 60) return;
@@ -1117,73 +1470,44 @@ function sdDrawAnalysisCharts(d) {
     return s / n;
   }
   var closes = rows.map(function (r) { return r.close; });
-  var dist = function (n) {
-    return rows.map(function (r, i) {
+  function dist(n) {
+    var out = [];
+    rows.forEach(function (r, i) {
       var m = sma(closes, n, i);
-      return m ? Math.round((r.close - m) / m * 10000) / 100 : null;
+      if (m) out.push({ time: r.date, value: Math.round((r.close - m) / m * 10000) / 100 });
     });
-  };
-  var dates = rows.map(function (r) { return r.date; });
-  var fmtDate = { fontSize: 8, interval: Math.floor(rows.length / 6) };
-
-  var el1 = document.getElementById('sd-an-ma');
-  if (el1) {
-    var c1 = BL.init(el1, 'sd-an-ma'); if (c1) c1.setOption({
-      grid: { left: 42, right: 14, top: 20, bottom: 22 },
-      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: { type: 'category', data: dates, axisLabel: fmtDate, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 8, formatter: '{value}%' }, splitLine: { lineStyle: { color: '#141c27' } } },
-      series: [
-        { name: 'vs MA20', type: 'line', data: dist(20), symbol: 'none', lineStyle: { width: 1.2, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
-        { name: 'vs MA50', type: 'line', data: dist(50), symbol: 'none', lineStyle: { width: 1.2, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } },
-        { name: 'vs MA200', type: 'line', data: dist(200), symbol: 'none', lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' },
-          markLine: { silent: true, symbol: 'none', lineStyle: { color: '#34404f', type: 'dashed' }, data: [{ yAxis: 0 }] } }
-      ]
-    });
+    return out;
   }
 
+  // 1. Jarak harga ke MA20 / MA50 / MA200 (%). Satu satuan, satu sumbu.
+  var c1 = sdLwc('sd-an-ma', { rightWidth: 46 });
+  if (c1) {
+    var s1 = sdSeries(c1, { type: 'line', data: dist(20), color: '#3b82f6', width: 1, title: 'vs MA20 %', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
+    sdSeries(c1, { type: 'line', data: dist(50), color: '#f59e0b', width: 1, title: 'vs MA50 %' });
+    sdSeries(c1, { type: 'line', data: dist(200), color: '#ef4444', width: 2, title: 'vs MA200 %' });
+    sdRefLine(s1, 0, '0%', '#34404f');
+    try { c1.timeScale().fitContent(); } catch (e) {}
+  }
+
+  // 2. Arus asing harian (batang) + kumulatif (garis, skala kanan)
   var ff = (d.chart || []).slice(-60);
-  var el2 = document.getElementById('sd-an-ff');
-  if (el2 && ff.length) {
-    var net = ff.map(function (r) { return (r.fnet || 0) * (r.close || 0) / 1e9; }); // miliar
-    var cum = [], acc = 0;
-    net.forEach(function (v) { acc += v; cum.push(Math.round(acc * 100) / 100); });
-    var c2 = BL.init(el2, 'sd-an-ff'); if (c2) c2.setOption({
-      grid: { left: 46, right: 14, top: 20, bottom: 22 },
-      tooltip: { trigger: 'axis' }, legend: { textStyle: { fontSize: 9, color: '#7d8fa8' }, top: 0 },
-      xAxis: { type: 'category', data: ff.map(function (r) { return r.date; }), axisLabel: { fontSize: 8, interval: Math.floor(ff.length / 5) }, axisLine: { lineStyle: { color: '#1e2836' } } },
-      yAxis: [{ type: 'value', axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#141c27' } } },
-              { type: 'value', axisLabel: { fontSize: 8 }, splitLine: { show: false } }],
-      series: [
-        { name: 'Harian (miliar)', type: 'bar', data: net.map(function (v) { return Math.round(v * 100) / 100; }),
-          itemStyle: { color: function (p) { return p.value >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'; } }, barMaxWidth: 8 },
-        { name: 'Kumulatif', type: 'line', yAxisIndex: 1, data: cum, symbol: 'none', lineStyle: { width: 1.6, color: '#f59e0b' }, itemStyle: { color: '#f59e0b' } }
-      ]
+  if (ff.length) {
+    var net = [], cum = [], acc = 0;
+    ff.forEach(function (r) {
+      var v = (r.fnet || 0) * (r.close || 0) / 1e9;
+      var rv = Math.round(v * 100) / 100;
+      acc += v;
+      net.push({ time: r.date, value: rv });
+      cum.push({ time: r.date, value: Math.round(acc * 100) / 100 });
     });
+    var c2 = sdLwc('sd-an-ff', { rightWidth: 50 });
+    if (c2) {
+      sdSeries(c2, { type: 'bars', data: net, color: sdAlpha('#94a3b8', 0.55), title: 'Harian (miliar)' });
+      var s2 = sdSeries(c2, { type: 'area', data: cum, color: '#f59e0b', width: 2, title: 'Kumulatif' });
+      sdRefLine(s2, 0, '', '#34404f');
+      try { c2.timeScale().fitContent(); } catch (e) {}
+    }
   }
-}
-
-// ═══ SCORE TREND CHART ═══
-function sdDrawScoreChart(hist) {
-  var el = $('sd-score-chart'); if (!el) return;
-  var c = BL.init(el, 'sd-score-hist'); if (!c) return;
-  var dates = hist.map(function(r) { return r.calc_date; });
-  var factors = [
-    { k: 'score_composite', l: 'Composite', c: '#ff9800', w: 2.5 },
-    { k: 'score_fundamental', l: 'Fund', c: '#22c55e', w: 1.2 },
-    { k: 'score_valuation', l: 'Value', c: '#0ea5e9', w: 1.2 },
-    { k: 'score_momentum', l: 'Mom', c: '#f59e0b', w: 1.2 },
-    { k: 'score_demand', l: 'Demand', c: '#a855f7', w: 1.2 },
-    { k: 'score_foreign', l: 'Foreign', c: '#ef4444', w: 1.2 }
-  ];
-  c.setOption({
-    tooltip: { trigger: 'axis', textStyle: { fontSize: 10 } },
-    legend: { top: 0, left: 0, textStyle: { fontSize: 9 } },
-    grid: { left: 35, right: 10, top: 24, bottom: 24 },
-    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 8, formatter: function(v) { return v.substring(5); } } },
-    yAxis: { type: 'value', min: 0, max: 100, axisLabel: { fontSize: 8 }, splitLine: { lineStyle: { color: '#1e2836' } } },
-    series: factors.map(function(f) { return { name: f.l, type: 'line', data: hist.map(function(r) { return r[f.k] || 0; }), symbol: 'none', lineStyle: { width: f.w, color: f.c }, itemStyle: { color: f.c } }; })
-  }, true);
 }
 
 // ═══ STOCK COMMENTARY ═══
