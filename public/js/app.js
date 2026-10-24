@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={regime:false,mkt:false,idx:false,diary:false,analysis:false,bt:false};
+var tabLoaded={regime:false,ihsg:false,mkt:false,idx:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -52,6 +52,9 @@ function stab(n,el){
   // Market Regime kini menu sendiri (dulu sub-tab pertama Analysis). Dimuat saat pertama
   // dibuka, lalu di-refresh setiap kali tab diklik karena angkanya bergantung pipeline harian.
   if(n==='regime'){tabLoaded.regime=true;if(typeof loadMarketRegime==='function')loadMarketRegime();}
+  // Halaman IHSG dimuat sekali per sesi browser (payload 60s-cache di server); klik ulang
+  // memakai ihgData yang sudah ada, jadi tidak fetch berulang.
+  if(n==='ihsg'){tabLoaded.ihsg=true;if(typeof loadIhsgPage==='function')loadIhsgPage();}
   if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
   if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
@@ -119,9 +122,9 @@ document.addEventListener('keydown',function(e){
   // / = Focus search
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
 
-  // 1-5 = Tab switch (Regime masuk urutan pertama; sebelumnya hanya 4 tab)
-  if(e.key>='1'&&e.key<='5'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['regime','mkt','idx','diary','analysis'];
+  // 1-6 = Tab switch (urutan mengikuti sidebar: Regime, IHSG, Market, Intel, Diary, Analysis)
+  if(e.key>='1'&&e.key<='6'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    var tabNames=['regime','ihsg','mkt','idx','diary','analysis'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }

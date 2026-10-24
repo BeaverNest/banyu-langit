@@ -76,6 +76,9 @@ app.use('/api/idx', require('./routes/cross-asset'));
 app.use('/api/idx', require('./routes/us-daily'));
 app.use('/api/us', require('./routes/us-screen'));
 app.use('/api/idx', require('./routes/idx-metrics'));
+// Menu IHSG (permintaan owner 24 Okt 2026): level + breadth (220 sesi, untuk MA200) +
+// arus asing. Dipisah karena kebutuhan riwayatnya jauh lebih panjang dari cross-asset.
+app.use('/api/idx', require('./routes/ihsg-page'));
 app.use('/api/screener', screenerRoutes);
 app.use('/api/backtest', require('./routes/backtest'));
 app.use('/api/portfolio', require('./routes/portfolio'));

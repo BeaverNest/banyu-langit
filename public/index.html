@@ -67,25 +67,29 @@
     <div class="sidebar-tab" onclick="stab('regime',this)" data-tab="regime" title="Market Regime [1]">
       <span class="tab-icon">🌐</span><span class="tab-label">Regime</span>
     </div>
-    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [2]">
+    <!-- Menu IHSG (permintaan owner 24 Okt 2026): level + breadth + arus dalam satu halaman. -->
+    <div class="sidebar-tab" onclick="stab('ihsg',this)" data-tab="ihsg" title="IHSG [2]">
+      <span class="tab-icon">📉</span><span class="tab-label">IHSG</span>
+    </div>
+    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [3]">
       <span class="tab-icon">📈</span><span class="tab-label">Market</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="Market Intel [3]">
+    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="Market Intel [4]">
       <span class="tab-icon">📊</span><span class="tab-label">Market Intel</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [4]">
+    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [5]">
       <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [5]">
+    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [6]">
       <span class="tab-icon">🔬</span><span class="tab-label">Analysis</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [6]">
+    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [7]">
       <span class="tab-icon">📒</span><span class="tab-label">Paper</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [7]">
+    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [8]">
       <span class="tab-icon">🧪</span><span class="tab-label">Backtest</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [8]">
+    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [9]">
       <span class="tab-icon">🔎</span><span class="tab-label">Screener</span>
     </div>
 
@@ -109,6 +113,11 @@
     <button class="tab" onclick="stab('diary',this)">Diary</button>
     <button class="tab" onclick="stab('analysis',this)">Analysis</button>
 
+  </div>
+
+  <!-- TAB: IHSG — level + breadth + arus (menu sendiri) -->
+  <div class="tpanel" id="t-ihsg">
+    <div id="ihsg-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div>
   </div>
 
   <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
@@ -238,6 +247,7 @@
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
 
+<script src="/js/ihsg-page.js"></script>
 <script src="/js/market-regime.js"></script>
 <script src="/js/us-daily.js"></script>
 <script src="/js/stock-detail.js"></script>
