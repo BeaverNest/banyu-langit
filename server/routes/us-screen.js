@@ -82,6 +82,23 @@ router.get('/screen', (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/us/market — payload menu US Market (indeks proxy + breadth + sektor +
+// movers). Logika di server/utils/us-market.js supaya definisi return/median sama
+// dengan tabel lain.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/market', (req, res) => {
+  try {
+    const { buildUsMarket } = require('../utils/us-market');
+    const out = buildUsMarket(db, { days: req.query.days });
+    if (!out.ok) return res.status(404).json(out);
+    res.json(out);
+  } catch (e) {
+    console.error('[us-market]', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
 
 // ─────────────────────────────────────────────────────────────────────────────

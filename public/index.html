@@ -74,22 +74,28 @@
     <!-- Menu News menggantikan menu Market (permintaan owner 24 Okt 2026). Market
          sudah tidak punya isi: Commodities & BEI Announcements pindah ke IHSG,
          dan News jadi menu sendiri di posisi yang sama. -->
-    <div class="sidebar-tab on" onclick="stab('news',this)" data-tab="news" title="News [3]">
+    <!-- Menu US Market (permintaan owner 24 Okt 2026): pasar AS punya tabel sendiri
+         (us_daily + signals_daily, 1.400 simbol) tapi sebelumnya hanya bisa diakses
+         sebagai sub-tab di dalam Analysis. -->
+    <div class="sidebar-tab" onclick="stab('usm',this)" data-tab="usm" title="US Market [3]">
+      <span class="tab-icon">🇺🇸</span><span class="tab-label">US</span>
+    </div>
+    <div class="sidebar-tab on" onclick="stab('news',this)" data-tab="news" title="News [4]">
       <span class="tab-icon">📰</span><span class="tab-label">News</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [4]">
+    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [5]">
       <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [5]">
+    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [6]">
       <span class="tab-icon">🔬</span><span class="tab-label">Analysis</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [6]">
+    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [7]">
       <span class="tab-icon">📒</span><span class="tab-label">Paper</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [7]">
+    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [8]">
       <span class="tab-icon">🧪</span><span class="tab-label">Backtest</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [8]">
+    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [9]">
       <span class="tab-icon">🔎</span><span class="tab-label">Screener</span>
     </div>
 
@@ -148,6 +154,18 @@
       <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
       <div class="nlist" id="ann-list"><div class="ne">Tekan Search untuk melihat pengumuman BEI</div></div>
     </div>
+  </div>
+
+  <!-- TAB: US MARKET (owner 24 Okt 2026) -->
+  <div class="tpanel" id="t-usm">
+    <div class="wt">
+      <button class="wt-b on" data-ust="indices" onclick="usmSubTab('indices',this)">Indices</button>
+      <button class="wt-b" data-ust="breadth" onclick="usmSubTab('breadth',this)">Breadth</button>
+      <button class="wt-b" data-ust="sectors" onclick="usmSubTab('sectors',this)">Sectors</button>
+    </div>
+    <!-- Satu kontainer, bukan tiga: isi ketiga tab dirender dari satu payload. Tiga
+         wadah terpisah memaksa render ulang seluruh markup tiap pindah tab. -->
+    <div class="wp on" id="usm-body"><div id="usm-content" style="flex:1;overflow-y:auto"><div class="ne">Memuat pasar AS…</div></div></div>
   </div>
 
   <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
@@ -261,6 +279,7 @@
 <script src="/js/sector-intelligence.js"></script>
 
 <script src="/js/ihsg-page.js"></script>
+<script src="/js/us-market.js"></script>
 <script src="/js/market-regime.js"></script>
 <script src="/js/us-daily.js"></script>
 <script src="/js/stock-detail.js"></script>

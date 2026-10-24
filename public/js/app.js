@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={regime:false,ihsg:false,news:false,diary:false,analysis:false,bt:false};
+var tabLoaded={regime:false,ihsg:false,usm:false,news:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -62,6 +62,7 @@ function stab(n,el){
     if(typeof ihsgTab==='function') ihsgTab('overview');
     else if(typeof loadIhsgPage==='function') loadIhsgPage();
   }
+  if(n==='usm'){tabLoaded.usm=true;if(typeof loadUsMarket==='function')loadUsMarket();}
   if(n==='news'){tabLoaded.news=true;if(typeof lNews==='function')lNews('');}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;}
@@ -124,8 +125,8 @@ document.addEventListener('keydown',function(e){
   // 1-8 = Tab switch, HARUS sejajar dengan angka di title sidebar
   // (index.html: Market Regime [1] … Screener [8]). Menambah/menghapus menu berarti
   // dua tempat ini ikut diubah; kalau tidak, label menjanjikan tombol yang mati.
-  if(e.key>='1'&&e.key<='8'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['regime','ihsg','news','diary','analysis','pf','bt','scr'];
+  if(e.key>='1'&&e.key<='9'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    var tabNames=['regime','ihsg','usm','news','diary','analysis','pf','bt','scr'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }
