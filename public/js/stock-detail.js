@@ -1121,11 +1121,21 @@ function sdDrawPriceChartClean(d) {
   var WIN = 150;
   var from = Math.max(0, n - WIN);
   try {
-    c.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: n - 0.5 });
     // barSpacing dihitung dari lebar panel / jumlah bar yang ingin terlihat. Untuk seri
     // pendek (mis. DPS 7 tahun) nilai itu membuat satu bar memenuhi setengah layar dan
     // skala harga jadi hanya mencakup sebagian kecil nilai. Batasi juga oleh jumlah data.
     if (n > 20) c.timeScale().applyOptions({ barSpacing: Math.max(3, Math.min(12, 1100 / Math.min(WIN, n))) });
+    // Ruang kanan untuk label seri. Tanpa ini candle terakhir berhenti 6 px dari price
+    // scale (terukur) dan label LWC di tepi kanan — tapak BBCA/MA5/MA200 plus angka
+    // harganya — menimpa candle itu. Dua syarat, keduanya wajib, dan urutannya penting:
+    //   1. `fixRightEdge:false` — selama true (default), LWC mengklip `to` ke indeks bar
+    //      terakhir dan gap tetap 6 px. `rightOffset` sendirian TIDAK berpengaruh.
+    //   2. `barSpacing` diset SEBELUM rentang, karena penyetelan itu menghitung ulang
+    //      rentang dan membuang ruang kanan yang sudah dipasang.
+    // 9 slot x ~7,7 px = ~70 px, konsisten dari lebar 1.000 px sampai 1.600 px.
+    var PAD = 9;
+    c.timeScale().applyOptions({ fixRightEdge: false, rightOffset: PAD });
+    c.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: n - 1 + PAD });
   } catch (e) {}
 
   if (th && c) { try { c.applyOptions({ rightPriceScale: { minimumWidth: 62 } }); } catch (e) {} }
