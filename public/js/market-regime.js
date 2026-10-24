@@ -1286,6 +1286,122 @@ function mrRenderInternals(it, mrData) {
     }
   }
 
+  // ── Leaderboard: 9 daftar di bawah rotasi sektor ──
+  var LB = it.leaderboards || null;
+  if (LB) {
+    // Satu tabel per kartu, 5 baris. Kartu disusun grid 3 kolom supaya 9 daftar tidak memanjang
+    // ke bawah; setiap kartu punya header kolom sendiri karena isinya beda satuan (%, Rp, lot,
+    // kali). Tanpa header, "%" dan "Rp m" akan tertukar saat dibaca cepat.
+    // Kartu gainer/loser: kolom nilai SUDAH perubahan harga, jadi kolom ke-4 diisi nilai
+    // transaksi. Kalau kolom ke-4 tetap 1D, dua kolom menampilkan angka identik (bug tampilan
+    // pertama: "+33.33% | +33.33%").
+    var CARD = [
+      { k: 'top_gainers',         t: 'Top gainer',       d: '1D',         val: ['chg_pct', 'pct'],      h3: '% 1D',   extra: ['value', 'rpb'],  h4: 'Rp m' },
+      { k: 'top_losers',          t: 'Top loser',        d: '1D',         val: ['chg_pct', 'pct'],      h3: '% 1D',   extra: ['value', 'rpb'],  h4: 'Rp m' },
+      { k: 'top_mover',           t: 'Top mover',        d: 'high−low',   val: ['range_pct', 'pct'],    h3: '% range',extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'top_foreign_buy',     t: 'Top foreign buy',  d: '1D',         val: ['net_foreign', 'rpt'],  h3: 'Rp tn',  extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'top_foreign_sell',    t: 'Top foreign sell', d: '1D',         val: ['net_foreign', 'rpt'],  h3: 'Rp tn',  extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'most_active_value',   t: 'Most active',      d: 'nilai',      val: ['value', 'rpb'],        h3: 'Rp m',   extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'most_active_volume',  t: 'Most transacted',  d: 'volume',     val: ['volume', 'lot'],       h3: 'jt lbr', extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'most_active_freq',    t: 'Most frequent',    d: 'transaksi',  val: ['freq', 'num'],         h3: 'kali',   extra: ['chg_pct', 'pct'], h4: '% 1D' },
+      { k: 'top_laggard',         t: 'Top laggard',      d: '20D vs IHSG',val: ['rs_20d', 'pct'],       h3: '% RS',   extra: ['chg_pct', 'pct'], h4: '% 1D' }
+    ];
+    var fmt = function (v, kind) {
+      if (v === null || v === undefined || isNaN(v)) return '—';
+      if (kind === 'pct') return (Number(v) > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+      // Satuan ditulis di dalam sel ("25.3 m"), bukan hanya di header, karena header kartu
+      // sempit dan "Rp" tanpa kualifikasi mudah dibaca sebagai rupiah utuh.
+      if (kind === 'rp') return (Number(v) / 1e9).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' m';
+      if (kind === 'rpt') return (Number(v) > 0 ? '+' : '') + (Number(v) / 1e12).toFixed(2) + ' T';
+      // Volume di IDX tercatat dalam LEMBAR, bukan lot. "jt" di sini = juta lembar; menyebutnya
+      // lot akan melebihkan 100x karena 1 lot = 100 lembar.
+      // Volume selalu dalam juta lembar, bilangan bulat: 13.834 jt lbr lebih mudah dibandingkan
+      // daripada campuran "13.8 M" dan "45.2 jt".
+      if (kind === 'lot') return (Number(v) / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 });
+      // Miliar: satu desimal di bawah 10 (8,3 m tetap terbaca 8,3 — bukan dibulatkan jadi 8),
+      // tanpa desimal di atasnya supaya kolom angka tetap rata.
+      if (kind === 'rpb') return (Number(v) / 1e9).toLocaleString('en-US', { maximumFractionDigits: Math.abs(Number(v)) < 1e10 ? 1 : 0 });
+      if (kind === 'num') return Number(v).toLocaleString('en-US');
+      return String(v);
+    };
+    var HEAD = { pct: '%', rp: 'Rp m', rpt: 'Rp tn', rpb: 'Rp m', lot: 'jt lbr', num: 'x' };
+    var colOf = function (v, kind) {
+      if (kind === 'rp' || kind === 'lot' || kind === 'num') return 'var(--t2)';
+      return mrColor(v);
+    };
+    h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Papan peringkat '
+      + '<span style="font-weight:400;color:var(--t3)">· sesi ' + esc(LB.as_of || '') + ' · ' + (LB.n || 0) + ' emiten diperdagangkan'
+      + ' · mover: nilai ≥ median ' + fmt(LB.med_value, 'rp') + ' (' + (LB.n_liquid || 0) + ' emiten)</span></div>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px">';
+    CARD.forEach(function (cd) {
+      var rows = LB[cd.k] || [];
+      var vk = cd.val[0], vkind = cd.val[1];
+      h += '<div style="border:1px solid var(--b1);border-radius:6px;overflow:hidden;background:var(--bg1)">'
+        // Badge kanan dulu berisi `cd.d` (mis. '1D') — sekarang DUPLIKAT karena setiap kolom sudah
+        // punya header sendiri ('% 1D', 'Rp tn', ...). Diganti jumlah baris supaya band itu tidak
+        // mengulang informasi dan tidak berebut ruang dengan judul.
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:4px 7px;border-bottom:1px solid var(--b1);background:var(--bg2)">'
+        + '<span style="font-size:9.5px;font-weight:700">' + esc(cd.t) + '</span>'
+        + '<span style="font-size:8.5px;color:var(--t3)">top ' + rows.length + '</span></div>'
+        + '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
+        // Kolom nama diberi 50% (dari 40%): dengan kartu ~380 px, 40% hanya menyisakan ~100 px
+        // untuk nama setelah kode 44 px, sehingga hampir semua nama terpotong. Angka di kolom 3/4
+        // ('+33.33%', '68,755') muat di 20% masing-masing.
+        // Kode dipatok 46 px (bukan persen) supaya kolom nama mulai di x yang sama di semua kartu,
+        // berapa pun lebar kartunya — dengan lebar persen, kolom angka tiap kartu bergeser dan
+        // grid terbaca berantakan walau tiap kartu rapi sendiri.
+        + '<colgroup><col style="width:26px"><col><col style="width:74px"><col style="width:64px"></colgroup>'
+        // Header dibuat lebih kecil + uppercase + letter-spacing dan diberi garis bawah. Sebelumnya
+        // ukuran dan warnanya sama dengan isi tabel, sehingga tidak terbaca sebagai header
+        // (temuan review visual: "header type is the same size as body").
+        + '<thead><tr style="color:var(--t3);font-size:8px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--b1)">'
+        + '<th style="text-align:right;padding:2px 6px;font-weight:600">#</th>'
+        + '<th style="text-align:left;padding:2px 6px;font-weight:600">Emiten</th>'
+        // Header kolom 3 memakai label SPESIFIK per kartu (bukan hanya satuan): pada Top mover
+        // kedua kolom sama-sama persen, sehingga dua header "%" membuat pembaca menebak mana
+        // high−low dan mana perubahan harga.
+        + '<th style="text-align:right;padding:2px 6px;font-weight:600">' + (cd.h3 || HEAD[vkind] || vkind) + '</th>'
+        + '<th style="text-align:right;padding:2px 6px;font-weight:600">' + (cd.h4 || HEAD[cd.extra[1]]) + '</th>'
+        + '</tr></thead><tbody>';
+      if (!rows.length) {
+        h += '<tr><td colspan="4" style="padding:6px;color:var(--t3);text-align:center">tidak ada data</td></tr>';
+      }
+      rows.forEach(function (x, i) {
+        h += '<tr style="border-top:1px solid var(--b1)">'
+          + '<td style="padding:2px 6px;text-align:right;color:var(--t3)">' + (i + 1) + '</td>'
+          + '<td style="padding:2px 6px 2px 0;overflow:hidden" title="' + esc(x.name || '') + (x.sector ? ' · ' + esc(x.sector) : '') + '">'
+          // Kode dan nama dipisah jarak tetap: `min-width` pada kode membuat nama selalu mulai di
+          // kolom yang sama antar baris, jadi mata bisa memindai kode saja. Nama tidak di-slice —
+          // dibiarkan dipotong ellipsis oleh sel supaya tidak ada nama terpotong tanpa tanda.
+          // Pemisah vertikal tipis setelah kode: tanpa itu "WMUU Widodo Makmur" terbaca sebagai
+          // satu string (temuan review visual). Lebar kode dipatok 44px supaya kolom nama lurus
+          // antar baris dan antar kartu.
+          + '<span class="code" onclick="sdOpenTicker(\'' + esc(x.code) + '\')" style="cursor:pointer;font-weight:600;display:inline-block;width:38px;border-right:1px solid var(--b1);margin-right:5px">' + esc(x.code) + '</span>'
+          // Nama dibungkus maksimal 2 baris, bukan dipotong `nowrap`+ellipsis: pada kartu ~380 px
+          // kolom nama hanya ~190 px, dan pemotongan membuat 24 dari 90 nama berakhir "PT Bank
+          // Raky…" — pembaca tidak bisa membedakan BBRI dari BMRI. `-webkit-line-clamp` memberi
+          // dua baris lalu elipsis, jadi tidak ada nama hilang tanpa tanda.
+          + '<span style="color:var(--t3);font-size:8.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.25;height:21px">' + esc(x.name || '') + '</span></td>'
+          + '<td style="padding:2px 6px;text-align:right;color:' + colOf(x[vk], vkind) + '">' + fmt(x[vk], vkind) + '</td>'
+          + '<td style="padding:2px 6px;text-align:right;color:' + colOf(x[cd.extra[0]], cd.extra[1]) + '">' + fmt(x[cd.extra[0]], cd.extra[1]) + '</td>'
+          + '</tr>';
+      });
+      h += '</tbody></table></div>';
+    });
+    h += '</div>';
+    // Catatan definisi: ditulis apa adanya dari payload (`defs`), bukan diketik ulang di UI, supaya
+    // kartu dan server tidak bisa berbeda kalau salah satunya diubah.
+    h += '<div style="font-size:9px;color:var(--t3);margin-top:5px;line-height:1.45">'
+      + 'Gainer/loser = perubahan 1D, tanpa filter likuiditas — emiten Rp 0,1 m bisa masuk, jadi bukan sinyal. '
+      + 'Mover = rentang (high−low)/low, hanya emiten dengan nilai ≥ median sesi. '
+      + 'Laggard = return 20D dikurangi IHSG 20D, dan hanya yang turun hari ini. '
+      + 'Foreign net = (beli − jual) asing × close, arus per saham satu sesi — bukan arus dana bersih lintas broker. '
+      + 'Volume dalam lembar (1 lot = 100 lembar); "jt lbr" = juta lembar. '
+      + 'Most active = nilai transaksi; most transacted = volume lembar; most frequent = jumlah transaksi. '
+      + 'Angka 1D di tiap kartu adalah perubahan harga saham itu, bukan nilai kolomnya.'
+      + '</div>';
+  }
+
   // Konsentrasi kepemilikan ≥1% tidak ditampilkan (permintaan owner 20 Okt 2026).
   // Data tetap ada di payload /api/idx/cross-asset (field `internals.ownership`; ringkasannya
   // juga di `coverage.extras.ownership`). Endpoint lama /api/idx/internals-extra sudah 404

@@ -205,6 +205,101 @@ function buildInternals(db, opts) {
     foreign_flow.series = flowSeries;
   }
 
+  // ── Leaderboard sesi terakhir ──
+  // Sepuluh daftar dari SATU query tanggal terakhir. Sengaja tidak memakai bulk 201 sesi: nama,
+  // high/low, frekuensi, dan listed_shares hanya dibutuhkan untuk satu tanggal, dan menambah 8
+  // kolom ke 193 ribu baris berarti membayar memori di setiap request untuk data yang dipakai
+  // sekali.
+  // Aturan yang berlaku untuk SEMUA daftar (kalau tidak, peringkatnya menyesatkan):
+  //  - `value > 0` wajib: bar tanpa transaksi membawa harga kemarin, sehingga return 0,00% dan
+  //    tidak boleh masuk peringkat mana pun.
+  //  - Satu tempat untuk definisi, dipakai semua kartu: gainer/loser = change 1D, mover = rentang
+  //    high-low, laggard = return 20D DIKURANGI IHSG 20D (bukan turnover rendah — istilah
+  //    "laggard" di pasar berarti tertinggal dari indeks/peers, bukan sepi transaksi).
+  //  - `net` foreign = (foreign_buy - foreign_sell) * close dalam rupiah. Arus per saham satu
+  //    sesi, BUKAN arus dana bersih: tidak ada netting lintas broker.
+  let leaderboards = null;
+  try {
+    const lb = db.prepare(
+      `SELECT d.code, COALESCE(p.name, d.name) AS name, d.close, d.prev_close, d.high, d.low,
+              d.value, d.volume, d.frequency, d.listed_shares,
+              d.foreign_buy, d.foreign_sell, cp.sector
+       FROM idx_daily d
+       LEFT JOIN company_profiles cp ON cp.code = d.code
+       LEFT JOIN (SELECT code, MAX(name) AS name FROM idx_daily WHERE name IS NOT NULL GROUP BY code) p
+         ON p.code = d.code
+       WHERE d.trade_date = ? AND d.close > 0`).all(asOf);
+    const uni = [];
+    for (const r of lb) {
+      if (!(r.value > 0) || !(r.prev_close > 0)) continue;
+      const pct = (r.close / r.prev_close - 1) * 100;
+      const net = (r.foreign_buy - r.foreign_sell) * r.close;
+      const rng = (r.high > 0 && r.low > 0 && r.high >= r.low) ? (r.high - r.low) / r.low * 100 : null;
+      // Turnover = nilai transaksi / kapitalisasi. Bukan definisi laggard, tapi tetap dikirim
+      // karena ia yang menjawab "berapa persen saham beredar berpindah tangan hari ini".
+      const mcap = (r.listed_shares > 0) ? r.close * r.listed_shares : 0;
+      uni.push({
+        code: r.code, name: r.name || r.code, sector: r.sector || null,
+        close: r.close, chg_pct: r2(pct),
+        value: r.value, volume: r.volume, freq: r.frequency,
+        net_foreign: Math.round(net),
+        range_pct: r2(rng),
+        turnover_pct: mcap > 0 ? r2(r.value / mcap * 100) : null,
+        rs_20d: null,
+      });
+    }
+    // Relative strength 20D per saham: return 20 sesi dikurangi IHSG 20 sesi. Basis dicari per
+    // saham di byCode, bukan diambil dari dates[] global — saham yang disuspensi tidak punya bar
+    // di tanggal basis dan harus dilewati, bukan dianggap 0%.
+    const d20 = dates.length >= 21 ? dates[dates.length - 21] : null;
+    const ih20 = (ihsg && Number.isFinite(ihsg.chg_20d)) ? ihsg.chg_20d : null;
+    if (d20 && ih20 !== null) {
+      for (const u of uni) {
+        const arr = byCode.get(u.code);
+        if (!arr || !arr.length) continue;
+        const last = arr[arr.length - 1];
+        const base = arr.find(x => x.trade_date === d20);
+        if (!base || !(base.ac > 0) || !(last.ac > 0)) continue;
+        if (!(base.value > 0) || !(last.value > 0)) continue;
+        u.rs_20d = r2((last.ac / base.ac - 1) * 100 - ih20);
+      }
+    }
+    // Ambang likuiditas untuk "top mover": tanpa ambang, peringkat rentang didominasi saham
+    // Rp 50 juta yang bergerak 30% karena satu lot. Ambang = median nilai transaksi sesi itu,
+    // dihitung dari universe sendiri, jadi tidak perlu angka tetap yang cepat basi.
+    const vals = uni.map(x => x.value).sort((a, b) => a - b);
+    const medVal = vals.length ? vals[Math.floor(vals.length / 2)] : 0;
+    const liquid = uni.filter(x => x.value >= medVal);
+    const take = (arr, key, n, dir) => arr
+      .filter(x => x[key] !== null && x[key] !== undefined)
+      .sort((a, b) => dir * (b[key] - a[key])).slice(0, n);
+    leaderboards = {
+      as_of: asOf, n: uni.length, med_value: Math.round(medVal), n_liquid: liquid.length,
+      // Definisi ditulis di payload supaya UI tidak perlu menebak dan tidak bisa menyimpang
+      // dari server kalau salah satu diubah.
+      defs: {
+        gainers: 'chg_pct 1D desc', losers: 'chg_pct 1D asc',
+        foreign_buy: 'net foreign 1D desc', foreign_sell: 'net foreign 1D asc',
+        active_value: 'value 1D desc', active_freq: 'frequency 1D desc',
+        active_volume: 'volume 1D desc (lot)',
+        mover: 'range (high-low)/low desc, hanya value >= median',
+        // Laggard = tertinggal dari indeks TAPI arahnya turun. Kalau hanya mengurutkan rs_20d
+        // naik, yang teratas justru saham yang naik +11% (FORU: chg 1D +11,34%, rs20 -57,1) —
+        // itu "tertinggal", bukan laggard. Syarat chg_pct < 0 yang membuatnya bermakna.
+        laggard: 'rs_20d asc AND chg_pct 1D < 0',
+      },
+      top_gainers: take(uni, 'chg_pct', 5, 1),
+      top_losers: take(uni, 'chg_pct', 5, -1),
+      top_foreign_buy: take(uni, 'net_foreign', 5, 1),
+      top_foreign_sell: take(uni, 'net_foreign', 5, -1),
+      most_active_value: take(uni, 'value', 5, 1),
+      most_active_freq: take(uni, 'freq', 5, 1),
+      most_active_volume: take(uni, 'volume', 5, 1),
+      top_mover: take(liquid, 'range_pct', 5, 1),
+      top_laggard: take(uni.filter(x => x.chg_pct !== null && x.chg_pct < 0), 'rs_20d', 5, -1),
+    };
+  } catch (e) { leaderboards = null; }
+
   // ── Sektor: horizon 1D/5D/20D/60D, equal weight, harga terkoreksi ──
   // Horizon dipilih supaya satu tabel bisa menjawab "siapa bergerak hari ini" (1D), "minggu ini"
   // (5D), "bulan ini" (20D), dan "kuartal" (60D). Dulu hanya 1D dan 20D, sehingga rotasi jangka
@@ -364,6 +459,7 @@ function buildInternals(db, opts) {
 
   return {
     as_of: asOf, available: true, ihsg, ihsg_history: ihsgHistory, breadth, foreign_flow, tape, sectors, ownership,
+    leaderboards,
     sessions: dates.length,
     window_from: dates[0],
   };

@@ -146,6 +146,7 @@ router.get('/cross-asset', (req, res) => {
           // top+bottom yang diteruskan, sehingga UI tidak punya data untuk tabel penuh.
           all: internals.sectors.all || [],
         } : null,
+        leaderboards: internals.leaderboards || null,
         ownership: internals.ownership,
       },
       coverage,
