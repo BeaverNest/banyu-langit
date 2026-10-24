@@ -35,7 +35,12 @@ function renderSDShell(el) {
   h += '<div id="sd-ac-dropdown" style="display:none;position:absolute;top:100%;left:0;width:280px;max-height:240px;overflow-y:auto;background:var(--bg1);border:1px solid var(--b2);border-radius:4px;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,0.5)"></div>';
   h += '</div>';
   h += '<button class="bei-tab on" style="font-size:11px;padding:4px 12px" onclick="sdLoad()">Analyze</button>';
-  if (sdData) h += '<span style="font-size:10px;color:var(--t3)">' + esc(sdData.name || '') + ' · ' + (sdData.current ? sdData.current.trade_date : '') + '</span>';
+  // Label nama diberi id sendiri: dulu teksnya ditulis di sini memakai `sdData` yang
+  // masih milik kode SEBELUMNYA (shell digambar sebelum fetch selesai), jadi header
+  // menampilkan nama emiten lama di atas harga emiten baru — mis. "GoTo Gojek
+  // Tokopedia Tbk." di atas harga BBCA. Angka benar, namanya salah; itu lebih buruk
+  // daripada kosong. Sekarang renderSDBody() yang mengisinya setiap data datang.
+  h += '<span id="sd-meta" style="font-size:10px;color:var(--t3)">' + (sdData ? esc(sdData.name || '') + ' · ' + (sdData.current ? sdData.current.trade_date : '') : '') + '</span>';
   h += '</div>';
   h += '<div id="sd-body" style="flex:1;overflow-y:auto"></div>';
   h += '</div>';
@@ -58,6 +63,8 @@ async function sdLoad() {
 
 function renderSDBody() {
   var body = $('sd-body'); if (!body || !sdData) return;
+  var meta = $('sd-meta');
+  if (meta) meta.textContent = (sdData.name || sdData.code || '') + (sdData.current ? ' · ' + sdData.current.trade_date : '');
   var d = sdData;
   var h = '';
   var cur = d.current || {};
