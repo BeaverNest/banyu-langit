@@ -498,6 +498,154 @@ async function loadSecTimeline(el){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTOR FLOW TIMELINE — Lightweight Charts (lokal)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Menggantikan BL.init('sec-timeline'). ECharts dimuat dari cdnjs: kalau CDN lambat
+// atau diblok, panel Sector/Industry Flow tampil kosong tanpa pesan error. LWC sudah
+// divendor lokal, jadi chart ini tidak lagi bergantung jaringan.
+//
+// Perbedaan perilaku yang disengaja vs versi ECharts:
+// - `dataZoom` slider diganti scroll/drag di sumbu waktu (LWC tidak punya slider).
+// - Tooltip axis bawaan LWC hanya menampilkan nilai satu titik, bukan daftar semua
+//   sektor terurut per minggu. Gimana pun itu: legend di bawah chart sudah memuat
+//   nilai terakhir per sektor, dan angka lengkapnya ada di tabel. Tooltip ringkas
+//   dipilih daripada meniru perilaku ECharts dengan lapisan HTML tambahan.
+var SEC_TL_CHART = null;
+
+function secTimelineDispose() {
+  if (!SEC_TL_CHART) return;
+  try { if (SEC_TL_CHART.__ro) SEC_TL_CHART.__ro.disconnect(); } catch (e) {}
+  try { SEC_TL_CHART.chart.remove(); } catch (e) {}
+  SEC_TL_CHART = null;
+}
+
+function secTimelineLwc(chartEl, weeks, series, visible, sorted, colors) {
+  var LWC = (typeof window !== 'undefined') ? window.LightweightCharts : null;
+  if (!LWC || typeof LWC.createChart !== 'function') return null;
+  var isChg = secTimeMetric === 'avg_chg';
+
+  secTimelineDispose();
+
+  var cs = getComputedStyle(document.documentElement);
+  var g = function (n, d) { var v = (cs.getPropertyValue(n) || '').trim(); return v || d; };
+  var gridCol = g('--b1', '#1e2836');
+  var txtCol = g('--t3', '#8a9bb5');
+  var fontFam = (g('--fm', 'monospace') || 'monospace').replace(/["']/g, '');
+
+  // Sumbu waktu: week_start adalah tanggal ISO, jadi langsung dipakai. Duplikat dan
+  // urutan turun dibuang karena LWC throw pada time yang tidak naik ketat.
+  var times = [];
+  var seen = {};
+  weeks.forEach(function (w) {
+    var t = String(w.week_start || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(t) || seen[t]) return;
+    seen[t] = 1;
+    times.push(t);
+  });
+  times.sort();
+  if (times.length < 2) return null;
+
+  var chart;
+  try {
+    chart = LWC.createChart(chartEl, {
+      width: chartEl.clientWidth || 900,
+      height: chartEl.clientHeight || 480,
+      layout: {
+        background: { type: 'solid', color: 'transparent' },
+        textColor: txtCol,
+        fontFamily: fontFam,
+        fontSize: 10,
+        attributionLogo: true   // Apache-2.0 Lightweight Charts
+      },
+      grid: { vertLines: { visible: false }, horzLines: { color: gridCol, style: 2 } },
+      // CATATAN: `priceFormat` di level rightPriceScale DIABAIKAN LWC v5 — label sumbu
+      // jatuh ke default dan menampilkan "600000000000.00". Formatter harus dipasang
+      // per seri (lihat addSeries di bawah); label sumbu mengikuti seri terakhir/utama.
+      rightPriceScale: {
+        borderColor: gridCol,
+        minimumWidth: 72,
+        scaleMargins: { top: 0.12, bottom: 0.10 }
+      },
+      timeScale: {
+        borderColor: gridCol,
+        timeVisible: false,
+        secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true
+      },
+      crosshair: { mode: 1 },
+      handleScroll: true,
+      handleScale: true,
+      localization: { locale: 'en-US' }
+    });
+  } catch (e) { return null; }
+
+  // Formatter sumbu/legenda: rupiah diringkas (T/B/M) atau persen untuk metrik harga.
+  var fmtPrice = {
+    type: 'custom',
+    minMove: 0.01,
+    formatter: function (v) {
+      if (isChg) return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+      var a = Math.abs(v);
+      if (a >= 1e12) return (v / 1e12).toFixed(1) + 'T';
+      if (a >= 1e9) return (v / 1e9).toFixed(0) + 'B';
+      if (a >= 1e6) return (v / 1e6).toFixed(0) + 'M';
+      if (v === 0) return '0';
+      return String(Math.round(v));
+    }
+  };
+
+  var created = 0;
+  visible.forEach(function (name) {
+    var ci = sorted.indexOf(name);
+    var clr = colors[ci % colors.length];
+    var raw = series[name] || [];
+    // series[name] sejajar dengan `weeks`; petakan ke tanggal yang sudah tersaring.
+    var pts = [];
+    for (var i = 0; i < weeks.length; i++) {
+      var t = String(weeks[i].week_start || '').slice(0, 10);
+      if (!seen[t]) continue;
+      var v = raw[i];
+      if (v == null || !isFinite(v)) continue;
+      pts.push({ time: t, value: v });
+    }
+    if (pts.length < 2) return;
+    pts.sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+    try {
+      var ln = chart.addSeries(LWC.LineSeries, {
+        color: clr,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 3,
+        priceFormat: fmtPrice,
+        title: String(name).replace('IDX Sector ', '')
+      });
+      ln.setData(pts);
+      created++;
+    } catch (e) { /* satu seri gagal: sisanya tetap tampil */ }
+  });
+
+  if (!created) { try { chart.remove(); } catch (e) {} return null; }
+
+  try { chart.timeScale().fitContent(); } catch (e) {}
+
+  var rec = { chart: chart, ro: null };
+  SEC_TL_CHART = rec;
+  if (typeof ResizeObserver !== 'undefined') {
+    rec.ro = new ResizeObserver(function () {
+      if (!SEC_TL_CHART || SEC_TL_CHART.chart !== chart) return;
+      try {
+        chart.applyOptions({ width: chartEl.clientWidth || 900, height: chartEl.clientHeight || 480 });
+      } catch (e) {}
+    });
+    rec.ro.observe(chartEl);
+  }
+  return chart;
+}
+
 function renderTimelineCtrl(){
   var el=$('timeline-ctrl');if(!el)return;
   var h='<div style="padding:8px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--b1)">';
@@ -583,8 +731,11 @@ function renderTimeline(){
       var el=$('timeline-chart');if(!el)return;
       var hh=secTimelineHeight();
       if(el.offsetHeight!==hh)el.style.height=hh+'px';
-      var inst=BL._instances['sec-timeline'];
-      if(inst&&!inst.isDisposed())inst.resize();
+      // Chart LWC punya ResizeObserver sendiri (secTimelineLwc); di sini cukup
+      // menyesuaikan tinggi kontainer. `BL._instances['sec-timeline']` sudah tidak ada.
+      if(SEC_TL_CHART&&SEC_TL_CHART.chart){
+        try{SEC_TL_CHART.chart.applyOptions({width:el.clientWidth||900,height:el.clientHeight||480});}catch(e){}
+      }
     });
   }
 
@@ -598,36 +749,10 @@ function renderTimeline(){
     return;
   }
 
-  // ECharts render
+  // Lightweight Charts (lokal). Sebelumnya BL.init('sec-timeline') -> ECharts dari CDN.
   chartEl.style.height=H+'px';
-  var c=BL.init(chartEl,'sec-timeline');if(!c){return;}
-  var cats=weeks.map(function(w){return w.week_start;});
-  var seriesArr=[];
-  visible.forEach(function(name){
-    var ci=sorted.indexOf(name);
-    var clr=colors[ci%colors.length];
-    var isChg=secTimeMetric==='avg_chg';
-    seriesArr.push({
-      name:name.replace('IDX Sector ',''),type:'line',data:series[name],symbol:'none',
-      lineStyle:{width:2,color:clr},itemStyle:{color:clr},
-      emphasis:{lineStyle:{width:3}}
-    });
-  });
-  c.setOption({
-    tooltip:{trigger:'axis',formatter:function(p){
-      var h='<b>'+p[0].axisValue.substring(5)+'</b>';
-      p.sort(function(a,b){return(b.value||0)-(a.value||0);});
-      p.forEach(function(s){
-        var v=s.value;var fmt=secTimeMetric==='avg_chg'?((v>0?'+':'')+v.toFixed(2)+'%'):BL.fmtRp(v);
-        h+='<br><span style="color:'+s.color+'">●</span> '+s.seriesName+': <b>'+fmt+'</b>';
-      });return h;
-    }},
-    grid:BL.grid({top:16,bottom:40,left:65,right:60}),
-    dataZoom:BL.dataZoom(),
-    xAxis:{type:'category',data:cats,axisLabel:{fontSize:7,formatter:function(v){return v.substring(5);}}},
-    yAxis:{type:'value',axisLabel:{fontSize:8,formatter:function(v){return secTimeMetric==='avg_chg'?v.toFixed(2)+'%':BL.fmtRp(v);}}},
-    series:seriesArr
-  },true);
+  var c = secTimelineLwc(chartEl, weeks, series, visible, sorted, colors);
+  if (!c) { chartEl.innerHTML='<div class="ne" style="padding:20px">Chart gagal dirender</div>'; return; }
 
   renderTimelineLegend(legEl,sorted,series,colors,n2);
 }
