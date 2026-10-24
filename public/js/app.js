@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={regime:false,ihsg:false,mkt:false,idx:false,diary:false,analysis:false,bt:false};
+var tabLoaded={regime:false,ihsg:false,mkt:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -63,7 +63,6 @@ function stab(n,el){
     else if(typeof loadIhsgPage==='function') loadIhsgPage();
   }
   if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
-  if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;}
   if(n==='scr'&&!tabLoaded.scr){tabLoaded.scr=true;if(typeof loadScreener==='function')loadScreener();}
@@ -71,7 +70,6 @@ function stab(n,el){
   if(n==='bt'&&!tabLoaded.bt){tabLoaded.bt=true;if(typeof loadBacktest==='function')loadBacktest();}
 
   // Re-trigger load for tabs that need refresh
-  if(n==='idx'&&typeof loadMarketIntel==='function')loadMarketIntel();
   if(n==='analysis'&&typeof loadMarketRegime==='function')loadMarketRegime();
 }
 
@@ -128,9 +126,11 @@ document.addEventListener('keydown',function(e){
   // / = Focus search
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
 
-  // 1-6 = Tab switch (urutan mengikuti sidebar: Regime, IHSG, Market, Intel, Diary, Analysis)
-  if(e.key>='1'&&e.key<='6'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['regime','ihsg','mkt','idx','diary','analysis'];
+  // 1-8 = Tab switch, HARUS sejajar dengan angka di title sidebar
+  // (index.html: Market Regime [1] … Screener [8]). Menambah/menghapus menu berarti
+  // dua tempat ini ikut diubah; kalau tidak, label menjanjikan tombol yang mati.
+  if(e.key>='1'&&e.key<='8'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    var tabNames=['regime','ihsg','mkt','diary','analysis','pf','bt','scr'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }

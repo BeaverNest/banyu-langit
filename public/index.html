@@ -74,22 +74,19 @@
     <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [3]">
       <span class="tab-icon">📈</span><span class="tab-label">Market</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="Market Intel [4]">
-      <span class="tab-icon">📊</span><span class="tab-label">Market Intel</span>
-    </div>
-    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [5]">
+    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [4]">
       <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [6]">
+    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [5]">
       <span class="tab-icon">🔬</span><span class="tab-label">Analysis</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [7]">
+    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [6]">
       <span class="tab-icon">📒</span><span class="tab-label">Paper</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [8]">
+    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [7]">
       <span class="tab-icon">🧪</span><span class="tab-label">Backtest</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [9]">
+    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [8]">
       <span class="tab-icon">🔎</span><span class="tab-label">Screener</span>
     </div>
 
@@ -109,7 +106,6 @@
   <!-- Old tabs hidden (CSS display:none), kept for backward compat -->
   <div class="tabs">
     <button class="tab on" onclick="stab('mkt',this)">Market</button>
-    <button class="tab" onclick="stab('idx',this)">Market Intel</button>
     <button class="tab" onclick="stab('diary',this)">Diary</button>
     <button class="tab" onclick="stab('analysis',this)">Analysis</button>
 
@@ -163,11 +159,6 @@
       <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
       <div class="nlist" id="ann-list"><div class="ne">Click Search or load to see BEI announcements</div></div>
     </div>
-  </div>
-
-  <!-- TAB 2: MARKET INTELLIGENCE -->
-  <div class="tpanel" id="t-idx">
-    <div id="mi-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div>
   </div>
 
   <!-- TAB 3: DIARY -->
@@ -259,7 +250,6 @@
 <script src="/js/compare.js"></script>
 <script src="/js/tags-editor.js"></script>
 <script src="/js/gsearch.js"></script>
-<script src="/js/market-intel.js"></script>
 <script src="/js/idx-daily-v2.js"></script>
 <script src="/js/screener.js"></script>
 <script src="/js/sector-intelligence.js"></script>
