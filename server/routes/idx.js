@@ -6486,5 +6486,25 @@ module.exports = function(upload) {
     } catch(e) { res.json({error:e.message}); }
   });
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // GET /api/idx/comparison/:code
+  // Perbandingan dengan peer satu INDUSTRI (fallback: sektor). Dipakai sub-tab
+  // "Comparison" di Stock Information. Logika ada di server/utils/comparison.js
+  // supaya return/fundamental memakai definisi yang sama dengan /stock-detail.
+  // ══════════════════════════════════════════════════════════════════════════
+  router.get('/comparison/:code', (req, res) => {
+    try {
+      const code = String(req.params.code || '').toUpperCase().trim();
+      if (!code) return res.status(400).json({ error: 'No code' });
+      const { buildComparison } = require('../utils/comparison');
+      const out = buildComparison(db, code);
+      if (out.error) return res.status(404).json(out);
+      res.json(out);
+    } catch (e) {
+      console.error('[comparison]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };

@@ -401,7 +401,7 @@ function renderSDBody() {
   var tabs = [
     { id: 'financials', label: 'Financials' },
     { id: 'fundachart', label: 'Fundachart' },
-    { id: 'analysis', label: 'Analysis' },
+    { id: 'comparison', label: 'Comparison' },
     { id: 'ownership', label: 'Ownership' },
     { id: 'flow', label: 'Flow' },
     { id: 'news', label: 'News' }
@@ -451,7 +451,7 @@ function sdRenderTab(tabId) {
 
   if (tabId === 'financials') h = sdTabFinancials(d);
   else if (tabId === 'fundachart') h = sdTabFundachart(d);
-  else if (tabId === 'analysis') h = sdTabAnalysis(d);
+  else if (tabId === 'comparison') h = sdTabComparison(d);
   else if (tabId === 'ownership') h = sdTabOwnership(d);
   else if (tabId === 'flow') h = sdTabFlow(d);
   else if (tabId === 'news') h = sdTabNews(d);
@@ -472,10 +472,7 @@ function sdRenderTab(tabId) {
   setTimeout(function() {
     if (tabId === 'financials') sdDrawFinCharts(d);
     if (tabId === 'fundachart') sdDrawFundaCharts(d);
-    if (tabId === 'analysis') {
-      
-      sdDrawAnalysisCharts(d);
-    }
+    if (tabId === 'comparison') { /* data dimuat sendiri oleh sdCmpLoad() */ }
     if (tabId === 'ownership' && d.ownership) sdDrawOwnershipCharts(d.ownership);
     if (tabId === 'flow') {
       if (d.chart) sdDrawFlowCharts(d);
@@ -681,151 +678,6 @@ function sdTabFundachart(d) {
 
 function sdFcToggle(mode) { sdFcMode = mode; sdRenderTab('fundachart'); }
 
-function sdTabAnalysis(d) {
-  var h = '';
-  var vd = d.verdict || {}, phase = d.phase, stg = d.stage || {};
-  var pc = phase ? (PHASE_COLORS[phase.phase] || PHASE_COLORS.accumulation) : null;
-
-  // Verdict + Phase + MA Stage header
-  h += '<div style="display:flex;align-items:center;gap:12px;padding:8px 10px;margin-bottom:8px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;flex-wrap:wrap">';
-  if (vd.label) {
-    var vColor = vd.color || 'var(--t2)';
-    h += '<div style="display:flex;align-items:center;gap:4px"><span style="font-size:10px;color:var(--t3)">Verdict</span><span style="font-size:16px;font-weight:800;color:' + vColor + ';padding:2px 10px;border:1px solid ' + vColor + ';border-radius:3px">' + vd.label + '</span><span style="font-size:10px;color:var(--t3)">' + vd.bull + '/' + vd.total + '</span></div>';
-    h += '<span style="color:var(--b2)">│</span>';
-  }
-  if (phase && pc) {
-    h += '<div style="display:flex;align-items:center;gap:4px"><span style="font-size:10px;color:var(--t3)">Phase</span><span style="font-size:13px;font-weight:700;color:' + pc.color + '">' + pc.icon + ' ' + pc.label + '</span><span style="font-size:10px;color:var(--t3)">' + phase.days + 'd ' + (phase.confidence || 50) + '%</span></div>';
-    h += '<span style="color:var(--b2)">│</span>';
-  }
-  if (stg.level != null) {
-    var stgC = stg.level >= 4 ? '#22c55e' : stg.level >= 3 ? '#f59e0b' : stg.level >= 2 ? '#f97316' : '#ef4444';
-    h += '<div style="display:flex;align-items:center;gap:4px"><span style="font-size:10px;color:var(--t3)">MA</span><span style="font-size:13px;font-weight:700;color:' + stgC + '">Stage ' + stg.level + '/' + stg.total + '</span><span style="font-size:10px;color:var(--t3)">' + stg.label + '</span>';
-    if (stg.bullish_stack) h += '<span style="font-size:10px;color:#22c55e">✓aligned</span>';
-    if (stg.bearish_stack) h += '<span style="font-size:10px;color:#ef4444">✕aligned</span>';
-    h += '</div>';
-  }
-  h += '</div>';
-
-  // MA Distance bar
-  if (stg.ma && stg.ma.length) {
-    h += '<div style="display:flex;align-items:center;gap:14px;padding:6px 10px;margin-bottom:8px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;font-size:13px">';
-    h += '<span style="color:var(--t3);font-weight:700;font-size:11px;min-width:55px">MA DIST</span>';
-    stg.ma.forEach(function(m) {
-      var color = m.above ? '#22c55e' : '#ef4444';
-      var label = m.key.toUpperCase().replace('MA','');
-      h += '<span><span style="color:var(--t3);font-size:11px">MA' + label + '</span> <span style="font-weight:700;font-family:var(--fm);color:' + color + '">' + (m.dist_pct > 0 ? '+' : '') + m.dist_pct.toFixed(2) + '%</span> <span style="color:var(--t3);font-family:var(--fm)">' + (m.value || 0).toLocaleString() + '</span></span>';
-    });
-    h += '</div>';
-  }
-
-  // Signal table
-  if (vd.signals && vd.signals.length) {
-    h += '<table class="bei-tbl" style="font-size:13px;margin-bottom:8px"><thead style="font-size:11px"><tr>';
-    vd.signals.forEach(function(sig) { h += '<th class="al">' + esc(sig.name).toUpperCase() + '</th>'; });
-    h += '</tr></thead><tbody><tr>';
-    vd.signals.forEach(function(sig) {
-      var sigC = sig.direction === 'bullish' ? '#22c55e' : sig.direction === 'bearish' ? '#ef4444' : 'var(--t3)';
-      var arrow = sig.direction === 'bullish' ? '▲' : sig.direction === 'bearish' ? '▼' : '●';
-      h += '<td class="al"><span style="color:' + sigC + ';font-weight:700">' + arrow + ' ' + esc(String(sig.value)) + '</span>';
-      if (sig.detail) h += ' <span style="color:var(--t3);font-size:10px">' + esc(sig.detail) + '</span>';
-      h += '</td>';
-    });
-    h += '</tr></tbody></table>';
-  }
-
-  // Warnings
-  if (vd.warnings && vd.warnings.length) {
-    vd.warnings.forEach(function(w) {
-      h += '<div style="font-size:11px;color:var(--am);padding:4px 8px;background:rgba(255,152,0,0.06);border-radius:4px;margin-bottom:4px;border-left:3px solid var(--am)">⚠ ' + esc(w) + '</div>';
-    });
-  }
-
-  // 2-col: Score + Commentary (kolom skor dulu dikunci 280px sehingga radar-nya sempit)
-  h += '<div style="display:grid;grid-template-columns:minmax(340px,34%) 1fr;gap:10px;margin-top:8px">';
-
-  // Score radar + values
-  h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-  h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">METRIK</div>';
-  if (d.scoring) {
-    h += '<table class="bei-tbl" style="font-size:12px"><tbody>';
-    [{ k: 'ma20_pct', l: 'vs MA20', c: 'var(--t1)', suffix: '%' },
-     { k: 'ma200_pct', l: 'vs MA200', c: 'var(--t1)', suffix: '%' },
-     { k: 'rsi14', l: 'RSI 14', c: 'var(--t1)', suffix: '' },
-     { k: 'ret_5d', l: 'Ret 5D', c: 'var(--t1)', suffix: '%' },
-     { k: 'ret_20d', l: 'Ret 20D', c: 'var(--t1)', suffix: '%' },
-     { k: 'rel_vol', l: 'Rel Vol', c: 'var(--t1)', suffix: 'x' },
-     { k: 'fnet_5d', l: 'FNet 5D', c: 'var(--t1)', suffix: ' M' }].forEach(function(f) {
-      var val = (d.scoring[f.k] == null ? null : Math.round(d.scoring[f.k] * 100) / 100);
-      var vc = f.c;
-      h += '<tr><td class="al" style="color:var(--t3)">' + f.l + '</td><td class="ar" style="font-weight:' + ('700') + ';font-family:var(--fm);color:' + vc + ';font-size:' + (f.bold ? '14px' : '12px') + '">' + val + '</td></tr>';
-    });
-    h += '</tbody></table>';
-  } else {
-    h += '<div style="font-size:12px;color:var(--t3);padding:10px 0">No scoring data</div>';
-  }
-  h += '</div>';
-
-  // Commentary
-  h += '<div style="overflow-y:auto;max-height:500px">' + sdCommentary(d) + '</div>';
-
-  h += '</div>'; // end 2-col
-
-  // Grafik tren skor dihapus bersama metode skor komposit.
-
-  // Historis tambahan (dari 500 bar harga)
-  if (d.chart && d.chart.length >= 60) {
-    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">JARAK KE MA <span style="font-weight:400;color:var(--t3)">(250 sesi, %)</span></div>';
-    h += '<div id="sd-an-ma" style="width:100%;height:' + sdChartCss(260, 32, 380) + '"></div></div>';
-    h += '<div style="background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px">ARUS ASING <span style="font-weight:400;color:var(--t3)">(60 sesi, bar = harian, garis = kumulatif)</span></div>';
-    h += '<div id="sd-an-ff" style="width:100%;height:' + sdChartCss(260, 32, 380) + '"></div></div>';
-    h += '</div>';
-  }
-
-  // 52W range
-  if (d.stats && d.stats.peak_52w && d.stats.low_52w && d.current) {
-    var lo = d.stats.low_52w, hi = d.stats.peak_52w, px = d.current.close;
-    var pos = hi > lo ? Math.max(0, Math.min(100, (px - lo) / (hi - lo) * 100)) : 0;
-    h += '<div style="margin-top:10px;background:var(--bg1);border:1px solid var(--b1);border-radius:4px;padding:10px">';
-    h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-bottom:5px"><span style="font-weight:700;color:var(--t1);font-size:11px">POSISI RENTANG 52 MINGGU</span><span>' + pos.toFixed(2) + '% dari low</span></div>';
-    h += '<div style="position:relative;height:10px;background:linear-gradient(90deg,#ef4444 0%,#f59e0b 50%,#22c55e 100%);border-radius:5px;opacity:.75">';
-    h += '<div style="position:absolute;left:' + pos.toFixed(2) + '%;top:-4px;width:3px;height:18px;background:#fff;border-radius:2px;transform:translateX(-1px)"></div></div>';
-    h += '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);font-family:var(--fm);margin-top:4px"><span>' + lo.toLocaleString() + '</span><span>' + px.toLocaleString() + '</span><span>' + hi.toLocaleString() + '</span></div>';
-    if (d.stats.drawdown_from_peak != null) {
-      h += '<div style="font-size:10px;color:var(--t3);margin-top:3px">Drawdown dari peak ' + d.stats.drawdown_from_peak + '% · ' + (d.stats.pct_from_low || 0) + '% di atas low · ATR ' + (d.stats.atr || 0) + ' · vol ' + (d.stats.volatility_ann || 0) + '%</div>';
-    }
-    h += '</div>';
-  }
-
-  // Phase history table
-  if (d.phases && d.phases.length) {
-    h += '<div style="margin-top:10px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:6px">PHASE HISTORY</div>';
-    h += '<div style="overflow-x:auto"><table class="bei-tbl" style="font-size:12px"><thead style="font-size:10px"><tr>';
-    h += '<th class="al">Phase</th><th class="ar">Conf.</th><th class="al">Period</th><th class="ar">Days</th><th class="ar">Open→Close</th><th class="ar">Change</th><th class="ar">F.Net</th>';
-    h += '</tr></thead><tbody>';
-    d.phases.slice().reverse().forEach(function(p) {
-      var pc2 = PHASE_COLORS[p.phase] || PHASE_COLORS.accumulation;
-      h += '<tr>';
-      h += '<td class="al"><span style="padding:1px 6px;border-radius:3px;background:' + pc2.bg + ';color:' + pc2.color + ';font-weight:600;font-size:10px">' + pc2.label + '</span></td>';
-      h += '<td class="ar" style="color:' + (p.confidence >= 75 ? 'var(--gn)' : 'var(--am)') + ';font-weight:600">' + (p.confidence || 50) + '%</td>';
-      h += '<td class="al" style="font-family:var(--fm);font-size:10px">' + p.start + ' → ' + p.end + '</td>';
-      h += '<td class="ar">' + p.days + '</td>';
-      h += '<td class="ar" style="font-family:var(--fm)">' + (p.open || 0).toLocaleString() + ' → ' + (p.close || 0).toLocaleString() + '</td>';
-      h += '<td class="ar ' + (p.change_pct > 0 ? 'up' : p.change_pct < 0 ? 'dn' : '') + '" style="font-weight:600">' + (p.change_pct > 0 ? '+' : '') + p.change_pct + '%</td>';
-      h += '<td class="ar ' + (p.fnet > 0 ? 'up' : p.fnet < 0 ? 'dn' : '') + '">' + fmtRp(p.fnet) + '</td>';
-      h += '</tr>';
-    });
-    h += '</tbody></table></div></div>';
-  }
-  return h;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TAB: OWNERSHIP
-// ═══════════════════════════════════════════════════════════════
 function sdTabOwnership(d) {
   var h = '';
 
@@ -1469,57 +1321,6 @@ function sdDrawOwnershipCharts(own) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAB: ANALYSIS — 2 chart
 // ═══════════════════════════════════════════════════════════════════════════════
-function sdDrawAnalysisCharts(d) {
-  var rows = (d.chart || []).slice(-250);
-  if (rows.length < 60) return;
-
-  function sma(arr, n, i) {
-    if (i < n - 1) return null;
-    var s = 0;
-    for (var k = i - n + 1; k <= i; k++) s += arr[k];
-    return s / n;
-  }
-  var closes = rows.map(function (r) { return r.close; });
-  function dist(n) {
-    var out = [];
-    rows.forEach(function (r, i) {
-      var m = sma(closes, n, i);
-      if (m) out.push({ time: r.date, value: Math.round((r.close - m) / m * 10000) / 100 });
-    });
-    return out;
-  }
-
-  // 1. Jarak harga ke MA20 / MA50 / MA200 (%). Satu satuan, satu sumbu.
-  var c1 = sdLwc('sd-an-ma', { rightWidth: 46 });
-  if (c1) {
-    var s1 = sdSeries(c1, { type: 'line', data: dist(20), color: '#3b82f6', width: 1, title: 'vs MA20 %', fmt: { type: 'price', precision: 2, minMove: 0.01 } });
-    sdSeries(c1, { type: 'line', data: dist(50), color: '#f59e0b', width: 1, title: 'vs MA50 %' });
-    sdSeries(c1, { type: 'line', data: dist(200), color: '#ef4444', width: 2, title: 'vs MA200 %' });
-    sdRefLine(s1, 0, '0%', '#34404f');
-    try { c1.timeScale().fitContent(); } catch (e) {}
-  }
-
-  // 2. Arus asing harian (batang) + kumulatif (garis, skala kanan)
-  var ff = (d.chart || []).slice(-60);
-  if (ff.length) {
-    var net = [], cum = [], acc = 0;
-    ff.forEach(function (r) {
-      var v = (r.fnet || 0) * (r.close || 0) / 1e9;
-      var rv = Math.round(v * 100) / 100;
-      acc += v;
-      net.push({ time: r.date, value: rv });
-      cum.push({ time: r.date, value: Math.round(acc * 100) / 100 });
-    });
-    var c2 = sdLwc('sd-an-ff', { rightWidth: 50 });
-    if (c2) {
-      sdSeries(c2, { type: 'bars', data: net, color: sdAlpha('#94a3b8', 0.55), title: 'Harian (miliar)' });
-      var s2 = sdSeries(c2, { type: 'area', data: cum, color: '#f59e0b', width: 2, title: 'Kumulatif' });
-      sdRefLine(s2, 0, '', '#34404f');
-      try { c2.timeScale().fitContent(); } catch (e) {}
-    }
-  }
-}
-
 // ═══ STOCK COMMENTARY ═══
 function sdCommentary(d) {
   var cur = d.current || {}, phase = d.phase, vd = d.verdict || {}, stg = d.stage || {};
@@ -1729,4 +1530,275 @@ async function sdLoadNews(code) {
     });
     el.innerHTML = h || '<div style="font-size:11px;color:var(--t3)">No news found</div>';
   } catch (e) { el.innerHTML = '<div style="font-size:11px;color:var(--t3)">News unavailable</div>'; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB: COMPARISON — posisi emiten terhadap peer satu industri
+//
+// Design note: sengaja TANPA grafik. Yang dibutuhkan di sini adalah peringkat dan
+// selisih terhadap median, dan itu lebih jujur dibaca sebagai tabel angka daripada
+// garis yang menumpuk. Satu-satunya elemen grafis adalah bar relatif di kolom
+// "vs median" — panjangnya = selisih terhadap median pada metrik yang sedang dipilih,
+// diskalakan ke nilai absolut terbesar di kolom itu.
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sektor yang laporan labanya tidak memakai baris "sales" seperti emiten non-jasa
+// keuangan (bank/asu­ransi: pendapatan = bunga & premi, bukan penjualan barang).
+// Untuk sektor ini NPM dari sumber bisa >100% dan tidak sebanding dengan emiten lain,
+// jadi ditandai "n/a" alih-alih ditampilkan seolah metrik yang setara.
+var SD_CMP_NPM_UNRELIABLE = ['Keuangan'];
+
+var SD_CMP = null;       // payload terakhir
+var SD_CMP_METRIC = 'ret_20d';
+var SD_CMP_LOADING = false;
+
+var SD_CMP_METRICS = [
+  { k: 'ret_5d',    label: '1W',    kind: 'pct',  help: 'return 5 sesi' },
+  { k: 'ret_20d',   label: '1M',    kind: 'pct',  help: 'return 20 sesi' },
+  { k: 'ret_60d',   label: '3M',    kind: 'pct',  help: 'return 60 sesi' },
+  { k: 'ret_120d',  label: '6M',    kind: 'pct',  help: 'return 120 sesi' },
+  { k: 'ret_ytd',   label: 'YTD',   kind: 'pct',  help: 'return ~250 sesi' },
+  { k: 'vs_ma20',   label: 'vs MA20',  kind: 'pct' },
+  { k: 'vs_ma60',   label: 'vs MA60',  kind: 'pct' },
+  { k: 'vs_ma200',  label: 'vs MA200', kind: 'pct' },
+  { k: 'per',       label: 'PER',   kind: 'x',    help: 'harga / laba' },
+  { k: 'pbv',       label: 'PBV',   kind: 'x',    help: 'harga / nilai buku' },
+  { k: 'roe',       label: 'ROE',   kind: 'pct',  help: 'laba / ekuitas' },
+  { k: 'roa',       label: 'ROA',   kind: 'pct' },
+  { k: 'npm',       label: 'NPM',   kind: 'pct' },
+  { k: 'der',       label: 'DER',   kind: 'x' },
+  { k: 'value_20d', label: 'Nilai 20D', kind: 'rp' },
+  { k: 'fnet_20d',  label: 'Asing 20D', kind: 'rp' }
+];
+
+function sdCmpFmt(v, kind) {
+  if (v == null || !isFinite(v)) return '—';
+  if (kind === 'pct') return v.toFixed(2) + '%';
+  if (kind === 'x') return v.toFixed(2) + 'x';
+  if (kind === 'rp') return (typeof fmtRp === 'function' ? fmtRp(v) : String(Math.round(v)));
+  return String(v);
+}
+
+function sdCmpColor(v, kind) {
+  // Warna hanya untuk metrik arah (return/selisih MA/asing). PER & PBV tidak diwarnai
+  // hijau-merah: PER rendah bukan otomatis "baik" — bisa berarti pasar menilai laba
+  // tidak berkelanjutan. Mewarnainya hijau adalah menyisipkan opini ke dalam angka.
+  var directional = /^ret_|^vs_ma|^fnet_/.test(kind);
+  if (!directional || v == null || !isFinite(v)) return 'var(--t2)';
+  return v > 0 ? '#22c55e' : (v < 0 ? '#ef4444' : 'var(--t3)');
+}
+
+function sdCmpLoad(code) {
+  if (SD_CMP_LOADING) return;
+  SD_CMP_LOADING = true;
+  var el = document.getElementById('sd-cmp-wrap');
+  if (el) el.innerHTML = '<div style="padding:16px;color:var(--t3);font-size:11px">Memuat perbandingan…</div>';
+  fetch('/api/idx/comparison/' + encodeURIComponent(code))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      SD_CMP_LOADING = false;
+      if (d.error) {
+        var e2 = document.getElementById('sd-cmp-wrap');
+        if (e2) e2.innerHTML = '<div style="padding:16px;color:var(--t3);font-size:11px">'
+          + 'Tidak ada data pembanding (' + esc(d.error) + ').</div>';
+        return;
+      }
+      SD_CMP = d;
+      // Default metrik jatuh ke 1M; kalau kolomnya kosong semua, pakai 1W supaya tabel
+      // tidak tampil penuh tanda hubung tanpa penjelasan.
+      if (!d.stats.some(function (s) { return s[SD_CMP_METRIC] != null; })) SD_CMP_METRIC = 'ret_5d';
+      sdCmpRender();
+    })
+    .catch(function (e) {
+      SD_CMP_LOADING = false;
+      var e3 = document.getElementById('sd-cmp-wrap');
+      if (e3) e3.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:11px">Gagal memuat: ' + esc(e.message) + '</div>';
+    });
+}
+
+function sdCmpSetMetric(k) {
+  SD_CMP_METRIC = k;
+  sdCmpRender();
+}
+
+function sdCmpRender() {
+  var wrap = document.getElementById('sd-cmp-wrap');
+  if (!wrap) return;
+  var d = SD_CMP;
+  if (!d) return;
+
+  var self = null;
+  for (var i = 0; i < d.stats.length; i++) if (d.stats[i].isSelf) self = d.stats[i];
+
+  // ── Ringkasan posisi ────────────────────────────────────────────────────────
+  // Peringkat dihitung pada metrik yang sedang dipilih, bukan metrik tetap: user yang
+  // sedang melihat ROE ingin tahu peringkat ROE, bukan peringkat return 1 bulan.
+  var mdef = null;
+  for (var m = 0; m < SD_CMP_METRICS.length; m++) if (SD_CMP_METRICS[m].k === SD_CMP_METRIC) mdef = SD_CMP_METRICS[m];
+  var kind = mdef ? mdef.kind : 'pct';
+
+  var vals = d.stats.filter(function (s) { return s[SD_CMP_METRIC] != null; })
+    .sort(function (a, b) { return b[SD_CMP_METRIC] - a[SD_CMP_METRIC]; });
+  var rank = 0;
+  for (var j = 0; j < vals.length; j++) if (vals[j].isSelf) rank = j + 1;
+
+  var h = '';
+
+  // Header konteks: peer apa yang dipakai, dan KENAPA. Ini bagian yang sering
+  // disalahpahami — "Keuangan" vs "Bank" menghasilkan angka yang sangat berbeda.
+  h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;margin-bottom:8px;'
+    + 'background:var(--bg1);border:1px solid var(--b1);border-radius:4px;font-size:11px">';
+  h += '<span style="color:var(--t3)">Pembanding</span>';
+  h += '<span style="font-weight:700;color:var(--t1)">' + esc(d.level_label || '-')
+    + '</span><span style="color:var(--t3);font-size:9px;text-transform:uppercase;letter-spacing:.5px">'
+    + (d.level === 'industry' ? 'industri' : 'sektor') + '</span>';
+  h += '<span style="color:var(--b2)">│</span>';
+  h += '<span style="color:var(--t3)">' + d.n_peers + ' emiten</span>';
+  h += '<span style="color:var(--b2)">│</span>';
+  h += '<span style="color:var(--t3)">per ' + esc(d.as_of) + '</span>';
+  if (rank && vals.length) {
+    h += '<span style="color:var(--b2)">│</span>';
+    h += '<span style="color:var(--t3)">Peringkat</span>';
+    h += '<span style="font-weight:800;color:var(--am)">#' + rank + '</span>';
+    h += '<span style="color:var(--t3)">/ ' + vals.length + '</span>';
+  }
+  h += '<span style="margin-left:auto;color:var(--t3);font-size:9px">'
+    + 'median industri · harga terkoreksi aksi korporasi</span>';
+  h += '</div>';
+
+  // Peringatan sample tipis. Peringkat #2 dari 5 emiten dan #2 dari 48 emiten bukan
+  // klaim yang sama kuatnya; jangan biarkan angkanya tampil tanpa konteks itu.
+  if (d.n_peers < 10) {
+    h += '<div style="margin-bottom:8px;padding:6px 10px;background:rgba(245,158,11,0.08);'
+      + 'border:1px solid rgba(245,158,11,0.35);border-radius:4px;font-size:9px;color:var(--am)">'
+      + 'Sample kecil: hanya ' + d.n_peers + ' emiten dalam '
+      + (d.level === 'industry' ? 'industri' : 'sektor') + ' ini. Peringkat dan median '
+      + 'kurang stabil — satu emiten ekstrem bisa menggeser garis pembanding.</div>';
+  }
+
+  // ── Pemilih metrik ─────────────────────────────────────────────────────────
+  h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
+  for (var q = 0; q < SD_CMP_METRICS.length; q++) {
+    var mm = SD_CMP_METRICS[q];
+    var on = mm.k === SD_CMP_METRIC;
+    h += '<button onclick="sdCmpSetMetric(\'' + mm.k + '\')" title="' + esc(mm.help || mm.label) + '" '
+      + 'style="padding:4px 9px;font-size:10px;font-weight:' + (on ? '700' : '400') + ';'
+      + 'color:' + (on ? '#fff' : 'var(--t3)') + ';'
+      + 'background:' + (on ? 'var(--am)' : 'var(--bg1)') + ';'
+      + 'border:1px solid ' + (on ? 'var(--am)' : 'var(--b1)') + ';border-radius:3px;cursor:pointer">'
+      + mm.label + '</button>';
+  }
+  h += '</div>';
+
+  // ── Tabel utama ────────────────────────────────────────────────────────────
+  // Skala bar: nilai absolut terbesar di kolom → panjang penuh. Nol di tengah untuk
+  // metrik yang bisa negatif, supaya arah terlihat alih-alih hanya besar-kecil.
+  var maxAbs = 0;
+  for (var v = 0; v < d.stats.length; v++) {
+    var av = Math.abs(d.stats[v][SD_CMP_METRIC]);
+    if (isFinite(av) && av > maxAbs) maxAbs = av;
+  }
+
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+  h += '<thead><tr style="border-bottom:2px solid var(--b1)">';
+  var th = 'padding:5px 4px;font-size:9px;text-transform:uppercase;letter-spacing:.2px;color:var(--t3);font-weight:600;text-align:right;white-space:nowrap';
+  h += '<th style="' + th + ';text-align:left">Emiten</th>';
+  h += '<th style="' + th + '">Harga</th>';
+  for (var q2 = 0; q2 < SD_CMP_METRICS.length; q2++) {
+    var md2 = SD_CMP_METRICS[q2];
+    var on2 = md2.k === SD_CMP_METRIC;
+    h += '<th style="' + th + ';' + (on2 ? 'color:var(--am)' : '') + '">' + md2.label + '</th>';
+  }
+  h += '<th style="' + th + ';text-align:left;min-width:74px">vs median</th>';
+  h += '</tr></thead><tbody>';
+
+  // Median row dulu supaya jadi garis pembanding yang dibaca sebelum baris lain.
+  h += '<tr style="background:var(--bg1);border-bottom:1px solid var(--b1)">';
+  h += '<td style="padding:5px 4px;font-weight:700;color:var(--t3);font-size:10px">MEDIAN ' + d.n_peers + ' EMITEN</td>';
+  h += '<td style="padding:5px 4px;text-align:right;color:var(--t3)">—</td>';
+  for (var q3 = 0; q3 < SD_CMP_METRICS.length; q3++) {
+    var md3 = SD_CMP_METRICS[q3];
+    var mv = d.median[md3.k];
+    if (md3.k === 'npm' && SD_CMP_NPM_UNRELIABLE.indexOf(d.sector) >= 0) mv = null;
+    h += '<td style="padding:5px 4px;text-align:right;color:var(--t3);font-variant-numeric:tabular-nums">'
+      + sdCmpFmt(mv, md3.kind) + '</td>';
+  }
+  h += '<td style="padding:5px 4px;color:var(--t3);font-size:9px">nol</td>';
+  h += '</tr>';
+
+  for (var r = 0; r < d.stats.length; r++) {
+    var s = d.stats[r];
+    var isSelf = s.isSelf;
+    var rowBg = isSelf ? 'rgba(245,158,11,0.10)' : 'transparent';
+    var val = s[SD_CMP_METRIC];
+    var medv = d.median[SD_CMP_METRIC];
+    var delta = (val != null && medv != null && isFinite(val) && isFinite(medv)) ? (val - medv) : null;
+
+    h += '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--b1)'
+      + (isSelf ? ';box-shadow:inset 2px 0 0 var(--am)' : '') + '">';
+    h += '<td style="padding:5px 4px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis">'
+      + '<span style="font-family:var(--fm);font-weight:' + (isSelf ? '800' : '600') + ';color:'
+      + (isSelf ? 'var(--am)' : 'var(--t1)') + '">' + esc(s.code) + '</span>'
+      + '<span style="color:var(--t3);font-size:9px;margin-left:5px">'
+      + esc(String(s.name || '').slice(0, 20)) + '</span></td>';
+    h += '<td style="padding:5px 4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--t2)">'
+      + (s.close != null ? Math.round(s.close).toLocaleString('id-ID') : '—') + '</td>';
+
+    for (var q4 = 0; q4 < SD_CMP_METRICS.length; q4++) {
+      var md4 = SD_CMP_METRICS[q4];
+      var vv = s[md4.k];
+      if (md4.k === 'npm' && SD_CMP_NPM_UNRELIABLE.indexOf(d.sector) >= 0) vv = null;
+      var col = (md4.k === SD_CMP_METRIC && md4.kind === 'pct') ? sdCmpColor(vv, md4.k) : 'var(--t2)';
+      h += '<td style="padding:5px 4px;text-align:right;font-variant-numeric:tabular-nums;color:' + col + '">'
+        + sdCmpFmt(vv, md4.kind) + '</td>';
+    }
+
+    // Bar vs median: lebar proporsional, dengan penanda nol di tengah kalau negatif.
+    h += '<td style="padding:5px 4px">';
+    if (delta != null && maxAbs > 0) {
+      var frac = Math.min(1, Math.abs(delta) / maxAbs);
+      var w = Math.round(frac * 34);
+      var pos = delta >= 0;
+      var barCol = pos ? '#22c55e' : '#ef4444';
+      h += '<div style="display:flex;align-items:center;gap:4px">';
+      h += '<div style="width:36px;height:8px;display:flex;background:var(--bg1);border-radius:1px;overflow:hidden;flex-shrink:0">';
+      h += '<div style="width:18px;display:flex;justify-content:' + (pos ? 'flex-start' : 'flex-end') + '">';
+      h += '<div style="width:' + w + 'px;height:8px;background:' + barCol + '"></div></div>';
+      h += '<div style="width:18px"></div></div>';
+      h += '<span style="font-size:9px;color:' + barCol + ';font-variant-numeric:tabular-nums;white-space:nowrap">'
+        + (delta > 0 ? '+' : '') + delta.toFixed(kind === 'rp' ? 0 : 2)
+        + (kind === 'pct' ? 'pp' : '') + '</span>';
+      h += '</div>';
+    } else {
+      h += '<span style="font-size:9px;color:var(--t3)">—</span>';
+    }
+    h += '</td></tr>';
+  }
+
+  h += '</tbody></table></div>';
+
+  // ── Catatan metode ─────────────────────────────────────────────────────────
+  // Ditempel di UI, bukan hanya di kode: siapa pun yang membaca angka harus tahu
+  // return-nya terkoreksi aksi korporasi dan agregasinya median, bukan rata-rata.
+  h += '<div style="margin-top:8px;padding:8px 10px;background:var(--bg1);border:1px solid var(--b1);'
+    + 'border-radius:4px;font-size:9px;color:var(--t3);line-height:1.6">'
+    + '<b style="color:var(--t2)">Metode.</b> '
+    + 'Return dihitung dari harga terkoreksi aksi korporasi (split/right issue tidak membuat return palsu). '
+    + 'Pembanding memakai <b>median</b> lintas emiten, bukan rata-rata — satu emiten dengan PER 500x '
+    + 'tidak boleh menggeser garis seluruh industri. PER/PBV &le; 0 dikeluarkan dari median valuasi '
+    + 'karena berarti laba/ekuitas negatif, bukan murah. '
+    + 'Kolom Asing = foreign net buy dalam rupiah, 20 sesi. '
+    + (SD_CMP_NPM_UNRELIABLE.indexOf(d.sector) >= 0
+        ? 'NPM dikosongkan untuk sektor Keuangan karena basis pendapatannya (bunga/premi) tidak '
+          + 'sebanding dengan penjualan barang, sehingga NPM dari sumber bisa melewati 100%. ' : '')
+    + 'Cakupan: <b>' + (d.level === 'industry' ? 'industri' : 'sektor') + '</b>'
+    + ' &mdash; kalau industri kurang dari 5 emiten, pembanding otomatis naik ke sektor.</div>';
+
+  wrap.innerHTML = h;
+}
+
+function sdTabComparison(d) {
+  // Wadah dulu, data menyusul: fetch jangan menahan render tab lain.
+  SD_CMP = null;
+  sdCmpLoad(d.code);
+  return '<div id="sd-cmp-wrap"><div style="padding:16px;color:var(--t3);font-size:11px">Memuat perbandingan…</div></div>';
 }
