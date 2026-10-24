@@ -67,11 +67,18 @@ function buildInternals(db, opts) {
     const rows = db.prepare("SELECT trade_date, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 61").all();
     if (rows.length >= 21) {
       const now = rows[0].close;
-      const at = (i) => (rows[i] ? rows[i].close : now);
-      const chg = (i) => (at(i) > 0 ? r2((now / at(i) - 1) * 100) : null);
+      // JANGAN fallback ke `now` saat indeks melewati ujung array: itu mengembalikan 0.00% untuk
+      // horizon yang datanya tidak ada, dan 0% terbaca sebagai "datar" padahal artinya "tidak
+      // diketahui". Rail COMPOSITE saat ini hanya 40 bar (2026-08-31..2026-10-23), jadi 60D
+      // memang belum tersedia dan harus null.
+      const at = (i) => (rows[i] ? rows[i].close : null);
+      const chg = (i) => { const v = at(i); return (v > 0 && now > 0) ? r2((now / v - 1) * 100) : null; };
       const chg20 = chg(20);
       const regime = chg20 > 5 ? 'bull' : chg20 > 2 ? 'mild_bull' : chg20 < -5 ? 'bear' : chg20 < -2 ? 'mild_bear' : 'sideways';
-      ihsg = { level: r2(now), date: rows[0].trade_date, chg_1d: chg(1), chg_5d: chg(5), chg_20d: chg20, regime };
+      ihsg = {
+        level: r2(now), date: rows[0].trade_date,
+        chg_1d: chg(1), chg_5d: chg(5), chg_20d: chg20, chg_60d: chg(60), regime,
+      };
     }
   } catch (e) { ihsg = null; }
 
@@ -185,12 +192,28 @@ function buildInternals(db, opts) {
     foreign_flow.series = flowSeries;
   }
 
-  // ── Sektor: 1D & 20D equal weight (pakai harga terkoreksi untuk 20D) ──
+  // ── Sektor: horizon 1D/5D/20D/60D, equal weight, harga terkoreksi ──
+  // Horizon dipilih supaya satu tabel bisa menjawab "siapa bergerak hari ini" (1D), "minggu ini"
+  // (5D), "bulan ini" (20D), dan "kuartal" (60D). Dulu hanya 1D dan 20D, sehingga rotasi jangka
+  // menengah tidak terlihat sama sekali.
+  // Pakai `ac` (close terkoreksi aksi korporasi) untuk SEMUA horizon, termasuk 1D: kalau 1D
+  // memakai close mentah sementara 20D memakai ac, satu baris bisa mencampur dua definisi return
+  // dan selisihnya muncul sebagai "rotasi" padahal itu split.
+  // Basis tiap horizon dicari per saham (`arr.find`), bukan dari `dates[]` global: saham yang
+  // disuspensi beberapa hari tidak punya bar di tanggal global itu, dan memaksakan tanggal global
+  // akan membuang saham tersebut dari rata-rata sektornya tanpa jejak.
   let sectors = null;
   try {
     const prof = new Map();
     for (const r of db.prepare("SELECT code, sector FROM company_profiles WHERE sector IS NOT NULL AND sector <> ''").all()) prof.set(r.code, r.sector);
-    const d20 = dates.length >= 21 ? dates[dates.length - 21] : null;
+    const HORIZONS = [1, 5, 20, 60];
+    // Basis per horizon diambil dari `dates` (hasil `sessionsBack`), yaitu tanggal yang memang ada
+    // di idx_daily — bukan tanggal kalender hasil mundur N hari. Sudah diverifikasi: 1.640 tanggal
+    // di tabel ini tidak mengandung Sabtu/Minggu, jadi basis 60 sesi (2026-07-29) memang hari bursa.
+    // Untuk saham yang baru listing, bar di tanggal basis tidak ada dan saham itu dilewati lewat
+    // `pos.get(bd)` — bukan dianggap return 0%.
+    const baseDate = {};
+    for (const h of HORIZONS) baseDate[h] = dates.length >= h + 1 ? dates[dates.length - 1 - h] : null;
     const agg = new Map();
     for (const [code, arr] of byCode) {
       const sec = prof.get(code);
@@ -198,32 +221,77 @@ function buildInternals(db, opts) {
       const n = arr.length;
       if (arr[n - 1].trade_date !== asOf) continue;
       let b = agg.get(sec);
-      if (!b) { b = { n: 0, d1: 0, n1: 0, d20: 0, n20: 0, members: [] }; agg.set(sec, b); }
+      if (!b) {
+        b = { n: 0, members: [], acc: {} };
+        for (const h of HORIZONS) b.acc[h] = { sum: 0, n: 0, up: 0, vals: [] };
+        agg.set(sec, b);
+      }
       b.n++;
+      const pos = new Map();
+      for (let i = 0; i < n; i++) pos.set(arr[i].trade_date, i);
       const r0 = arr[n - 1];
-      if (r0.prev_close > 0) { b.d1 += (r0.close / r0.prev_close - 1) * 100; b.n1++; }
-      if (d20) {
-        const base = arr.find(x => x.trade_date === d20);
-        if (base && base.ac > 0) { b.d20 += (r0.ac / base.ac - 1) * 100; b.n20++; }
+      for (const h of HORIZONS) {
+        const bd = baseDate[h];
+        if (!bd) continue;
+        const bi = pos.get(bd);
+        if (bi === undefined) continue;            // saham tidak punya bar di tanggal basis
+        const base = arr[bi];
+        if (!(base.ac > 0) || !(r0.ac > 0)) continue;
+        // WAJIB diperdagangkan di KEDUA ujung horizon. `value = 0` berarti tidak ada transaksi dan
+        // `close` di bar itu adalah harga carry-forward dari hari sebelumnya, sehingga return
+        // terhitung 0,00% — bukan "datar", tapi "tidak ada harga". Tanpa filter ini, 114 dari 131
+        // nama ber-return 0% pada 60D adalah saham tanpa transaksi, dan median sektor tertarik ke
+        // nol: Transportasi tercatat 0,00% padahal anggotanya bergerak +1327% sampai -38%.
+        if (!(base.value > 0) || !(r0.value > 0)) continue;
+        const ret = (r0.ac / base.ac - 1) * 100;
+        b.acc[h].sum += ret;
+        b.acc[h].n++;
+        if (ret > 0.005) b.acc[h].up++;
+        b.acc[h].vals.push(ret);
       }
       b.members.push({ code, value: r0.value || 0 });
     }
     const list = [];
     for (const [sec, b] of agg) {
       b.members.sort((x, y) => y.value - x.value);
+      // Median lintas emiten jadi angka utama, BUKAN rata-rata. Dengan equal weight, satu emiten
+      // ekstrem menggeser seluruh sektor: 60D Transportasi mean +41,7% sementara median 0%, karena
+      // TRUK naik +1.327% (422 -> 6.025) dari 40 anggota. Menampilkan mean di kolom tabel berarti
+      // menyajikan pergerakan satu saham sebagai "rotasi sektor". Mean tetap dikirim sebagai
+      // chg_* supaya pembaca bisa memeriksa selisihnya, dan divergensi besar ditandai di UI.
+      const stat = (h) => {
+        const v = b.acc[h].vals;
+        if (!v.length) return { mean: null, med: null, up: 0, n: 0 };
+        const mean = v.reduce((s, x) => s + x, 0) / v.length;
+        const srt = v.slice().sort((x, y) => x - y);
+        const m = srt.length;
+        const med = m % 2 ? srt[(m - 1) / 2] : (srt[m / 2 - 1] + srt[m / 2]) / 2;
+        return { mean: r2(mean), med: r2(med), up: b.acc[h].up, n: b.acc[h].n };
+      };
+      const s1 = stat(1), s5 = stat(5), s20 = stat(20), s60 = stat(60);
       list.push({
         sector: SECTOR_LABELS[sec] || sec,
         cp_sector: sec,
         members: b.n,
-        chg_1d: b.n1 ? r2(b.d1 / b.n1) : null,
-        chg_20d: b.n20 ? r2(b.d20 / b.n20) : null,
-        rs_vs_ihsg_1d: (b.n1 && ihsg && Number.isFinite(ihsg.chg_1d)) ? r2(b.d1 / b.n1 - ihsg.chg_1d) : null,
+        chg_1d: s1.mean, chg_5d: s5.mean, chg_20d: s20.mean, chg_60d: s60.mean,
+        med_1d: s1.med, med_5d: s5.med, med_20d: s20.med, med_60d: s60.med,
+        // Breadth per horizon: berapa emiten yang benar-benar naik dari sampel yang dipakai.
+        // Median 0,00% di IDX sering berarti "separuh emiten tidak bergerak", bukan "tidak ada
+        // data" — tanpa angka ini keduanya tidak bisa dibedakan.
+        up_1d: s1.up, up_5d: s5.up, up_20d: s20.up, up_60d: s60.up,
+        // Berapa emiten yang benar-benar masuk rata-rata tiap horizon. 60D bisa lebih kecil dari
+        // jumlah anggota kalau ada saham baru listing — tanpa angka ini, selisih antar kolom
+        // tampak seperti rotasi padahal beda sampel.
+        n_1d: b.acc[1].n, n_5d: b.acc[5].n, n_20d: b.acc[20].n, n_60d: b.acc[60].n,
+        rs_vs_ihsg_1d: (s1.med !== null && ihsg && Number.isFinite(ihsg.chg_1d)) ? r2(s1.med - ihsg.chg_1d) : null,
+        rs_vs_ihsg_20d: (s20.med !== null && ihsg && Number.isFinite(ihsg.chg_20d)) ? r2(s20.med - ihsg.chg_20d) : null,
         top_stocks: b.members.slice(0, 3).map(m => m.code),
       });
     }
-    list.sort((a, b) => (b.chg_1d == null ? -1e9 : b.chg_1d) - (a.chg_1d == null ? -1e9 : a.chg_1d));
+    list.sort((a, b) => (b.med_1d == null ? -1e9 : b.med_1d) - (a.med_1d == null ? -1e9 : a.med_1d));
     sectors = {
-      as_of: asOf, method: 'equal_weight',
+      as_of: asOf, method: 'equal_weight_median', horizons: HORIZONS,
+      stat: 'median_member_return', mean_field: 'chg_*', median_field: 'med_*',
       count: list.length,
       top: list.slice(0, 3),
       bottom: list.slice(-3).reverse(),

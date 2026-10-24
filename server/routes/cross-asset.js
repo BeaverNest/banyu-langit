@@ -139,8 +139,12 @@ router.get('/cross-asset', (req, res) => {
         foreign_flow: internals.foreign_flow,
         tape: internals.tape,
         sectors: internals.sectors ? {
-          as_of: internals.sectors.as_of, method: internals.sectors.method, count: internals.sectors.count,
+          as_of: internals.sectors.as_of, method: internals.sectors.method,
+          count: internals.sectors.count, horizons: internals.sectors.horizons || null,
           top: internals.sectors.top, bottom: internals.sectors.bottom,
+          // `all` (11 sektor) dikirim untuk tabel rincian 1D/5D/20D/60D. Sebelumnya hanya
+          // top+bottom yang diteruskan, sehingga UI tidak punya data untuk tabel penuh.
+          all: internals.sectors.all || [],
         } : null,
         ownership: internals.ownership,
       },

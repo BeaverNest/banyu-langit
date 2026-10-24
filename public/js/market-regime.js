@@ -1195,59 +1195,82 @@ function mrRenderInternals(it, mrData) {
     + ' · ' + (br.total || 0) + ' emiten</td></tr>';
   h += '</table>';
 
-  // Sektor
+  // Sektor — tabel rincian 1D/5D/20D/60D
   var sec = it.sectors;
-  if (sec && (sec.top || sec.bottom)) {
+  if (sec && (sec.all || sec.top || sec.bottom)) {
+    // Header blok. `method` dibaca dari payload, bukan ditulis di sini: kalau server mengganti
+    // definisi (equal weight median vs rata-rata), label UI harus ikut berubah sendiri.
     h += '<div style="font-size:10px;font-weight:700;margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--b1)">Rotasi sektor '
-      + '<span style="font-weight:400;color:var(--t3)">· sama bobot (equal weight) · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
-    // Bar 20D per sektor: satu sumbu nol, urut dari terkuat. Angka 1D/20D tetap di tabel bawah —
-    // bar ini hanya memindahkan \"siapa menguat\" dari kolom angka ke panjang batang.
-    var secAll = (sec.top || []).concat(sec.bottom || []).filter(function (x) { return x && x.chg_20d !== null && x.chg_20d !== undefined; });
-    if (secAll.length > 2) {
-      var maxAbs = Math.max.apply(null, secAll.map(function (x) { return Math.abs(x.chg_20d); })) || 1;
-      secAll.sort(function (a, b) { return b.chg_20d - a.chg_20d; });
-      h += '<div style="margin-bottom:8px">';
+      + '<span style="font-weight:400;color:var(--t3)">· median return antar emiten · ' + (sec.count || 0) + ' sektor · ' + esc(sec.as_of || '') + '</span></div>';
+
+    // 11 sektor, bukan hanya top-3/bottom-3: rotasi hanya terbaca kalau seluruh papan terlihat.
+    // Urut menurun 1D supaya "yang bergerak hari ini" ada di atas.
+    var secAll = (sec.all && sec.all.length ? sec.all.slice() : (sec.top || []).concat(sec.bottom || []))
+      .filter(function (x) { return x && x.sector; });
+    if (secAll.length) {
+      var HZ = [
+        { k: '1D', m: 'med_1d', a: 'chg_1d' },
+        { k: '5D', m: 'med_5d', a: 'chg_5d' },
+        { k: '20D', m: 'med_20d', a: 'chg_20d' },
+        { k: '60D', m: 'med_60d', a: 'chg_60d' }
+      ];
+      // Kolom: Sektor | 1D | 5D | 20D | 60D | RS 20D | Naik 20D | Terbesar.
+      // "Naik 20D" = jumlah emiten dengan return > 0 dari sampel yang benar-benar diperdagangkan;
+      // ini yang membedakan "sektor datar" dari "separuh emiten tidak bergerak". Median saja
+      // menyembunyikan itu: Kesehatan median 20D -4,37% dengan 8/39 naik, sementara Barang Baku
+      // -8,25% dengan 20/90 naik — arah sektornya sama, partisipasinya berbeda.
+      h += '<div style="overflow-x:auto"><table style="width:100%;min-width:640px;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
+        + '<colgroup><col style="width:21%"><col style="width:9%"><col style="width:9%"><col style="width:9%">'
+        + '<col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:23%"></colgroup>'
+        + '<thead><tr style="border-bottom:1px solid var(--b1)">'
+        + '<th style="text-align:left;padding:4px 6px;font-weight:600">Sektor</th>'
+        + HZ.map(function (z) {
+            return '<th style="text-align:right;padding:4px 6px;font-weight:600">' + z.k + '</th>';
+          }).join('')
+        + '<th style="text-align:right;padding:4px 6px;font-weight:600">RS 20D</th>'
+        + '<th style="text-align:right;padding:4px 6px;font-weight:600">Naik 20D</th>'
+        + '<th style="text-align:left;padding:4px 6px;font-weight:600">Terbesar</th>'
+        + '</tr>'
+        + '<tr style="border-bottom:1px solid var(--b1)">'
+        + '<th style="text-align:left;padding:0 6px 3px;font-weight:400;color:var(--t3);font-size:9px">median return</th>'
+        + HZ.map(function () {
+            return '<th style="text-align:right;padding:0 6px 3px;font-weight:400;color:var(--t3);font-size:9px">%</th>';
+          }).join('')
+        + '<th style="text-align:right;padding:0 6px 3px;font-weight:400;color:var(--t3);font-size:9px">vs IHSG</th>'
+        + '<th style="text-align:right;padding:0 6px 3px;font-weight:400;color:var(--t3);font-size:9px">emiten</th>'
+        + '<th style="text-align:left;padding:0 6px 3px;font-weight:400;color:var(--t3);font-size:9px">by value</th>'
+        + '</tr></thead><tbody>';
+
       secAll.forEach(function (x) {
-        var w = Math.max(1, Math.round(Math.abs(x.chg_20d) / maxAbs * 50));
-        var pos = x.chg_20d >= 0;
-        h += '<div style="display:flex;align-items:center;gap:6px;font-size:9px;line-height:15px">'
-          + '<span style="width:118px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t3)">' + esc(x.sector) + '</span>'
-          + '<span style="flex:1;display:flex;height:6px;background:transparent">'
-          + (pos ? '<span style="width:50%"></span>' : '<span style="width:' + (50 - w) + '%;margin-left:auto"></span>')
-          + '<span style="width:' + w + '%;background:' + mrColor(x.chg_20d) + ';border-radius:2px"></span>'
-          + (pos ? '<span style="width:' + (50 - w) + '%"></span>' : '<span style="width:50%"></span>')
-          + '</span>'
-          + '<span style="width:46px;text-align:right;font-family:var(--fm);color:' + mrColor(x.chg_20d) + '">' + mrSigned(x.chg_20d, '%') + '</span></div>';
+        var click = x.cp_sector ? ' onclick="mrGoSector(\'' + esc(x.cp_sector) + '\')" style="cursor:pointer;color:var(--bl)"' : '';
+        // Sel angka: median sebagai nilai utama. Kalau rata-rata menyimpang > 3 pp, beri tanda ▲/▼
+        // kecil + title berisi kedua angka — satu emiten ekstrem bisa membuat sektor terlihat
+        // "rotasi +40%" padahal separuh anggotanya datar (kasus Transportasi 60D sebelum filter:
+        // mean +41,7%, median 0%).
+        var cells = HZ.map(function (z) {
+          var med = x[z.m], avg = x[z.a];
+          var vig = (med !== null && avg !== null && med !== undefined && avg !== undefined && Math.abs(avg - med) > 3);
+          var mark = vig ? '<span style="font-size:8px;color:var(--am)" title="median ' + mrSigned(med, '%') + ' vs rata-rata ' + mrSigned(avg, '%') + '">' + (avg > med ? '▲' : '▼') + '</span>' : '';
+          return '<td style="padding:3px 6px;text-align:right;white-space:nowrap;color:' + mrColor(med) + '">' + mrSigned(med, '%') + mark + '</td>';
+        }).join('');
+        var up = x.up_20d, nu = x.n_20d;
+        var upPct = (up !== null && nu) ? Math.round(up / nu * 100) : null;
+        h += '<tr style="border-bottom:1px solid var(--b1)">'
+          + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"' + click + ' title="' + esc(x.sector || '') + '">' + esc(x.sector) + '</td>'
+          + cells
+          + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.rs_vs_ihsg_20d) + '">' + mrSigned(x.rs_vs_ihsg_20d, '%') + '</td>'
+          + '<td style="padding:3px 6px;text-align:right;color:var(--t2)" title="' + (up || 0) + ' dari ' + (nu || 0) + ' emiten di atas 0% pada 20 sesi">' + (upPct === null ? '—' : upPct + '%') + '<span style="color:var(--t3);font-size:8px"> ' + (up || 0) + '/' + (nu || 0) + '</span></td>'
+          + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (x.top_stocks || []).map(function (t) {
+            return '<span class="code" onclick="sdOpenTicker(\'' + esc(t) + '\')" style="cursor:pointer;font-size:10px;font-weight:600;margin-right:4px">' + esc(t) + '</span>';
+          }).join('<span style="color:var(--t3)"> · </span>') + '</td></tr>';
       });
-      h += '<div style="font-size:8px;color:var(--t3);margin-top:2px">20 sesi · garis tengah = 0% · skala maks ±' + mrNum(maxAbs) + '%</div>';
-      h += '</div>';
+      h += '</tbody></table></div>';
+      h += '<div style="font-size:9px;color:var(--t3);margin-top:4px;line-height:1.45">'
+        + 'Median return anggota sektor (equal weight), hanya emiten yang diperdagangkan di kedua ujung horizon &mdash; bar tanpa transaksi membawa harga kemarin dan akan terbaca 0,00% palsu. '
+        + '▲/▼ = rata-rata menyimpang &gt;3 pp dari median karena satu-dua emiten ekstrem. '
+        + '&mdash; = data belum tersedia untuk horizon itu: 60D sektor terisi (sumber idx_daily), 60D level IHSG belum (rail idx_indices baru mulai 31 Agu 2026).'
+        + '</div>';
     }
-    h += '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px;font-family:var(--fm)">'
-      + '<colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%">'
-      + '<col style="width:16%"><col style="width:10%"><col style="width:26%"></colgroup>';
-    h += '</thead><tbody>';
-      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Sektor</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">1D</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">20D</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">RS vs IHSG (1D)</th>'
-      + '<th style="text-align:right;padding:3px 6px;font-weight:600">Emiten</th>'
-      + '<th style="text-align:left;padding:3px 6px;font-weight:600">Terbesar</th></tr>';
-    var rows = (sec.top || []).map(function (x) { return ['▲', x]; })
-      .concat((sec.bottom || []).map(function (x) { return ['▼', x]; }));
-    rows.forEach(function (pair) {
-      var x = pair[1];
-      var click = x.cp_sector ? ' onclick="mrGoSector(\'' + esc(x.cp_sector) + '\')" style="cursor:pointer;color:var(--bl)"' : '';
-      h += '<tr style="border-bottom:1px solid var(--b1)">'
-        + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"' + click + ' title="' + esc(x.sector || '') + '">' + pair[0] + ' ' + esc(x.sector) + '</td>'
-        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_1d) + '">' + mrSigned(x.chg_1d, '%') + '</td>'
-        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.chg_20d) + '">' + mrSigned(x.chg_20d, '%') + '</td>'
-        + '<td style="padding:3px 6px;text-align:right;color:' + mrColor(x.rs_vs_ihsg_1d) + '">' + mrSigned(x.rs_vs_ihsg_1d, '%') + '</td>'
-        + '<td style="padding:3px 6px;text-align:right;color:var(--t3)">' + (x.members || 0) + '</td>'
-        + '<td style="padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (x.top_stocks || []).map(function (t) {
-          return '<span class="code" onclick="sdOpenTicker(\'' + esc(t) + '\')" style="cursor:pointer;font-size:10px;font-weight:600;margin-right:4px">' + esc(t) + '</span>';
-        }).join('<span style="color:var(--t3)"> · </span>') + '</td></tr>';
-    });
-    h += '</table>';
   }
 
   // Konsentrasi kepemilikan ≥1% tidak ditampilkan (permintaan owner 20 Okt 2026).
