@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={mkt:false,idx:false,diary:false,analysis:false,bt:false};
+var tabLoaded={regime:false,mkt:false,idx:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -49,6 +49,9 @@ function stab(n,el){
   // Lazy load — only load content on first visit
   // Market tab kini mendarat di sub-tab Commodities: Overview dihapus karena isinya
   // sudah ada di Market Regime (permintaan pemilik, 21 Okt 2026).
+  // Market Regime kini menu sendiri (dulu sub-tab pertama Analysis). Dimuat saat pertama
+  // dibuka, lalu di-refresh setiap kali tab diklik karena angkanya bergantung pipeline harian.
+  if(n==='regime'){tabLoaded.regime=true;if(typeof loadMarketRegime==='function')loadMarketRegime();}
   if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
   if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
@@ -60,6 +63,15 @@ function stab(n,el){
   // Re-trigger load for tabs that need refresh
   if(n==='idx'&&typeof loadMarketIntel==='function')loadMarketIntel();
   if(n==='analysis'&&typeof loadMarketRegime==='function')loadMarketRegime();
+}
+
+// Market Regime: satu-satunya sub-tab di panelnya sendiri. Fungsi ini ada supaya tombol
+// `.wt-b` di panel itu tidak memanggil anaSubTab() yang menargetkan #t-analysis.
+function markRegimeTab(b){
+  var panel=b.closest('.tpanel');
+  panel.querySelectorAll('.wt-b').forEach(function(x){x.classList.remove('on')});
+  b.classList.add('on');
+  if(typeof loadMarketRegime==='function')loadMarketRegime();
 }
 
 // Market sub-tabs
@@ -81,7 +93,6 @@ function anaSubTab(n,b){
   b.classList.add('on');
   panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
   $('ana-'+n).classList.add('on');
-  if(n==='regime'&&typeof loadMarketRegime==='function')loadMarketRegime();
   if(n==='usdaily'&&typeof loadUSDaily==='function')loadUSDaily();
   if(n==='sectors'&&typeof loadSectorView==='function')loadSectorView();
   if(n==='compare'&&typeof renderCompare==='function')renderCompare();
@@ -115,9 +126,9 @@ document.addEventListener('keydown',function(e){
   // / = Focus search
   if(e.key==='/'){e.preventDefault();var gs=$('gsearch');if(gs){gs.focus();gs.select();}}
 
-  // 1-4 = Tab switch
-  if(e.key>='1'&&e.key<='4'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['mkt','idx','diary','analysis'];
+  // 1-5 = Tab switch (Regime masuk urutan pertama; sebelumnya hanya 4 tab)
+  if(e.key>='1'&&e.key<='5'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+    var tabNames=['regime','mkt','idx','diary','analysis'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }

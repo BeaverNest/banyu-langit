@@ -1348,6 +1348,7 @@ document.addEventListener('click', function(e) {
 // ═══ OPEN FROM GLOBAL SEARCH ═══
 window.sdOpenTicker = function(code) {
   sdCode = code;
+  // Stock Information masih sub-tab di dalam Analysis — tetap ke sana.
   if (typeof stab === 'function') stab('analysis');
   if (typeof anaSubTab === 'function') {
     var btn = document.querySelector('.wt-b[onclick*="stockdetail"]');

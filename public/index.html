@@ -61,25 +61,31 @@
 <!-- SIDEBAR -->
 <div class="sidebar" id="sidebar">
   <div class="sidebar-tabs">
-    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [1]">
+    <!-- Market Regime dinaikkan jadi menu sendiri di posisi paling atas (permintaan owner
+         24 Okt 2026). Sebelumnya ia sub-tab pertama di dalam Analysis, sehingga jalur
+         masuknya tersembunyi dua klik dan nomor shortcut [1] dipakai Market. -->
+    <div class="sidebar-tab" onclick="stab('regime',this)" data-tab="regime" title="Market Regime [1]">
+      <span class="tab-icon">🌐</span><span class="tab-label">Regime</span>
+    </div>
+    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [2]">
       <span class="tab-icon">📈</span><span class="tab-label">Market</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="Market Intel [2]">
+    <div class="sidebar-tab" onclick="stab('idx',this)" data-tab="idx" title="Market Intel [3]">
       <span class="tab-icon">📊</span><span class="tab-label">Market Intel</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [3]">
+    <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [4]">
       <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [4]">
+    <div class="sidebar-tab" onclick="stab('analysis',this)" data-tab="analysis" title="Analysis [5]">
       <span class="tab-icon">🔬</span><span class="tab-label">Analysis</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [5]">
+    <div class="sidebar-tab" onclick="stab('pf',this)" data-tab="pf" title="Paper Trading [6]">
       <span class="tab-icon">📒</span><span class="tab-label">Paper</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [6]">
+    <div class="sidebar-tab" onclick="stab('bt',this)" data-tab="bt" title="Backtest [7]">
       <span class="tab-icon">🧪</span><span class="tab-label">Backtest</span>
     </div>
-    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [7]">
+    <div class="sidebar-tab" onclick="stab('scr',this)" data-tab="scr" title="Screener [8]">
       <span class="tab-icon">🔎</span><span class="tab-label">Screener</span>
     </div>
 
@@ -103,6 +109,16 @@
     <button class="tab" onclick="stab('diary',this)">Diary</button>
     <button class="tab" onclick="stab('analysis',this)">Analysis</button>
 
+  </div>
+
+  <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
+       Panel dipindah utuh dari dalam Analysis; id `mr-content` dan `ana-regime` dipertahankan
+       supaya loadMarketRegime() dan semua query DOM lama tetap bekerja tanpa diubah. -->
+  <div class="tpanel" id="t-regime">
+    <div class="wt">
+      <button class="wt-b on" onclick="markRegimeTab(this)">Market Regime</button>
+    </div>
+    <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
   <!-- TAB 1: MARKET -->
@@ -157,14 +173,12 @@
   </div>
   <div class="tpanel" id="t-analysis">
     <div class="wt">
-      <button class="wt-b on" onclick="anaSubTab('regime',this)">Market Regime</button>
-      <button class="wt-b" onclick="anaSubTab('usdaily',this)">US Stocks</button>
+      <button class="wt-b on" onclick="anaSubTab('usdaily',this)">US Stocks</button>
       <button class="wt-b" onclick="anaSubTab('stockdetail',this)">Stock Information</button>
       <button class="wt-b" onclick="anaSubTab('compare',this)">Data Explorer</button>
       <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
 
     </div>
-    <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-usdaily"><div id="ud-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-sectors" style="display:none"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>

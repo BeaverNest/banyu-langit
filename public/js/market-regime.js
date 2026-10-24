@@ -1555,7 +1555,9 @@ function mrRenderCoverage(cov) {
 
 // ═══ Navigasi: sektor → Screener terfilter, ticker → Stock Detail ═══
 function mrGoSector(cpSector) {
-  if (typeof stab === 'function') stab('analysis');
+  // Dulu mendarat di sub-tab Screener dalam Analysis. Screener kini panel sendiri
+  // (`t-scr`, dibuka lewat stab('scr')), jadi Analysis tidak lagi punya tujuan di sini.
+  if (typeof stab === 'function') stab('scr');
   setTimeout(function () {
     var btn = document.querySelector('.wt-b[onclick*="screener"]');
     if (btn && typeof anaSubTab === 'function') anaSubTab('screener', btn);
