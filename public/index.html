@@ -210,7 +210,12 @@
 
   <!-- TAB 4: ANALYSIS -->
   <div class="tpanel" id="t-scr">
+    <div class="wt" id="scr-mkt-tabs">
+      <button class="wt-b on" data-mkt="IDX" onclick="scrMarket('IDX',this)">IDX</button>
+      <button class="wt-b" data-mkt="US" onclick="scrMarket('US',this)">US</button>
+    </div>
     <div class="wp on" id="ana-screener"><div id="scr-content" style="flex:1;overflow-y:auto"></div></div>
+    <div class="wp" id="ana-scrus"><div id="scr-us" style="flex:1;overflow-y:auto"></div></div>
   </div>
   <div class="tpanel" id="t-analysis">
     <div class="wt">
@@ -276,6 +281,7 @@
 <script src="/js/gsearch.js"></script>
 <script src="/js/idx-daily-v2.js"></script>
 <script src="/js/screener.js"></script>
+<script src="/js/screener-us.js"></script>
 <script src="/js/sector-intelligence.js"></script>
 
 <script src="/js/ihsg-page.js"></script>

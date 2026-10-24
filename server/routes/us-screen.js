@@ -25,6 +25,7 @@ const router = express.Router();
 const SORTS = {
   last: 's.close', ret_1d: 's.ret_1d', ret_5d: 's.ret_5d', ret_20d: 's.ret_20d',
   mcap: 'm.market_cap', vol_ratio: 's.vol_ratio', dist_ma200: 's.dist_ma200',
+  rsi14: 's.rsi14', ret_1d: 's.ret_1d', ret_5d: 's.ret_5d',
 };
 const f2 = v => (v === null || v === undefined || Number.isNaN(v)) ? null : Math.round(v * 100) / 100;
 
@@ -35,15 +36,34 @@ router.get('/screen', (req, res) => {
   if (!SORTS[sortKey]) return res.status(400).json({ ok: false, error: `sort tidak dikenal: ${sortKey}`, allowed: Object.keys(SORTS) });
   const order = String(req.query.order || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   // sesi terakhir yang benar-benar ada isinya
   const refDate = db.prepare("SELECT MAX(trade_date) d FROM signals_daily WHERE market='US'").get()?.d;
   if (!refDate) return res.json({ ok: true, as_of: null, rows: [], total: 0 });
 
-  const where = ["s.market='US'", 's.trade_date=?'];
-  const args = [refDate];
+  const num = k => (req.query[k] === undefined || req.query[k] === '' || Number.isNaN(Number(req.query[k]))) ? null : Number(req.query[k]);
+  const inclEtf = String(req.query.incl_etf || '') === '1';
+  const minPrice = num('min_price');
+
+  // ── Universe ──────────────────────────────────────────────────────────────
+  // Default: hanya EQUITY yang punya metadata. ETF dibuang bukan karena "tidak
+  // menarik" tapi karena definisinya beda: ETF tidak punya sektor/industri,
+  // harganya turunan dari isi keranjang, dan ETF leveraged (SOXS 3x bear)
+  // memuncaki daftar return dengan angka yang bukan pergerakan emiten.
+  const baseWhere = ["s.market='US'", 's.trade_date=?'];
+  const baseArgs = [refDate];
+  if (!inclEtf) {
+    baseWhere.push("m.code IS NOT NULL");
+    baseWhere.push("COALESCE(m.quote_type,'EQUITY') <> 'ETF'");
+  }
+  const baseSql = `FROM signals_daily s LEFT JOIN us_symbols_meta m ON m.code = s.code WHERE ${baseWhere.join(' AND ')}`;
+  const universe = db.prepare(`SELECT COUNT(*) n ${baseSql}`).get(...baseArgs).n;
+
+  // ── Filter ────────────────────────────────────────────────────────────────
+  const where = baseWhere.slice();
+  const args = baseArgs.slice();
 
   if (req.query.q) {
     where.push('(s.code LIKE ? OR m.name LIKE ?)');
@@ -52,33 +72,65 @@ router.get('/screen', (req, res) => {
   }
   if (req.query.sector) { where.push('m.sector = ?'); args.push(String(req.query.sector)); }
   if (req.query.industry) { where.push('m.industry LIKE ?'); args.push(`%${String(req.query.industry)}%`); }
-  if (req.query.min_mcap) { where.push('m.market_cap >= ?'); args.push(Number(req.query.min_mcap) * 1e9); }
-  if (req.query.max_mcap) { where.push('m.market_cap <= ?'); args.push(Number(req.query.max_mcap) * 1e9); }
+  if (minPrice !== null) { where.push('s.close >= ?'); args.push(minPrice); }
+  if (num('max_price') !== null) { where.push('s.close <= ?'); args.push(num('max_price')); }
+  if (num('min_mcap') !== null) { where.push('m.market_cap >= ?'); args.push(num('min_mcap') * 1e9); }
+  if (num('max_mcap') !== null) { where.push('m.market_cap <= ?'); args.push(num('max_mcap') * 1e9); }
+  if (num('min_rsi') !== null) { where.push('s.rsi14 >= ?'); args.push(num('min_rsi')); }
+  if (num('max_rsi') !== null) { where.push('s.rsi14 <= ?'); args.push(num('max_rsi')); }
+  if (num('min_dist200') !== null) { where.push('s.dist_ma200 >= ?'); args.push(num('min_dist200')); }
+  if (num('max_dist200') !== null) { where.push('s.dist_ma200 <= ?'); args.push(num('max_dist200')); }
+  if (num('min_ret20') !== null) { where.push('s.ret_20d >= ?'); args.push(num('min_ret20')); }
+  if (num('max_ret20') !== null) { where.push('s.ret_20d <= ?'); args.push(num('max_ret20')); }
+  if (num('min_ret1') !== null) { where.push('s.ret_1d >= ?'); args.push(num('min_ret1')); }
+  ['trend_up', 'cross200_up', 'vol_spike', 'break20'].forEach(f => {
+    if (String(req.query['f_' + f] || '') === '1') where.push(`s.f_${f} = 1`);
+  });
 
   const whereSql = where.join(' AND ');
-  const base = `FROM signals_daily s LEFT JOIN us_symbols_meta m ON m.code = s.code WHERE ${whereSql}`;
 
-  const total = db.prepare(`SELECT COUNT(*) n ${base}`).get(...args).n;
-  const rows = db.prepare(`SELECT s.code, m.name, m.sector, m.industry, m.market_cap, s.close,
-      s.ret_1d, s.ret_5d, s.ret_20d, s.vol_ratio, s.dist_ma200, s.rsi14,
+  const total = db.prepare(`SELECT COUNT(*) n ${baseSql.replace(baseWhere.join(' AND '), whereSql)}`).get(...args).n;
+
+  const rows = db.prepare(`SELECT s.code, m.name, m.sector, m.industry, m.market_cap, m.quote_type, s.close,
+      s.ret_1d, s.ret_5d, s.ret_20d, s.vol_ratio, s.dist_ma200, s.rsi14, s.macd_hist,
       s.f_trend_up, s.f_cross200_up, s.f_vol_spike, s.f_break20
-    ${base} ORDER BY ${SORTS[sortKey]} ${order} NULLS LAST LIMIT ? OFFSET ?`).all(...args, limit, offset);
+    ${baseSql.replace(baseWhere.join(' AND '), whereSql)}
+    ORDER BY ${SORTS[sortKey]} ${order} NULLS LAST LIMIT ? OFFSET ?`).all(...args, limit, offset);
+
+  // ── Apa yang dibuang, supaya angkanya tidak terlihat "pasar = 1.135" padahal
+  // signals_daily berisi 1.399 baris. Dihitung terpisah, bukan ditebak di UI.
+  const allN = db.prepare("SELECT COUNT(*) n FROM signals_daily WHERE market='US' AND trade_date=?").get(refDate).n;
+  const etfN = db.prepare(`SELECT COUNT(*) n FROM signals_daily s JOIN us_symbols_meta m ON m.code=s.code
+      WHERE s.market='US' AND s.trade_date=? AND m.quote_type='ETF'`).get(refDate).n;
+  const noMetaN = allN - db.prepare(`SELECT COUNT(*) n FROM signals_daily s JOIN us_symbols_meta m ON m.code=s.code
+      WHERE s.market='US' AND s.trade_date=?`).get(refDate).n;
+  const sub1N = db.prepare("SELECT COUNT(*) n FROM signals_daily WHERE market='US' AND trade_date=? AND close < 1").get(refDate).n;
 
   res.json({
     ok: true, generated_at: new Date().toISOString(), ms: Date.now() - t0,
-    as_of: refDate, market: 'US', total, limit, offset,
+    as_of: refDate, market: 'US', total, universe, limit, offset,
     sort: sortKey, order: order.toLowerCase(),
-    params: { q: req.query.q || null, sector: req.query.sector || null, industry: req.query.industry || null,
-      min_mcap: req.query.min_mcap || null, max_mcap: req.query.max_mcap || null },
-    sectors: db.prepare("SELECT sector, COUNT(*) n FROM us_symbols_meta WHERE sector<>'' GROUP BY sector ORDER BY n DESC").all(),
+    incl_etf: inclEtf,
+    excluded: { all: allN, etf: etfN, no_meta: noMetaN, below_1usd: sub1N },
+    params: {
+      q: req.query.q || null, sector: req.query.sector || null, industry: req.query.industry || null,
+      min_price: minPrice, max_price: num('max_price'),
+      min_mcap: num('min_mcap'), max_mcap: num('max_mcap'),
+      min_rsi: num('min_rsi'), max_rsi: num('max_rsi'),
+      min_dist200: num('min_dist200'), max_dist200: num('max_dist200'),
+      min_ret20: num('min_ret20'), max_ret20: num('max_ret20'), min_ret1: num('min_ret1'),
+      flags: ['trend_up', 'cross200_up', 'vol_spike', 'break20'].filter(f => String(req.query['f_' + f] || '') === '1'),
+    },
+    sectors: db.prepare("SELECT sector, COUNT(*) n FROM us_symbols_meta WHERE sector<>'' AND COALESCE(quote_type,'EQUITY')<>'ETF' GROUP BY sector ORDER BY n DESC").all(),
     rows: rows.map(r => ({
       code: r.code, name: r.name || null, sector: r.sector || null, industry: r.industry || null,
+      quote_type: r.quote_type || null,
       last: f2(r.close), ret_1d: f2(r.ret_1d), ret_5d: f2(r.ret_5d), ret_20d: f2(r.ret_20d),
       mcap_b: r.market_cap ? f2(r.market_cap / 1e9) : null,
-      vol_ratio: f2(r.vol_ratio), dist_ma200: f2(r.dist_ma200), rsi14: f2(r.rsi14),
+      vol_ratio: f2(r.vol_ratio), dist_ma200: f2(r.dist_ma200), rsi14: f2(r.rsi14), macd_hist: f2(r.macd_hist),
       flags: { trend_up: !!r.f_trend_up, cross200_up: !!r.f_cross200_up, vol_spike: !!r.f_vol_spike, break20: !!r.f_break20 },
     })),
-    note: 'angka sudah diformat server (2 desimal); harga = adjusted close',
+    note: 'harga = adjusted close; mcap dalam miliar USD',
   });
 });
 
