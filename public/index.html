@@ -71,8 +71,11 @@
     <div class="sidebar-tab" onclick="stab('ihsg',this)" data-tab="ihsg" title="IHSG [2]">
       <span class="tab-icon">📉</span><span class="tab-label">IHSG</span>
     </div>
-    <div class="sidebar-tab on" onclick="stab('mkt',this)" data-tab="mkt" title="Market [3]">
-      <span class="tab-icon">📈</span><span class="tab-label">Market</span>
+    <!-- Menu News menggantikan menu Market (permintaan owner 24 Okt 2026). Market
+         sudah tidak punya isi: Commodities & BEI Announcements pindah ke IHSG,
+         dan News jadi menu sendiri di posisi yang sama. -->
+    <div class="sidebar-tab on" onclick="stab('news',this)" data-tab="news" title="News [3]">
+      <span class="tab-icon">📰</span><span class="tab-label">News</span>
     </div>
     <div class="sidebar-tab" onclick="stab('diary',this)" data-tab="diary" title="Diary [4]">
       <span class="tab-icon">📝</span><span class="tab-label">Diary</span>
@@ -105,7 +108,7 @@
 <div class="pL" id="pL">
   <!-- Old tabs hidden (CSS display:none), kept for backward compat -->
   <div class="tabs">
-    <button class="tab on" onclick="stab('mkt',this)">Market</button>
+    <button class="tab on" onclick="stab('news',this)">News</button>
     <button class="tab" onclick="stab('diary',this)">Diary</button>
     <button class="tab" onclick="stab('analysis',this)">Analysis</button>
 
@@ -154,13 +157,11 @@
     <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
-  <!-- TAB 1: MARKET — tinggal News. Commodities dan BEI Announcements pindah ke
-       menu IHSG (permintaan owner 24 Okt 2026). -->
-  <div class="tpanel on" id="t-mkt">
-    <div class="wt">
-      <button class="wt-b on" onclick="smkt('nws',this)">News</button>
-    </div>
-    <div class="wp on" id="m-nws">
+  <!-- TAB 1: NEWS — menu sendiri, menggantikan menu Market (owner 24 Okt 2026).
+       Id `nsi` dan `nsl` DIPERTAHANKAN: sNews() dan lNews() di watchlist.js
+       mencarinya lewat $() secara global, dan lNews() juga dipakai watchlist. -->
+  <div class="tpanel on" id="t-news">
+    <div class="wp on" id="news-panel">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading...</div></div>
     </div>

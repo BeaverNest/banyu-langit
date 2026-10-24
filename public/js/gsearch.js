@@ -462,7 +462,7 @@ function renderTickerPage(d) {
 
     // ─── ⑩ ANNOUNCEMENTS LINK ───
     if (d.announcements_count) {
-      h += '<div style="margin-top:10px;padding:8px 10px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1);display:flex;align-items:center;gap:8px;cursor:pointer" onclick="gsClose();stab(\'mkt\');setTimeout(function(){smkt(\'ann\',document.querySelector(\'.wt-b[onclick*=ann]\'));$(\'ann-q\').value=\'' + esc(d.code) + '\';loadAnnouncements()},200)">';
+      h += '<div style="margin-top:10px;padding:8px 10px;border-radius:4px;background:var(--bgH);border:1px solid var(--b1);display:flex;align-items:center;gap:8px;cursor:pointer" onclick="gsClose();stab(\'ihsg\');setTimeout(function(){ihsgTab(\'announcements\');$(\'ann-q\').value=\'' + esc(d.code) + '\';loadAnnouncements()},250)">';
       h += '<span style="font-size:14px">📋</span>';
       h += '<div><div style="font-size:var(--font-md);font-weight:600">' + d.announcements_count + ' BEI Announcements</div>';
       h += '<div style="font-size:var(--font-xs);color:var(--t3)">Click to view all announcements for ' + esc(d.code) + '</div></div>';

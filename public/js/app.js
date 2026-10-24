@@ -30,7 +30,7 @@ function toggleCompact(){
 }
 
 // ═══ LAZY LOAD TRACKER ═══
-var tabLoaded={regime:false,ihsg:false,mkt:false,diary:false,analysis:false,bt:false};
+var tabLoaded={regime:false,ihsg:false,news:false,diary:false,analysis:false,bt:false};
 
 // ═══ MAIN TAB ROUTING — sidebar ═══
 function stab(n,el){
@@ -62,7 +62,7 @@ function stab(n,el){
     if(typeof ihsgTab==='function') ihsgTab('overview');
     else if(typeof loadIhsgPage==='function') loadIhsgPage();
   }
-  if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
+  if(n==='news'){tabLoaded.news=true;if(typeof lNews==='function')lNews('');}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}
   if(n==='analysis'&&!tabLoaded.analysis){tabLoaded.analysis=true;}
   if(n==='scr'&&!tabLoaded.scr){tabLoaded.scr=true;if(typeof loadScreener==='function')loadScreener();}
@@ -76,17 +76,11 @@ function stab(n,el){
 // Market Regime: satu-satunya sub-tab di panelnya sendiri. Fungsi ini ada supaya tombol
 // `.wt-b` di panel itu tidak memanggil anaSubTab() yang menargetkan #t-analysis.
 // Market sub-tabs
-function smkt(n,b){
-  var panel=b.closest('.tpanel');
-  panel.querySelectorAll('.wt-b').forEach(function(x){x.classList.remove('on')});
-  b.classList.add('on');
-  panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
-  $('m-'+n).classList.add('on');
-  // Commodities (cmd) dan BEI Announcements (ann) PINDAH ke menu IHSG (owner 24 Okt
-  // 2026). Cabangnya dibuang dari sini — bukan dibiarkan, karena `$('m-cmd')` sekarang
-  // null dan akan melempar TypeError saat tombol lama masih tertekan lewat shortcut.
-  if(n==='nws')lNews('');
-}
+// ═══ MENU MARKET — DIHAPUS (owner 24 Okt 2026) ═══
+// Isinya sudah habis: Commodities & BEI Announcements -> menu IHSG, News -> menu
+// sendiri. smkt() ikut dihapus, bukan dibiarkan sebagai fungsi mati: ia melakukan
+// `$('m-'+n).classList` yang akan melempar TypeError kalau ada pemanggil lama
+// (bookmark, shortcut, tombol sisa) yang masih menekannya.
 
 // ═══ ANALYSIS SUB-TABS ═══
 function anaSubTab(n,b){
@@ -131,7 +125,7 @@ document.addEventListener('keydown',function(e){
   // (index.html: Market Regime [1] … Screener [8]). Menambah/menghapus menu berarti
   // dua tempat ini ikut diubah; kalau tidak, label menjanjikan tombol yang mati.
   if(e.key>='1'&&e.key<='8'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-    var tabNames=['regime','ihsg','mkt','diary','analysis','pf','bt','scr'];
+    var tabNames=['regime','ihsg','news','diary','analysis','pf','bt','scr'];
     var idx=parseInt(e.key)-1;
     if(idx<tabNames.length){stab(tabNames[idx]);e.preventDefault();}
   }
