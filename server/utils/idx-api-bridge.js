@@ -11,6 +11,8 @@ const path = require('path');
 const fs = require('fs');
 
 const IDX_DB_PATHS = [
+  // explicit override first: a checkout on another machine has its own IDX-API location
+  ...(process.env.IDX_DB_PATH ? [process.env.IDX_DB_PATH] : []),
   path.join(__dirname, '..', '..', 'IDX-API-main', 'data', 'database.sqlite'),
   path.join(__dirname, '..', '..', '..', 'IDX-API-main', 'data', 'database.sqlite'),
   '/app/IDX-API-main/data/database.sqlite'
