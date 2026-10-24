@@ -56,7 +56,7 @@ function ihsgTab(tab, btn) {
   bar.forEach(function (b) { b.classList.remove('on'); });
   if (btn) btn.classList.add('on');
   else {
-    var map = { overview: 'IHSG', sector: 'Sector Performance', flow: 'Sector/Industry Flow', stocklist: 'Stock List' };
+    var map = { overview: 'IHSG', sector: 'Sector Performance', flow: 'Sector/Industry Flow', stocklist: 'Stock List', stockdetail: 'Stock Information' };
     bar.forEach(function (b) { if (b.textContent.trim() === map[tab]) b.classList.add('on'); });
   }
 
@@ -93,6 +93,19 @@ function ihsgTab(tab, btn) {
     // idx-daily-v2 menyimpan shell; paksa render ulang supaya tabel muncul saat pertama dibuka.
     if (typeof idxShellRendered !== 'undefined') idxShellRendered = false;
     if (typeof loadIdxDaily === 'function') loadIdxDaily();
+    return;
+  }
+  if (tab === 'stockdetail') {
+    var sd = document.getElementById('ihsg-stockdetail');
+    if (sd) sd.classList.add('on');
+    // Stock Information butuh kode saham. Kalau belum ada yang dipilih (mis. user membuka
+    // tab ini langsung dari sidebar), jangan panggil loadStockDetail() dengan kode kosong —
+    // itu memicu request 404 dan panel kosong tanpa penjelasan. Tampilkan panduan singkat.
+    if (typeof sdCode !== 'undefined' && sdCode) {
+      if (typeof loadStockDetail === 'function') loadStockDetail();
+    } else if (typeof loadStockDetail === 'function') {
+      loadStockDetail();   // skrip sendiri menampilkan state "Enter ticker"
+    }
     return;
   }
 }

@@ -128,12 +128,16 @@
       <button class="wt-b" onclick="ihsgTab('sector',this)">Sector Performance</button>
       <button class="wt-b" onclick="ihsgTab('flow',this)">Sector/Industry Flow</button>
       <button class="wt-b" onclick="ihsgTab('stocklist',this)">Stock List</button>
+      <button class="wt-b" onclick="ihsgTab('stockdetail',this)">Stock Information</button>
     </div>
     <div class="wp on" id="ihsg-overview"><div id="ihsg-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <!-- Sector Performance & Sector/Industry Flow berbagi satu kontainer: keduanya
          dirender oleh loadSectorView() dan hanya berbeda pada secIntView. -->
     <div class="wp" id="ihsg-sector"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ihsg-stocklist"><div id="idx-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div></div>
+    <!-- Stock Information dipindah dari Analysis (permintaan owner 24 Okt 2026). Id `sd-content`
+         dipertahankan karena stock-detail.js mencari id itu secara global. -->
+    <div class="wp" id="ihsg-stockdetail"><div id="sd-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Enter ticker to analyze</div></div></div>
   </div>
 
   <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
@@ -196,7 +200,6 @@
   <div class="tpanel" id="t-analysis">
     <div class="wt">
       <button class="wt-b on" onclick="anaSubTab('usdaily',this)">US Stocks</button>
-      <button class="wt-b" onclick="anaSubTab('stockdetail',this)">Stock Information</button>
       <button class="wt-b" onclick="anaSubTab('compare',this)">Data Explorer</button>
       <button class="wt-b" onclick="anaSubTab('correlation',this)">Correlation</button>
 
@@ -204,7 +207,6 @@
     <div class="wp" id="ana-usdaily"><div id="ud-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="ana-stockdetail"><div id="sd-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Enter ticker to analyze</div></div></div>
 
   </div>
 

@@ -1348,15 +1348,16 @@ document.addEventListener('click', function(e) {
 // ═══ OPEN FROM GLOBAL SEARCH ═══
 window.sdOpenTicker = function(code) {
   sdCode = code;
-  // Stock Information masih sub-tab di dalam Analysis — tetap ke sana.
-  if (typeof stab === 'function') stab('analysis');
-  if (typeof anaSubTab === 'function') {
-    var btn = document.querySelector('.wt-b[onclick*="stockdetail"]');
-    if (btn) anaSubTab('stockdetail', btn);
-    else {
-      document.querySelectorAll('#t-analysis .wp').forEach(function(p) { p.classList.remove('on'); });
-      var panel = $('ana-stockdetail'); if (panel) panel.classList.add('on');
-    }
+  // Stock Information pindah ke menu IHSG (owner, 24 Okt 2026). Ini satu-satunya jalur
+  // masuk dari tautan ticker di seluruh app (Stock List, leaderboard, watchlist, search),
+  // jadi kalau fungsi ini masih menunjuk #t-analysis, SEMUA tautan itu mendarat di panel
+  // yang sudah tidak ada.
+  if (typeof stab === 'function') stab('ihsg');
+  if (typeof ihsgTab === 'function') {
+    var btn = document.querySelector('#t-ihsg .wt-b[onclick*="stockdetail"]');
+    ihsgTab('stockdetail', btn);
+  } else {
+    var panel = $('ihsg-stockdetail'); if (panel) panel.classList.add('on');
   }
   loadStockDetail();
   setTimeout(sdLoad, 100);
