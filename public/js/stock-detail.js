@@ -1549,6 +1549,11 @@ var SD_CMP_NPM_UNRELIABLE = ['Keuangan'];
 
 var SD_CMP = null;       // payload terakhir
 var SD_CMP_METRIC = 'ret_20d';
+// Sort terpisah dari metrik chip. Chip = metrik yang disorot & dipakai untuk bar
+// "vs median"; sort = urutan baris. Dua hal berbeda: user bisa mengurutkan baris
+// berdasarkan PER sambil tetap menyorot return 1M.
+var SD_CMP_SORT = 'ret_20d';
+var SD_CMP_DIR = -1;   // -1 = turun (terbesar dulu), 1 = naik
 var SD_CMP_LOADING = false;
 
 var SD_CMP_METRICS = [
@@ -1618,6 +1623,35 @@ function sdCmpLoad(code) {
 function sdCmpSetMetric(k) {
   SD_CMP_METRIC = k;
   sdCmpRender();
+}
+
+function sdCmpSort(key) {
+  if (SD_CMP_SORT === key) {
+    SD_CMP_DIR = -SD_CMP_DIR;          // klik ulang = balik arah
+  } else {
+    SD_CMP_SORT = key;
+    // Kolom angka: terbesar dulu (yang biasanya dicari). Kolom teks: A->Z dulu,
+    // karena klik "Emiten" yang langsung memberi Z->A terasa terbalik.
+    SD_CMP_DIR = (key === 'code' || key === 'name') ? 1 : -1;
+  }
+  sdCmpRender();
+}
+
+// Nilai untuk pengurutan. Emiten tanpa data SELALU di bawah, arah apa pun: kalau
+// dibiarkan, `null` akan dianggap 0 dan emiten tanpa PER muncul di posisi "termurah"
+// — itu klaim yang salah, bukan sekadar urutan yang aneh.
+function sdCmpSortVal(s, key) {
+  if (key === 'code') return s.code || '';
+  if (key === 'close') return s.close;
+  if (key === 'name') return s.name || '';
+  var v = s[key];
+  if (key === 'npm' && SD_CMP_NPM_UNRELIABLE.indexOf((SD_CMP || {}).sector) >= 0) return null;
+  if (v == null || !isFinite(v)) return null;
+  // PER/PBV <= 0 = laba/ekuitas negatif, bukan valuasi murah. Kalau ikut diurutkan
+  // menaik, emiten rugi memenuhi puncak tabel seolah paling murah — itu klaim salah.
+  // Diperlakukan sama seperti data kosong: selalu di bawah.
+  if ((key === 'per' || key === 'pbv') && v <= 0) return null;
+  return v;
 }
 
 function sdCmpRender() {
@@ -1700,15 +1734,33 @@ function sdCmpRender() {
 
   h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
   h += '<thead><tr style="border-bottom:2px solid var(--b1)">';
-  var th = 'padding:5px 4px;font-size:9px;text-transform:uppercase;letter-spacing:.2px;color:var(--t3);font-weight:600;text-align:right;white-space:nowrap';
-  h += '<th style="' + th + ';text-align:left">Emiten</th>';
-  h += '<th style="' + th + '">Harga</th>';
-  for (var q2 = 0; q2 < SD_CMP_METRICS.length; q2++) {
-    var md2 = SD_CMP_METRICS[q2];
-    var on2 = md2.k === SD_CMP_METRIC;
-    h += '<th style="' + th + ';' + (on2 ? 'color:var(--am)' : '') + '">' + md2.label + '</th>';
+  var thBase = 'padding:5px 4px;font-size:9px;text-transform:uppercase;letter-spacing:.2px;font-weight:600;text-align:right;white-space:nowrap;';
+
+  // Header yang bisa diklik. Dua penanda berbeda dan keduanya sengaja dibedakan:
+  //   - panah ▲/▼  = kolom URUTAN (SD_CMP_SORT)
+  //   - warna am   = kolom yang sedang DISOROT (SD_CMP_METRIC, penggerak bar vs median)
+  // Menyatukan keduanya membuat user mengira mengurutkan = mengganti metrik.
+  function cmpTh(key, label, align) {
+    var isSort = key === SD_CMP_SORT;
+    var arrow = isSort ? (SD_CMP_DIR < 0 ? ' ▾' : ' ▴') : '';
+    var col = isSort ? 'var(--am)' : (key === SD_CMP_METRIC ? 'var(--t2)' : 'var(--t3)');
+    var style = thBase + 'cursor:pointer;user-select:none;color:' + col + ';'
+      + (isSort ? 'text-decoration:underline;text-underline-offset:2px;' : '')
+      + (align === 'left' ? 'text-align:left;' : '');
+    var title = 'Klik untuk urutkan berdasarkan ' + label
+      + (isSort ? (SD_CMP_DIR < 0 ? ' (menurun)' : ' (menaik)') : '');
+    return '<th onclick="sdCmpSort(\'' + key + '\')" title="' + esc(title) + '" '
+      + 'style="' + style + '">' + label + arrow + '</th>';
   }
-  h += '<th style="' + th + ';text-align:left;min-width:74px">vs median</th>';
+
+  h += cmpTh('code', 'Emiten', 'left');
+  h += cmpTh('close', 'Harga');
+  for (var q2 = 0; q2 < SD_CMP_METRICS.length; q2++) {
+    h += cmpTh(SD_CMP_METRICS[q2].k, SD_CMP_METRICS[q2].label);
+  }
+  // "vs median" bukan kolom data sendiri — nilainya turunan dari metrik yang disorot,
+  // jadi tidak bisa diurutkan terpisah.
+  h += '<th style="' + thBase + 'text-align:left;min-width:74px">vs median</th>';
   h += '</tr></thead><tbody>';
 
   // Median row dulu supaya jadi garis pembanding yang dibaca sebelum baris lain.
@@ -1725,8 +1777,19 @@ function sdCmpRender() {
   h += '<td style="padding:5px 4px;color:var(--t3);font-size:9px">nol</td>';
   h += '</tr>';
 
-  for (var r = 0; r < d.stats.length; r++) {
-    var s = d.stats[r];
+  // Urutan baris mengikuti header yang diklik. Salinan array supaya payload asli
+  // (dipakai untuk menghitung median & bar) tidak ikut berubah.
+  var rowsSorted = d.stats.slice().sort(function (a, b) {
+    var av = sdCmpSortVal(a, SD_CMP_SORT), bv = sdCmpSortVal(b, SD_CMP_SORT);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;          // tanpa data selalu di bawah
+    if (bv == null) return -1;
+    if (typeof av === 'string') return SD_CMP_DIR * av.localeCompare(bv);
+    return SD_CMP_DIR * (av - bv);
+  });
+
+  for (var r = 0; r < rowsSorted.length; r++) {
+    var s = rowsSorted[r];
     var isSelf = s.isSelf;
     var rowBg = isSelf ? 'rgba(245,158,11,0.10)' : 'transparent';
     var val = s[SD_CMP_METRIC];
