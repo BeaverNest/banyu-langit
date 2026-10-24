@@ -56,7 +56,7 @@ function ihsgTab(tab, btn) {
   bar.forEach(function (b) { b.classList.remove('on'); });
   if (btn) btn.classList.add('on');
   else {
-    var map = { overview: 'IHSG', sector: 'Sector Performance', flow: 'Sector/Industry Flow', stocklist: 'Stock List', stockdetail: 'Stock Information' };
+    var map = { overview: 'IHSG', sector: 'Sector Performance', flow: 'Sector/Industry Flow', stocklist: 'Stock List', stockdetail: 'Stock Information', commodities: 'Commodities', announcements: 'BEI Announcements' };
     bar.forEach(function (b) { if (b.textContent.trim() === map[tab]) b.classList.add('on'); });
   }
 
@@ -106,6 +106,21 @@ function ihsgTab(tab, btn) {
     } else if (typeof loadStockDetail === 'function') {
       loadStockDetail();   // skrip sendiri menampilkan state "Enter ticker"
     }
+    return;
+  }
+  // Commodities & BEI Announcements pindah dari menu Market (owner 24 Okt 2026).
+  // Keduanya memakai loader yang SUDAH ADA (commodities.js dan loadAnnouncements()
+  // di app.js) — tidak ada logika data baru di sini, hanya pemindahan wadah.
+  if (tab === 'commodities') {
+    var cm = document.getElementById('ihsg-commodities');
+    if (cm) cm.classList.add('on');
+    if (typeof loadCommodities === 'function') loadCommodities();
+    return;
+  }
+  if (tab === 'announcements') {
+    var an = document.getElementById('ihsg-announcements');
+    if (an) an.classList.add('on');
+    if (typeof loadAnnouncements === 'function') loadAnnouncements();
     return;
   }
 }

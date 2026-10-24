@@ -125,6 +125,8 @@
       <button class="wt-b" onclick="ihsgTab('flow',this)">Sector/Industry Flow</button>
       <button class="wt-b" onclick="ihsgTab('stocklist',this)">Stock List</button>
       <button class="wt-b" onclick="ihsgTab('stockdetail',this)">Stock Information</button>
+      <button class="wt-b" onclick="ihsgTab('commodities',this)">Commodities</button>
+      <button class="wt-b" onclick="ihsgTab('announcements',this)">BEI Announcements</button>
     </div>
     <div class="wp on" id="ihsg-overview"><div id="ihsg-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
     <!-- Sector Performance & Sector/Industry Flow berbagi satu kontainer: keduanya
@@ -134,6 +136,15 @@
     <!-- Stock Information dipindah dari Analysis (permintaan owner 24 Okt 2026). Id `sd-content`
          dipertahankan karena stock-detail.js mencari id itu secara global. -->
     <div class="wp" id="ihsg-stockdetail"><div id="sd-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Enter ticker to analyze</div></div></div>
+    <!-- Commodities & BEI Announcements dipindah dari menu Market (owner 24 Okt 2026).
+         Id `cmd-content` dan `ann-list` DIPERTAHANKAN karena commodities.js dan
+         loadAnnouncements() di app.js mencarinya secara global; mengganti id berarti
+         mengubah dua modul sekaligus tanpa manfaat. -->
+    <div class="wp" id="ihsg-commodities"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Memuat komoditas…</div></div></div>
+    <div class="wp" id="ihsg-announcements">
+      <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
+      <div class="nlist" id="ann-list"><div class="ne">Tekan Search untuk melihat pengumuman BEI</div></div>
+    </div>
   </div>
 
   <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
@@ -143,21 +154,15 @@
     <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
-  <!-- TAB 1: MARKET -->
+  <!-- TAB 1: MARKET — tinggal News. Commodities dan BEI Announcements pindah ke
+       menu IHSG (permintaan owner 24 Okt 2026). -->
   <div class="tpanel on" id="t-mkt">
     <div class="wt">
-      <button class="wt-b on" onclick="smkt('cmd',this)">Commodities</button>
-      <button class="wt-b" onclick="smkt('nws',this)">News</button>
-      <button class="wt-b" onclick="smkt('ann',this)">BEI Announcements</button>
+      <button class="wt-b on" onclick="smkt('nws',this)">News</button>
     </div>
-    <div class="wp on" id="m-cmd"><div id="cmd-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="m-nws">
+    <div class="wp on" id="m-nws">
       <div class="nbar"><input id="nsi" placeholder="Ticker or keyword" onkeydown="if(event.key==='Enter')sNews()"><button onclick="sNews()">Search</button></div>
       <div class="nlist" id="nsl"><div class="ne">Loading...</div></div>
-    </div>
-    <div class="wp" id="m-ann">
-      <div class="nbar"><input id="ann-q" placeholder="Search ticker or keyword..." onkeydown="if(event.key==='Enter')loadAnnouncements()"><button onclick="loadAnnouncements()">Search</button></div>
-      <div class="nlist" id="ann-list"><div class="ne">Click Search or load to see BEI announcements</div></div>
     </div>
   </div>
 

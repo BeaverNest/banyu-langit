@@ -82,9 +82,10 @@ function smkt(n,b){
   b.classList.add('on');
   panel.querySelectorAll('.wp').forEach(function(p){p.classList.remove('on')});
   $('m-'+n).classList.add('on');
+  // Commodities (cmd) dan BEI Announcements (ann) PINDAH ke menu IHSG (owner 24 Okt
+  // 2026). Cabangnya dibuang dari sini — bukan dibiarkan, karena `$('m-cmd')` sekarang
+  // null dan akan melempar TypeError saat tombol lama masih tertekan lewat shortcut.
   if(n==='nws')lNews('');
-  if(n==='ann')loadAnnouncements();
-  if(n==='cmd'&&typeof loadCommodities==='function')loadCommodities();
 }
 
 // ═══ ANALYSIS SUB-TABS ═══
