@@ -189,9 +189,6 @@ body{background:var(--bg0);color:var(--t1);font-family:var(--f);font-size:var(--
 }
 .sidebar-tab:hover{background:var(--bgH);color:var(--t2)}
 .sidebar-tab.on{color:var(--bl);border-left-color:var(--bl);background:var(--blB)}
-/* Pemisah tipis setelah menu teratas (Market Regime): memberi jeda visual antara panel
-   ringkasan pasar dan menu operasional di bawahnya, tanpa menambah elemen baru. */
-.sidebar-tab[data-tab="regime"]{margin-bottom:6px;border-bottom:1px solid var(--b1)}
 .sidebar-tab .tab-icon{width:20px;text-align:center;font-size:14px;flex-shrink:0}
 .sidebar-tab .tab-label{opacity:0;transition:opacity .1s;font-size:var(--font-sm)}
 .sidebar.expanded .sidebar-tab .tab-label{opacity:1}

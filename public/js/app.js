@@ -67,13 +67,6 @@ function stab(n,el){
 
 // Market Regime: satu-satunya sub-tab di panelnya sendiri. Fungsi ini ada supaya tombol
 // `.wt-b` di panel itu tidak memanggil anaSubTab() yang menargetkan #t-analysis.
-function markRegimeTab(b){
-  var panel=b.closest('.tpanel');
-  panel.querySelectorAll('.wt-b').forEach(function(x){x.classList.remove('on')});
-  b.classList.add('on');
-  if(typeof loadMarketRegime==='function')loadMarketRegime();
-}
-
 // Market sub-tabs
 function smkt(n,b){
   var panel=b.closest('.tpanel');

@@ -61,9 +61,9 @@
 <!-- SIDEBAR -->
 <div class="sidebar" id="sidebar">
   <div class="sidebar-tabs">
-    <!-- Market Regime dinaikkan jadi menu sendiri di posisi paling atas (permintaan owner
-         24 Okt 2026). Sebelumnya ia sub-tab pertama di dalam Analysis, sehingga jalur
-         masuknya tersembunyi dua klik dan nomor shortcut [1] dipakai Market. -->
+    <!-- Market Regime = menu biasa di daftar sidebar, hanya posisinya nomor satu
+         (permintaan owner 24 Okt 2026). Bukan blok terpisah: tanpa margin/pemisah
+         khusus, supaya jarak antar-item sama seperti menu lain. -->
     <div class="sidebar-tab" onclick="stab('regime',this)" data-tab="regime" title="Market Regime [1]">
       <span class="tab-icon">🌐</span><span class="tab-label">Regime</span>
     </div>
@@ -115,9 +115,6 @@
        Panel dipindah utuh dari dalam Analysis; id `mr-content` dan `ana-regime` dipertahankan
        supaya loadMarketRegime() dan semua query DOM lama tetap bekerja tanpa diubah. -->
   <div class="tpanel" id="t-regime">
-    <div class="wt">
-      <button class="wt-b on" onclick="markRegimeTab(this)">Market Regime</button>
-    </div>
     <div class="wp on" id="ana-regime"><div id="mr-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
   </div>
 
