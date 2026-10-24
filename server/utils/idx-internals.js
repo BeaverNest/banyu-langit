@@ -42,6 +42,12 @@ const SECTOR_LABELS = {
   'IDX Sector Transportation & Logistic': 'Transportasi & Logistik',
 };
 
+// Satu angka untuk SEMUA seri chart L4. Dulu IHSG mengambil 60 sesi (dapat 40 karena rail
+// idx_indices baru 40 bar) sementara foreign flow mengambil 20, jadi dua chart bertumpuk
+// menampilkan rentang waktu berbeda — batang foreign flow hanya menutupi separuh garis IHSG.
+// Kalau rentang salah satu seri perlu diubah, ubah di sini, bukan di query masing-masing.
+const SERIES_SESSIONS = 40;
+
 function sessionsBack(db, n) {
   return db.prepare('SELECT DISTINCT trade_date AS d FROM idx_daily ORDER BY trade_date DESC LIMIT ?')
     .all(n).map(r => r.d).reverse();          // ASC
@@ -88,7 +94,7 @@ function buildInternals(db, opts) {
   // bukan dua sumber tanggal berbeda.
   let ihsgHistory = null;
   try {
-    const rowsAll = db.prepare("SELECT trade_date AS d, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT 60").all();
+    const rowsAll = db.prepare(`SELECT trade_date AS d, close FROM idx_indices WHERE index_code='COMPOSITE' ORDER BY trade_date DESC LIMIT ${SERIES_SESSIONS}`).all();
     if (rowsAll.length >= 2) {
       ihsgHistory = { dates: rowsAll.map(r => r.d).reverse(), close: rowsAll.map(r => r.close).reverse() };
     }
@@ -158,31 +164,38 @@ function buildInternals(db, opts) {
       if (chg <= -0.15 * 0.995) b.arb++;
     }
   }
-  const last20 = dates.slice(-20).filter(d => byDate.has(d)).reverse();  // DESC, terbaru dulu
+  // Seri untuk chart L4 memakai jendela SERIES_SESSIONS yang sama dengan IHSG. Ringkasan
+  // net_5d/net_20d tetap dihitung dari angka sesi (5 dan 20), bukan dari panjang seri.
+  const lastN = dates.slice(-SERIES_SESSIONS).filter(d => byDate.has(d)).reverse();  // DESC, terbaru dulu
   let foreign_flow = null, tape = null;
-  if (last20.length) {
-    const sum = (n) => last20.slice(0, n).reduce((s, d) => s + byDate.get(d).fnet, 0);
+  if (lastN.length) {
+    const sum = (n) => lastN.slice(0, n).reduce((s, d) => s + byDate.get(d).fnet, 0);
+    const s5 = sum(Math.min(5, lastN.length));
+    const s20 = sum(Math.min(20, lastN.length));
     foreign_flow = {
-      as_of: last20[0],
-      net_today: Math.round(byDate.get(last20[0]).fnet),
-      net_5d: Math.round(sum(5)),
-      net_20d: Math.round(sum(20)),
-      sessions: last20.length,
+      as_of: lastN[0],
+      net_today: Math.round(byDate.get(lastN[0]).fnet),
+      net_5d: Math.round(s5),
+      net_20d: Math.round(s20),
+      // Berapa sesi benar-benar masuk tiap ringkasan. Tanpa ini, "5D" pada seri 3 sesi akan
+      // terbaca sebagai angka 5 hari padahal hanya 3.
+      sessions_5d: Math.min(5, lastN.length),
+      sessions_20d: Math.min(20, lastN.length),
+      sessions: lastN.length,
     };
-    const vToday = byDate.get(last20[0]).value;
-    const prev20 = last20.slice(1).map(d => byDate.get(d).value).filter(v => v > 0);
+    const vToday = byDate.get(lastN[0]).value;
+    const prev20 = lastN.slice(1, 21).map(d => byDate.get(d).value).filter(v => v > 0);
     const vMa20 = prev20.length ? prev20.reduce((a, b) => a + b, 0) / prev20.length : 0;
-    const t = byDate.get(last20[0]);
-    // Seri harian 20 sesi (ASC = terlama dulu) untuk chart: foreign net per sesi + nilai
-    // transaksi. Dikirim terpisah dari ringkasan 5D/20D supaya chart tidak perlu menurunkan
-    // angka sendiri dari total.
-    const flowSeries = last20.slice().reverse().map(d => ({
+    const t = byDate.get(lastN[0]);
+    // Seri harian (ASC = terlama dulu) untuk chart: foreign net per sesi + nilai transaksi.
+    // Dikirim terpisah dari ringkasan 5D/20D supaya chart tidak perlu menurunkan angka sendiri.
+    const flowSeries = lastN.slice().reverse().map(d => ({
       date: d,
       net: Math.round(byDate.get(d).fnet),
       value: Math.round(byDate.get(d).value),
     }));
     tape = {
-      as_of: last20[0],
+      as_of: lastN[0],
       value_today: Math.round(vToday),
       value_ma20: Math.round(vMa20),
       value_ratio: vMa20 > 0 ? r2(vToday / vMa20) : null,

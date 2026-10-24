@@ -499,7 +499,7 @@ function mrDisposeSectionCharts() {
 // Aturan sekarang: tinggi ditentukan CSS clamp() pada kontainer (`mrChartCss`), dan canvas
 // membaca clientHeight kontainer. `mrChartH` hanya cadangan angka untuk kasus kontainer masih
 // tersembunyi (clientHeight = 0) saat chart dibuat.
-var MR_CHART_H = { liq: 360, curve: 380, hist: 300, ihsg: 310, flow: 270, spark: 230 };
+var MR_CHART_H = { liq: 360, curve: 380, hist: 300, ihsg: 400, flow: 400, spark: 230 };
 
 // Tinggi kontainer ditulis sebagai CSS clamp(), BUKAN angka px hasil hitung saat render.
 // Alasan: tinggi px yang dipanggang ke inline style tidak berubah saat jendela di-resize —
@@ -512,7 +512,9 @@ var MR_CHART_CSS = {
   curve: 'clamp(360px, 44vh, 560px)',
   hist:  'clamp(300px, 36vh, 460px)',
   ihsg:  'clamp(320px, 40vh, 520px)',
-  flow:  'clamp(280px, 34vh, 440px)',
+  // Sama PERSIS dengan 'ihsg': dua chart ini dibaca berpasangan (sesi yang sama, rentang yang
+  // sama), jadi tinggi berbeda membuat sumbu waktu tampak tidak sejajar walau datanya sejajar.
+  flow:  'clamp(320px, 40vh, 520px)',
   spark: 'clamp(200px, 26vh, 320px)'
 };
 
@@ -553,9 +555,15 @@ function mrLwcCreate(el, spec) {
       grid: { vertLines: { visible: false }, horzLines: { color: th.grid, style: 2 } },
       // Sumbu kiri dipakai hanya kalau ada seri dengan satuan berbeda (mis. JISDOR IDR/USD
       // berdampingan dengan SRBI Rp tn). Dua skala terpisah = dua satuan, bukan dua sumbu curang.
-      leftPriceScale: { visible: !!spec.leftScale, borderColor: th.grid, scaleMargins: { top: 0.14, bottom: 0.14 } },
+      // `minimumWidth` menyamakan lebar pita sumbu harga. Tanpa ini lebar area plot berbeda antar
+      // chart (IHSG '5.439,26' vs bar '-3.31' butuh lebar label berbeda), sehingga tanggal yang
+      // SAMA jatuh di x berbeda ~12 px. Sudah diukur: timeToCoordinate('2026-10-23') = 1103 vs 1115
+      // pada dua chart bersebelahan. Dengan lebar sumbu tetap, area plot kedua chart identik dan
+      // garis/bar bisa dibaca turun-turun.
+      leftPriceScale: { visible: !!spec.leftScale, borderColor: th.grid, minimumWidth: 72, scaleMargins: { top: 0.14, bottom: 0.14 } },
       rightPriceScale: {
         borderColor: th.grid,
+        minimumWidth: 72,
         scaleMargins: { top: 0.14, bottom: 0.14 },
         // label harga di kanan; satuan ditulis di judul/legenda, bukan di setiap label
         priceFormat: spec.priceFormat || { type: 'price', precision: spec.precision == null ? 2 : spec.precision, minMove: spec.minMove || 0.01 }
@@ -1154,8 +1162,12 @@ function mrRenderInternals(it, mrData) {
   }
   var flowSeries = (ff.series || []).filter(function (x) { return x && x.date; });
   if (flowSeries.length > 1) {
+    // Rentang ditulis dari data seri, bukan dari `ff.sessions`: dua label yang dihitung berbeda
+    // akan berbeda pula saat salah satunya basi. Tanggal awal/akhir ditampilkan supaya pembaca
+    // bisa mencocokkan langsung dengan chart IHSG di atasnya.
     h += '<div style="font-size:9px;color:var(--t3);margin:8px 0 3px">Foreign net per sesi (Rp tn) · '
-      + (ff.sessions || flowSeries.length) + ' sesi · hijau = net beli, merah = net jual</div>';
+      + flowSeries.length + ' sesi (' + esc(flowSeries[0].date) + ' → ' + esc(flowSeries[flowSeries.length - 1].date) + ')'
+      + ' · hijau = net beli, merah = net jual</div>';
     h += '<div id="mr-flow-chart" style="height:' + mrChartCss('flow') + ';background:var(--bg1);border:1px solid var(--b1);border-radius:6px"></div>';
   }
 
@@ -1173,6 +1185,7 @@ function mrRenderInternals(it, mrData) {
     + '<td style="padding:3px 6px;color:var(--t3)">1D <span style="color:' + mrColor(ihsg.chg_1d) + '">' + mrSigned(ihsg.chg_1d, '%') + '</span>'
     + ' · 5D <span style="color:' + mrColor(ihsg.chg_5d) + '">' + mrSigned(ihsg.chg_5d, '%') + '</span>'
     + ' · 20D <span style="color:' + mrColor(ihsg.chg_20d) + '">' + mrSigned(ihsg.chg_20d, '%') + '</span>'
+    + ' · 60D <span style="color:' + mrColor(ihsg.chg_60d) + '">' + mrSigned(ihsg.chg_60d, '%') + '</span>'
     + ' · ' + esc(ihsg.date || '') + '</td></tr>';
 
   h += '<tr style="border-bottom:1px solid var(--b1)"><td style="padding:3px 6px">Foreign net</td>'
@@ -1286,10 +1299,14 @@ function mrRenderInternals(it, mrData) {
   return h;
 }
 
-// Chart L4: IHSG (level, sumbu kanan) dan foreign net per sesi (bar, sumbu kiri dikali -1? tidak:
-// keduanya beda besaran sama sekali, jadi foreign flow punya chart sendiri).
-// Kenapa dipisah: menumpuk Rp tn di atas level IHSG 5.400 memaksa dua skala pada satu sumbu visual;
-// pembaca akan menyimpulkan korelasi dari kemiringan garis yang tidak sebanding.
+// Chart L4: IHSG (garis, level) dan foreign net per sesi (bar, Rp tn).
+// Kenapa dua chart, bukan satu: menumpuk Rp tn di atas level IHSG 5.400 memaksa dua skala pada satu
+// sumbu visual, dan pembaca akan menyimpulkan korelasi dari kemiringan garis yang tidak sebanding.
+// Yang WAJIB sama justru RENTANG-nya: keduanya memakai SERIES_SESSIONS (40 sesi) di server, jadi
+// sesi ke-1 bar sejajar dengan sesi ke-1 garis. Sebelum ini IHSG 40 sesi vs flow 20 sesi, sehingga
+// batang hanya menutupi separuh kanan garis dan "foreign flow 40 hari" tidak pernah tergambar.
+// Tinggi chart flow = tinggi IHSG (mrChartCss 'flow' = 'ihsg') supaya perbandingan antar-panel adil.
+// Skala harga tetap independen: bar flow berskala Rp tn dengan garis nol, bukan sumbu IHSG.
 function mrRenderInternalsCharts(it) {
   if (!it) return;
   var ih = it.ihsg_history || null;
