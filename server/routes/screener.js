@@ -1007,9 +1007,50 @@ router.get('/sector-intelligence', (req, res) => {
 
     const recentWeeks = weekBuckets.slice(-weeks);
 
+    // `company_profiles` DIPAKAI SEBAGAI SUMBER UTAMA, bukan `idx_fundamental`.
+    // Sebab: di snapshot 2026-10 ada 2 baris warisan taksonomi lama yang lolos ke tabel
+    // fundamental — INCF dengan sector "BASIC INDUSTRY AND CHEMICALS" dan VICI dengan
+    // "CONSUMER GOODS INDUSTRY". Keduanya tidak cocok dengan 11 nama baru, jadi tampil
+    // sebagai sektor sendiri berisi 1 saham dan satu baris penuh nol di heatmap.
+    // company_profiles sudah memetakan keduanya dengan benar (Barang Baku, Barang
+    // Konsumen Primer). idx_fundamental tetap dipakai sebagai cadangan untuk emiten yang
+    // belum ada di company_profiles.
     const fundMap = {};
     db.prepare("SELECT code, sector, industry FROM idx_fundamental WHERE snapshot_month=? AND sector!=''").all(sm)
       .forEach(f => { fundMap[f.code] = { sector: f.sector, industry: f.industry }; });
+    try {
+      db.prepare("SELECT code, sector FROM company_profiles WHERE sector IS NOT NULL AND sector!=''").all()
+        .forEach(c => {
+          const prev = fundMap[c.code];
+          fundMap[c.code] = { sector: c.sector, industry: prev ? prev.industry : '' };
+        });
+    } catch (e) { /* tabel tidak ada: pakai idx_fundamental saja */ }
+
+    // Normalisasi nama sektor warisan (taksonomi IDX lama, bahasa Inggris) ke 11 nama
+    // yang dipakai company_profiles. Tanpa ini, emiten yang TIDAK ada di company_profiles
+    // (mis. GOTOM) tetap membawa label lama dan muncul sebagai sektor tambahan berisi
+    // satu saham. Tabel ini bukan pemetaan selera: setiap nilai kanan adalah nama yang
+    // benar-benar ada di company_profiles.
+    const SECTOR_ALIAS = {
+      'Technology': 'Teknologi',
+      'Financials': 'Keuangan',
+      'Energy': 'Energi',
+      'Healthcare': 'Kesehatan',
+      'Industrials': 'Perindustrian',
+      'Infrastructures': 'Infrastruktur',
+      'Basic Materials': 'Barang Baku',
+      'Basic Industry and Chemicals': 'Barang Baku',
+      'BASIC INDUSTRY AND CHEMICALS': 'Barang Baku',
+      'Consumer Cyclicals': 'Barang Konsumen Non-Primer',
+      'Consumer Non-Cyclicals': 'Barang Konsumen Primer',
+      'CONSUMER GOODS INDUSTRY': 'Barang Konsumen Primer',
+      'Properties & Real Estate': 'Properti & Real Estat',
+      'Transportation & Logistic': 'Transportasi & Logistik',
+    };
+    for (const code of Object.keys(fundMap)) {
+      const sec = fundMap[code].sector;
+      if (sec && SECTOR_ALIAS[sec]) fundMap[code].sector = SECTOR_ALIAS[sec];
+    }
 
     const weeklyData = [];
     for (const wDates of recentWeeks) {

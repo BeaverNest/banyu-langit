@@ -54,7 +54,14 @@ function stab(n,el){
   if(n==='regime'){tabLoaded.regime=true;if(typeof loadMarketRegime==='function')loadMarketRegime();}
   // Halaman IHSG dimuat sekali per sesi browser (payload 60s-cache di server); klik ulang
   // memakai ihgData yang sudah ada, jadi tidak fetch berulang.
-  if(n==='ihsg'){tabLoaded.ihsg=true;if(typeof loadIhsgPage==='function')loadIhsgPage();}
+  // Menu IHSG punya 4 sub-panel; saat dibuka pertama kali tampilkan ringkasannya.
+  // Klik ulang menu (bukan pindah tab) mengembalikan ke ringkasan supaya perilakunya
+  // sama dengan menu lain yang selalu mendarat di tampilan default.
+  if(n==='ihsg'){
+    tabLoaded.ihsg=true;
+    if(typeof ihsgTab==='function') ihsgTab('overview');
+    else if(typeof loadIhsgPage==='function') loadIhsgPage();
+  }
   if(n==='mkt'){tabLoaded.mkt=true;if(typeof loadCommodities==='function')loadCommodities();}
   if(n==='idx'&&!tabLoaded.idx){tabLoaded.idx=true;if(typeof loadMarketIntel==='function')loadMarketIntel();}
   if(n==='diary'&&!tabLoaded.diary){tabLoaded.diary=true;}

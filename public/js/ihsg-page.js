@@ -42,6 +42,61 @@ function ihgEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ═══ Sub-tab IHSG ═══
+// Empat panel dalam satu menu: ringkasan IHSG, Sector Performance, Sector/Industry Flow,
+// Stock List. Tiga yang terakhir dipindah dari Market Intel (owner, 24 Okt 2026).
+// Catatan: Sector Performance dan Flow memakai kontainer yang SAMA (#sector-content) dan
+// dibedakan oleh variabel global `secIntView` milik sector-intelligence.js.
+var ihgTabActive = 'overview';
+
+function ihsgTab(tab, btn) {
+  ihgTabActive = tab;
+  // Tandai tombol aktif. `btn` bisa null kalau dipanggil programatik (mis. dari tautan sektor).
+  var bar = document.querySelectorAll('#t-ihsg .wt-b');
+  bar.forEach(function (b) { b.classList.remove('on'); });
+  if (btn) btn.classList.add('on');
+  else {
+    var map = { overview: 'IHSG', sector: 'Sector Performance', flow: 'Sector/Industry Flow', stocklist: 'Stock List' };
+    bar.forEach(function (b) { if (b.textContent.trim() === map[tab]) b.classList.add('on'); });
+  }
+
+  document.querySelectorAll('#t-ihsg .wp').forEach(function (p) { p.classList.remove('on'); });
+
+  if (tab === 'overview') {
+    var ov = document.getElementById('ihsg-overview');
+    if (ov) ov.classList.add('on');
+    if (typeof loadIhsgPage === 'function') loadIhsgPage();
+    return;
+  }
+  if (tab === 'sector' || tab === 'flow') {
+    var sc = document.getElementById('ihsg-sector');
+    if (sc) sc.classList.add('on');
+    // Reset drill-down supaya selalu mulai dari level teratas.
+    if (tab === 'sector') {
+      if (typeof sectorDrillSector !== 'undefined') sectorDrillSector = '';
+      if (typeof sectorDrillIndustry !== 'undefined') sectorDrillIndustry = '';
+      if (typeof secIntView !== 'undefined') secIntView = 'rotation';
+    } else {
+      if (typeof secIntView !== 'undefined') secIntView = 'timeline';
+    }
+    if (typeof secIntEmbedded !== 'undefined') secIntEmbedded = true;
+    var body = document.getElementById('sector-content');
+    if (body && !document.getElementById('sec-int-body')) body.innerHTML = '<div class="ne">Loading...</div>';
+    if (typeof loadSectorView === 'function') loadSectorView();
+    return;
+  }
+  if (tab === 'stocklist') {
+    var sl = document.getElementById('ihsg-stocklist');
+    if (sl) sl.classList.add('on');
+    if (typeof idxView !== 'undefined') idxView = 'rankings';
+    if (typeof idxEmbedded !== 'undefined') idxEmbedded = true;
+    // idx-daily-v2 menyimpan shell; paksa render ulang supaya tabel muncul saat pertama dibuka.
+    if (typeof idxShellRendered !== 'undefined') idxShellRendered = false;
+    if (typeof loadIdxDaily === 'function') loadIdxDaily();
+    return;
+  }
+}
+
 function loadIhsgPage() {
   const el = document.getElementById('ihsg-content');
   if (!el) return;

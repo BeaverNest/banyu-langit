@@ -115,9 +115,25 @@
 
   </div>
 
-  <!-- TAB: IHSG — level + breadth + arus (menu sendiri) -->
+  <!-- TAB: IHSG — level + breadth + arus, plus tiga panel yang dipindah dari
+       Market Intel 24 Okt 2026 (permintaan owner): Sector Performance,
+       Sector/Industry Flow, Stock List. Panel sektor & stock list MENUMPANG
+       di id lama (`sector-content`, `idx-content`) karena sector-intelligence.js
+       dan idx-daily-v2.js mencari id itu secara global; memindahkannya berarti
+       mengubah dua modul sekaligus tanpa manfaat. Karena hanya satu panel yang
+       tampil pada satu waktu, id tunggal itu aman. -->
   <div class="tpanel" id="t-ihsg">
-    <div id="ihsg-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div>
+    <div class="wt">
+      <button class="wt-b on" onclick="ihsgTab('overview',this)">IHSG</button>
+      <button class="wt-b" onclick="ihsgTab('sector',this)">Sector Performance</button>
+      <button class="wt-b" onclick="ihsgTab('flow',this)">Sector/Industry Flow</button>
+      <button class="wt-b" onclick="ihsgTab('stocklist',this)">Stock List</button>
+    </div>
+    <div class="wp on" id="ihsg-overview"><div id="ihsg-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
+    <!-- Sector Performance & Sector/Industry Flow berbagi satu kontainer: keduanya
+         dirender oleh loadSectorView() dan hanya berbeda pada secIntView. -->
+    <div class="wp" id="ihsg-sector"><div id="sector-content"><div class="ne">Loading...</div></div></div>
+    <div class="wp" id="ihsg-stocklist"><div id="idx-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Loading...</div></div></div>
   </div>
 
   <!-- TAB 0: MARKET REGIME — menu sendiri, posisi teratas di sidebar (permintaan owner 24 Okt 2026).
@@ -186,7 +202,6 @@
 
     </div>
     <div class="wp" id="ana-usdaily"><div id="ud-content" style="flex:1;overflow-y:auto"><div class="ne">Loading...</div></div></div>
-    <div class="wp" id="ana-sectors" style="display:none"><div id="sector-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-compare"><div id="compare-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-correlation"><div id="correlation-content"><div class="ne">Loading...</div></div></div>
     <div class="wp" id="ana-stockdetail"><div id="sd-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><div class="ne">Enter ticker to analyze</div></div></div>

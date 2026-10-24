@@ -2,7 +2,7 @@
 // Overview | Sector Performance | Sector/Industry Flow | Stock List
 // All sector/industry names are clickable → navigate to Stock List auto-filtered
 
-var miSubTab = 'overview'; // overview | sector | flow | stocklist
+var miSubTab = 'overview'; // overview saja (sector/flow/stocklist pindah ke menu IHSG)
 
 function loadMarketIntel() {
   var el = $('mi-content'); if (!el) return;
@@ -10,11 +10,11 @@ function loadMarketIntel() {
 }
 
 function renderMIShell(el) {
+  // Sector Performance, Sector/Industry Flow, dan Stock List PINDAH ke menu IHSG
+  // (permintaan owner 24 Okt 2026) karena ketiganya turunan dari IHSG, bukan dari
+  // "market intel" lintas aset. Market Intel kini hanya Overview.
   var tabs = [
-    {k:'overview', l:'Overview'},
-    {k:'sector', l:'Sector Performance'},
-    {k:'flow', l:'Sector/Industry Flow'},
-    {k:'stocklist', l:'Stock List'}
+    {k:'overview', l:'Overview'}
   ];
   var h = '<div class="wt">';
   tabs.forEach(function(t) {
@@ -37,34 +37,29 @@ function miSwitchTab(tab, btn) {
 }
 
 function miLoadSubTab() {
-  if (miSubTab === 'overview') loadMIOverview();
-  else if (miSubTab === 'sector') loadMISectorPerf();
-  else if (miSubTab === 'flow') loadMISectorFlow();
-  else if (miSubTab === 'stocklist') loadMIStockList();
+  // Hanya Overview yang tersisa di Market Intel.
+  if (miSubTab !== 'overview') miSubTab = 'overview';
+  loadMIOverview();
 }
 
 // ═══ Navigate to Stock List with filter ═══
+// Stok List kini hidup di menu IHSG. Fungsi ini tetap dipakai oleh tautan sektor di
+// Overview, jadi ia harus MEMINDAHKAN tab, bukan hanya mengganti isi #mi-body.
 function miGoStockList(sector, industry) {
   // Set global filter variables used by idx-daily-v2.js
   if (typeof idxSectorFilter !== 'undefined') idxSectorFilter = sector || '';
   if (typeof idxIndustryFilter !== 'undefined') idxIndustryFilter = industry || '';
   if (typeof idxFilter !== 'undefined') idxFilter = '';
-  miSubTab = 'stocklist';
-  // Update tab buttons
-  var el = document.getElementById('mi-content');
-  if (el) {
-    el.querySelectorAll('.wt-b').forEach(function(b, i) {
-      b.classList.toggle('on', i === 3); // Stock List is 4th tab
-    });
-  }
-  loadMIStockList();
+  if (typeof stab === 'function') stab('ihsg');
+  var btn = document.querySelector('#t-ihsg .wt-b[onclick*="stocklist"]');
+  if (typeof ihsgTab === 'function') ihsgTab('stocklist', btn);
   // After render, set dropdowns if they exist
   setTimeout(function() {
     var sel = document.getElementById('idx-sector-sel');
     if (sel && sector) sel.value = sector;
     var indSel = document.getElementById('idx-industry-sel');
     if (indSel && industry) indSel.value = industry;
-  }, 200);
+  }, 300);
 }
 
 // ═══ Helper: clickable sector/industry name ═══
