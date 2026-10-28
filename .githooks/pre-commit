@@ -1,0 +1,68 @@
+#!/bin/sh
+# pre-commit guard — refuse to commit secrets.
+#
+# Installed by: scripts/install-git-hooks.sh  (sets core.hooksPath=.githooks)
+# Why: `.env` was committed by accident on 2026-03-24 (064b41d) and stayed
+# publicly fetchable via raw.githubusercontent.com even after it was deleted
+# (a9757e0). Deleting a file does not unpublish it; this hook stops the
+# next accident at the point where it is still cheap.
+#
+# Two independent checks:
+#   1. path check  — staged files that are dotenv/secret-shaped by NAME
+#   2. content check — added lines matching high-confidence key patterns
+# Both are fail-closed: a hit exits 1 and prints what and where, never the value.
+
+set -u
+
+RED=$(printf '\033[31m'); YEL=$(printf '\033[33m'); OFF=$(printf '\033[0m')
+[ -t 1 ] || { RED=''; YEL=''; OFF=''; }
+
+fail=0
+
+# ── 1. path check ────────────────────────────────────────────────────────────
+# .env.example is the documented template and is allowed.
+paths=$(git diff --cached --name-only --diff-filter=ACMR)
+bad_paths=$(printf '%s\n' "$paths" | grep -Evx '' | grep -E \
+  '(^|/)\.env($|\.)|(^|/)env\.(local|production|development|test)$|(^|/)\.(npmrc|pypirc|netrc)$|\.(pem|key|p12|pfx)$|(^|/)id_(rsa|ed25519|ecdsa)$|(^|/)\.aws/credentials' \
+  | grep -vx '.env.example' || true)
+
+if [ -n "$bad_paths" ]; then
+  printf '%s\n' "$RED✖ COMMIT DITOLAK — berkas rahasia ikut ter-stage:${OFF}"
+  printf '  %s\n' $bad_paths
+  printf '  Hapus dari index: %sgit restore --staged <path>%s\n' "$YEL" "$OFF"
+  fail=1
+fi
+
+# ── 2. content check on ADDED lines only ─────────────────────────────────────
+# Patterns are deliberately narrow (provider-prefixed) so normal code is not
+# blocked. Values are never echoed: only the pattern name and the file:line.
+added=$(git diff --cached -U0 --diff-filter=ACMR)
+hits=$(printf '%s\n' "$added" | awk '
+  /^\+\+\+ b\// { file = substr($0, 7); next }
+  /^\+/ && !/^\+\+\+/  { print file ":" $0 }
+' | grep -nE \
+  'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{32,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|(sk|rk)_live_[0-9A-Za-z]{20,}' \
+  | grep -viE 'example|placeholder|your[_-]?key|xxx|REDACTED|dummy|sample|<[a-z_]+>' || true)
+
+# A 16-char Alpha Vantage style key is too low-entropy to pattern-match on its
+# own, so catch the ASSIGNMENT form instead (ALPHA_VANTAGE_KEY=<16 chars>).
+av=$(printf '%s\n' "$added" | awk '
+  /^\+\+\+ b\// { file = substr($0, 7); next }
+  /^\+/ && !/^\+\+\+/  { print file ": " $0 }
+' | grep -iE 'alpha[_-]?vantage[_-]?key[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Z0-9]{12,}' \
+  | grep -viE 'example|placeholder|your|xxx|REDACTED|=\s*$|\$\{|process\.env|os\.environ' || true)
+
+if [ -n "$hits$av" ]; then
+  printf '%s\n' "$RED✖ COMMIT DITOLAK — baris yang ditambahkan memuat pola kunci rahasia:${OFF}"
+  printf '%s\n' "$hits$av" | sed -E 's/(=|:)[[:space:]]*.{8,}$/\1 <nilai disembunyikan>/' | sed 's/^/  /'
+  printf '  Nilai tidak dicetak. Kalau ini false positive: %sgit commit --no-verify%s\n' "$YEL" "$OFF"
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  printf '\n%sKebijakan: rahasia hidup di .env (mode 600, tidak pernah di-commit).%s\n' "$YEL" "$OFF"
+  printf 'Mulai dari .env.example lalu isi nilai di host.\n'
+  exit 1
+fi
+
+exit 0

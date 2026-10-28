@@ -1,6 +1,25 @@
 node_modules/
 .env
 .env.*
+# Pola di atas hanya menangkap `.env` dan `.env.<apa pun>`. Variasi lain yang
+# sudah pernah atau mudah ter-commit ikut diblokir di sini (insiden .env publik
+# 2026-03-24/064b41d, dibersihkan di t_3f0da3fd).
+env
+env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+.pypirc
+.netrc
+.aws/
+.ssh/
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.kdbx
 data/
 # Pengecualian: `data/` di atas juga mengenai direktori mana pun bernama data, termasuk
 # `server/data/`. Kalender sesi terdeklarasi (server/data/idx-sessions.json) adalah artefak
