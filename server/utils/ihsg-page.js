@@ -73,22 +73,49 @@ function buildIhsg(db) {
   const ma = (k) => (vals.length >= k ? r2(vals.slice(-k).reduce((s, v) => s + v, 0) / k) : null);
   const ma20 = ma(20), ma50 = ma(50), ma200 = ma(200);
 
-  // ── Seri chart utama: 120 sesi, dengan OHLC bila tersedia (40 sesi terakhir) ──
+  // ── Seri chart utama: 120 sesi, candle penuh dari `index_ohlc` bila tersedia ──
+  //
+  // SEBELUM 28 Okt 2026 chart ini hanya bisa menggambar candle 43 sesi terakhir (batas
+  // `idx_indices`, sumber resmi bursa), sehingga 2/3 lebar chart berupa garis dan candle
+  // menumpuk di kanan. Owner menyebutnya "aneh" — dan memang begitu: satu grafik dengan
+  // dua primitif gambar terbaca seperti data rusak, bukan seperti keputusan desain.
+  //
+  // `index_ohlc` (Yahoo ^JKSE, 10 tahun, harian) menutup lubang itu. Angkanya bukan
+  // sembarang pihak ketiga: close-nya identik dengan `index_chart` pada 271 hari
+  // (selisih maks 0,0005 poin) dan high/low identik 0,00 pada 43 hari yang bisa
+  // dibandingkan dengan `idx_indices`.
+  //
+  // `open`: sumber resmi TIDAK punya open. Kolom `previous` di `idx_indices` adalah
+  // penutupan hari sebelumnya (selisih rata-rata 33,9 poin, maks 469,9 terhadap open
+  // sebenarnya), jadi memakainya membuat candle punya bayangan palsu. Prioritas:
+  // index_ohlc.open -> (fallback) previous, dan bar yang cuma punya `previous`
+  // ditandai `open_est: true` supaya tidak menyamar sebagai open sesungguhnya.
   const hist = levelRows.slice(-MAIN_SESSIONS);
   const ohlcMap = new Map(
-    db.prepare("SELECT trade_date AS d, close, previous, highest, lowest FROM idx_indices WHERE index_code='COMPOSITE'").all()
+    db.prepare(
+      "SELECT trade_date AS d, open, high, low, close FROM index_ohlc WHERE index_code='COMPOSITE'"
+    ).all().map((r) => [r.d, r])
+  );
+  const prevMap = new Map(
+    db.prepare("SELECT trade_date AS d, previous, highest, lowest FROM idx_indices WHERE index_code='COMPOSITE'").all()
       .map((r) => [r.d, r])
   );
   const series = hist.map((r) => {
     const o = ohlcMap.get(r.d);
-    // OHLC hanya ada 40 sesi; sebelum itu chart memakai mode line. Mengirim high=low=close
-    // akan menggambar candle setinggi nol garis (terbaca seperti data rusak), jadi null-kan.
-    return o
-      ? { date: r.d, close: r2(r.v), open: o.previous == null ? null : r2(o.previous), high: r2(o.highest), low: r2(o.lowest) }
-      : { date: r.d, close: r2(r.v), open: null, high: null, low: null };
+    if (o && o.open != null && o.high != null && o.low != null) {
+      return { date: r.d, close: r2(r.v), open: r2(o.open), high: r2(o.high), low: r2(o.low), open_est: false };
+    }
+    // Cadangan: rail resmi (previous bukan open sesungguhnya -> ditandai)
+    const p = prevMap.get(r.d);
+    if (p && p.previous != null && p.highest != null && p.lowest != null) {
+      return { date: r.d, close: r2(r.v), open: r2(p.previous), high: r2(p.highest), low: r2(p.lowest), open_est: true };
+    }
+    // Tidak ada OHLC sama sekali: null, bukan high=low=close (candle setinggi nol).
+    return { date: r.d, close: r2(r.v), open: null, high: null, low: null, open_est: false };
   });
   const ohlcFrom = series.find((x) => x.high != null);
   const ohlcFromDate = ohlcFrom ? ohlcFrom.date : null;
+  const nCandles = series.filter((x) => x.high != null).length;
 
   // ── Sesi terakhir: breadth, arus, ARA/ARB, adv/dec ──
   const flowDates = sessions(db, FLOW_SESSIONS);
@@ -236,6 +263,7 @@ function buildIhsg(db) {
     },
     series,
     ohlc_from: ohlcFromDate,
+    ohlc_candles: nCandles,
     breadth: tot ? {
       as_of: asOf, total: tot,
       pct_above_ma20: r2((above20 / tot) * 100),

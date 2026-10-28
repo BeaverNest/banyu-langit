@@ -185,4 +185,4 @@ async function fetchEOD(code, category, apiKey, fullHistory = false) {
   return { rows, source: det.source, symbol: code };
 }
 
-module.exports = { fetchEOD, detectSource, CRYPTO_ID_MAP, YAHOO_SYMBOL_MAP };
+module.exports = { fetchEOD, fetchYahoo, detectSource, CRYPTO_ID_MAP, YAHOO_SYMBOL_MAP };

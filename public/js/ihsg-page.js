@@ -178,20 +178,32 @@ function ihgRender(el) {
 
   // ── Chart harga ──
   h += '<div style="border:1px solid var(--b1);border-radius:5px;background:var(--bg1);margin-bottom:8px">';
+  // Jumlah candle menentukan legenda; dihitung sebelum header panel memakainya.
+  const cdl = d.ohlc_candles || 0;
+  const cdlText = cdl >= d.series.length
+    ? 'candle ' + cdl + ' sesi'
+    : (cdl > 0 ? 'candle ' + cdl + ' sesi, garis ' + (d.series.length - cdl) + ' sesi' : 'garis (tanpa OHLC)');
+  // Judul panel kiri saja. Keterangan "candle N sesi" sudah ada di legenda tepat di bawah
+  // header, jadi mengulangnya di kanan hanya menghasilkan teks kembar.
   h += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:5px 8px;border-bottom:1px solid var(--b1)">'
      + '<span style="font-size:10px;font-weight:700">IHSG — ' + (d.series.length) + ' sesi</span>'
-     + '<span style="font-size:9px;color:var(--t3)">' + (d.ohlc_from ? 'candle sejak ' + ihgEsc(d.ohlc_from) + ', sebelumnya garis' : 'garis') + '</span></div>';
+     + '<span style="font-size:9px;color:var(--t3)">' + (cdl < d.series.length ? cdlText : '') + '</span></div>';
   // Legenda manual: LWC hanya menaruh label harga di sumbu kanan, tanpa nama seri, sehingga
   // orange/purple tidak bisa dibedakan pembaca. Warna di sini HARUS sama dengan ihgTheme().
   const lg = (col, txt) => '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">'
     + '<span style="width:12px;height:2px;background:' + col + ';display:inline-block"></span>'
     + '<span style="font-size:9px;color:var(--t3)">' + txt + '</span></span>';
-  h += '<div style="padding:4px 8px 0">'
-     + lg(ihgTheme().line, 'IHSG (garis sebelum ' + ihgEsc(d.ohlc_from || '—') + ')')
-     + lg(ihgTheme().ma20, 'MA20 ' + ihgNum(L.ma20))
-     + lg(ihgTheme().ma50, 'MA50 ' + ihgNum(L.ma50))
-     + '<span style="font-size:9px;color:var(--t3)">candle ' + ihgEsc(d.ohlc_from || '—') + ' → ' + ihgEsc(d.as_of) + '</span>'
-     + '</div>';
+  // Legenda mengikuti apa yang benar-benar digambar: candle penuh, bukan "candle di kanan".
+  h += '<div style="padding:4px 8px 0">';
+  if (cdl >= d.series.length) {
+    h += lg(ihgTheme().up, 'candle ' + cdl + ' sesi');
+  } else if (cdl > 0) {
+    h += lg(ihgTheme().up, 'candle ' + cdl + ' sesi (sejak ' + ihgEsc(d.ohlc_from || '—') + ')')
+       + lg(ihgTheme().line, 'garis ' + (d.series.length - cdl) + ' sesi sebelumnya');
+  } else {
+    h += lg(ihgTheme().line, 'garis (OHLC tidak tersedia)');
+  }
+  h += lg(ihgTheme().ma20, 'MA20 ' + ihgNum(L.ma20)) + lg(ihgTheme().ma50, 'MA50 ' + ihgNum(L.ma50)) + '</div>';
   h += '<div id="ihg-price" style="height:clamp(300px,38vh,460px)"></div></div>';
 
   // ── Breadth + arus ──
@@ -286,27 +298,41 @@ function ihgDraw(d) {
     return c;
   };
 
-  // ── Harga: line + candle bertumpuk? Tidak — satu seri, mode ditentukan ketersediaan OHLC.
+  // ── Harga: candle bila OHLC tersedia, garis hanya sebagai cadangan ──
   const cp = mk('ihg-price');
   if (cp) {
-    const lineData = d.series.map((x) => ({ time: x.date, value: x.close }));
-    const line = cp.addSeries(LightweightCharts.LineSeries, {
-      color: th.line, lineWidth: 1.6,
-      priceLineVisible: false, lastValueVisible: true,
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    });
-    line.setData(lineData);
-    // OHLC rail hanya 40 sesi; candle ditaruh di atas garis untuk rentang itu saja.
-    // Menggambar candle dengan high=low=close untuk sesi lama akan tampil seperti garis
-    // gepeng dan terbaca sebagai data rusak, jadi bagian itu sengaja dibiarkan sebagai garis.
     const candles = d.series.filter((x) => x.high != null && x.low != null && x.open != null)
       .map((x) => ({ time: x.date, open: x.open, high: x.high, low: x.low, close: x.close }));
-    if (candles.length > 1) {
+    // Garis hanya digambar untuk sesi yang TIDAK punya OHLC. Menggambar garis untuk
+    // seluruh 120 sesi lalu menumpuk candle di atasnya membuat candle tertimpa garis
+    // biru — dan pada sumbu yang sama, garis menembus body candle seolah ada dua harga.
+    // Setelah index_ohlc terisi, bagian ini praktis kosong (0 sesi tanpa OHLC).
+    const lineData = d.series.filter((x) => x.high == null).map((x) => ({ time: x.date, value: x.close }));
+
+    if (lineData.length > 1 && candles.length) {
+      const line = cp.addSeries(LightweightCharts.LineSeries, {
+        color: th.line, lineWidth: 1.6,
+        priceLineVisible: false, lastValueVisible: false,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      });
+      line.setData(lineData);
+    }
+
+    if (candles.length) {
       const cs = cp.addSeries(LightweightCharts.CandlestickSeries, {
         upColor: th.up, downColor: th.dn, borderUpColor: th.up, borderDownColor: th.dn,
-        wickUpColor: th.up, wickDownColor: th.dn, priceLineVisible: false, lastValueVisible: false,
+        wickUpColor: th.up, wickDownColor: th.dn, priceLineVisible: false, lastValueVisible: true,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
       });
       cs.setData(candles);
+    } else if (d.series.length) {
+      // Tidak ada OHLC sama sekali: kembali ke garis penuh supaya panel tidak kosong.
+      const line = cp.addSeries(LightweightCharts.LineSeries, {
+        color: th.line, lineWidth: 1.6,
+        priceLineVisible: false, lastValueVisible: true,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      });
+      line.setData(d.series.map((x) => ({ time: x.date, value: x.close })));
     }
     // MA20/MA50 dari level: menggambar garis MA membuat "harga di atas/bawah MA" terbaca
     // visual, bukan hanya angka di kartu.

@@ -583,6 +583,21 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_ic_code ON index_chart(index_code);
 
+  -- OHLC indeks dari rail pihak ketiga (Yahoo ^JKSE). DIPISAH dari idx_indices supaya
+  -- sumber resmi bursa (index_summary) dan sumber pihak ketiga tidak pernah tertukar:
+  -- idx_indices tetap resmi, tabel ini yang mengisi candle panjang.
+  -- Kolom close di sini diverifikasi identik dengan index_chart: selisih 0,00 poin pada
+  -- 240 hari tumpang tindih (28 Okt 2026), jadi aman dipakai sebagai jangkar level.
+  CREATE TABLE IF NOT EXISTS index_ohlc (
+    index_code TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    open REAL, high REAL, low REAL, close REAL, volume REAL,
+    source TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (index_code, trade_date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_iohlc_code ON index_ohlc(index_code);
+
   CREATE TABLE IF NOT EXISTS index_list (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT UNIQUE NOT NULL,
