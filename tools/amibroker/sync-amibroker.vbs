@@ -25,7 +25,7 @@ STATE_FILE = IMPORT_DIR + "\last_full_import.txt"
 ' The owner's database directory. AmiBroker opens whichever database was last active, so an
 ' import can land in the default "data" database and look successful while C:\BanyuLangit stays
 ' untouched. Always verify DatabasePath before importing.
-DB_PATH    = "C:\BanyuLangit"
+DB_PATH    = "C:\BanyuLangit\"
 
 ' Re-import the 332 MB history only when the laptop has been away long enough that the
 ' 30-session delta can no longer cover the gap. Any shorter absence is served by the delta.
