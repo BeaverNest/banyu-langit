@@ -18,6 +18,22 @@ REM ============================================================================
 setlocal
 set DEST=%~dp0
 
+REM AmiBroker ships as 32-bit, so on a 64-bit Windows it installs under "Program Files (x86)".
+REM Probing both instead of hardcoding one: a wrong path here fails as "warning: not found"
+REM and the program never opens, which is how this bit us once already.
+set ABEXE=
+for %%P in ("C:\Program Files (x86)\AmiBroker\Broker.exe" "C:\Program Files\AmiBroker\Broker.exe") do (
+  if exist %%P set ABEXE=%%~P
+)
+if not defined ABEXE (
+  for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Broker.exe" /ve 2^>nul ^| find "REG_"') do set ABEXE=%%B
+)
+if not defined ABEXE (
+  echo   WARNING: Broker.exe not found. Edit this file and set ABEXE by hand.
+  pause
+  exit /b 2
+)
+
 echo Checking for new data ...
 ping -n 1 -w 2000 beavernest.taile871ab.ts.net >nul 2>&1
 if errorlevel 1 (
@@ -40,5 +56,5 @@ if errorlevel 1 (
 :launch
 REM AmiBroker is already running at this point: the import above starts it. A second launch
 REM would be a no-op, which is fine. If the import never ran, this starts it.
-start "" "C:\Program Files\AmiBroker\Broker.exe"
+start "" "%ABEXE%"
 exit /b 0

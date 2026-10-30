@@ -77,7 +77,7 @@ WScript.Echo "Symbols after     : " + CStr(APP.Stocks.Count)
 
 ' ---- import.log -----------------------------------------------------------
 Dim logPath, i
-logPath = "C:\Program Files\AmiBroker\import.log"
+logPath = ImportLogPath()
 If fso.FileExists(logPath) Then
   WScript.Echo ""
   WScript.Echo "---- import.log (last 20 lines) ----"
@@ -121,3 +121,14 @@ Sub WriteText(path, content)
   f.Write content
   f.Close
 End Sub
+
+' The 32-bit installer lives in "Program Files (x86)" on 64-bit Windows, so a hardcoded
+' 64-bit path reports "no import.log" even when the file is right there.
+Function ImportLogPath()
+  Dim fso, p
+  Set fso = CreateObject("Scripting.FileSystemObject")
+  ImportLogPath = "C:\Program Files (x86)\AmiBroker\import.log"
+  For Each p In Array("C:\Program Files (x86)\AmiBroker\import.log", "C:\Program Files\AmiBroker\import.log")
+    If fso.FileExists(p) Then ImportLogPath = p : Exit Function
+  Next
+End Function

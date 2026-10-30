@@ -96,13 +96,24 @@ echo   OK ^(no admin needed: OLE Import takes the format path explicitly^)
 
 echo [7/7] Creating the "Buka AmiBroker" shortcut ...
 set DESKTOP=%USERPROFILE%\Desktop
+set ABEXE=
+for %%P in ("C:\Program Files (x86)\AmiBroker\Broker.exe" "C:\Program Files\AmiBroker\Broker.exe") do (
+  if exist %%P set ABEXE=%%~P
+)
+if not defined ABEXE (
+  for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Broker.exe" /ve 2^>nul ^| find "REG_"') do set ABEXE=%%B
+)
+if not defined ABEXE (
+  echo   WARN: Broker.exe not found; the shortcut will have a default icon.
+  set ABEXE=%DEST%open-amibroker.bat
+)
 set LNK=%TEMP%\banyulangit_open.lnk
 > "%TEMP%\mklnk.vbs" echo Set oWS = WScript.CreateObject("WScript.Shell")
 >> "%TEMP%\mklnk.vbs" echo sLinkFile = "%LNK%"
 >> "%TEMP%\mklnk.vbs" echo Set oLink = oWS.CreateShortcut(sLinkFile)
 >> "%TEMP%\mklnk.vbs" echo oLink.TargetPath = "%DEST%\open-amibroker.bat"
 >> "%TEMP%\mklnk.vbs" echo oLink.WorkingDirectory = "%DEST%"
->> "%TEMP%\mklnk.vbs" echo oLink.IconLocation = "C:\Program Files\AmiBroker\Broker.exe,0"
+>> "%TEMP%\mklnk.vbs" echo oLink.IconLocation = "%ABEXE%,0"
 >> "%TEMP%\mklnk.vbs" echo oLink.Description = "Update Banyu Langit data, then open AmiBroker"
 >> "%TEMP%\mklnk.vbs" echo oLink.Save
 cscript //nologo "%TEMP%\mklnk.vbs" >nul 2>&1
