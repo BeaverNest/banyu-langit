@@ -129,6 +129,7 @@ if exist "%LNK%" (
 echo Done. Data folder: %DEST%
 echo AmiBroker database expected at: C:\BanyuLangit\
 echo.
+
 echo Test the import once now ^(no admin, no AmiBroker open needed^):
 echo   call "%DEST%\import.bat"
 echo   type "%DEST%\last-import.log"
