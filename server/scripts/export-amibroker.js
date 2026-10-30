@@ -83,7 +83,13 @@ function writeCsv(file, records) {
     const r = records[i];
     lines[i] = `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v}`;
   }
-  fs.writeFileSync(file, lines.join('\n') + '\n');
+  // Write to a temporary name and rename into place. The HTTP server exposes this directory
+  // continuously, so a client pulling mid-write would otherwise receive a truncated CSV and
+  // import it as if it were complete - a 40 MB partition cut at 12 MB still parses, and the
+  // missing tail is invisible. rename() is atomic within a filesystem.
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, lines.join('\n') + '\n');
+  fs.renameSync(tmp, file);
   return { file: path.basename(file), rows: records.length, bytes: fs.statSync(file).size };
 }
 
@@ -298,7 +304,9 @@ function main() {
     'IDX volume is divided by the corporate-action factor so it is on today\'s share count.',
     'Phantom bars (no trade: volume=0, high=0) are dropped, not carried forward.',
   ].join('\n');
-  fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  const manifestPath = path.join(OUT, 'manifest.json');
+  fs.writeFileSync(manifestPath + '.tmp', JSON.stringify(manifest, null, 2));
+  fs.renameSync(manifestPath + '.tmp', manifestPath);
 
   console.log(JSON.stringify(manifest, null, 2));
 }
