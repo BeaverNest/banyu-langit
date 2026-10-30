@@ -159,11 +159,9 @@ If doFull Then
   Next
   failed = failed + ImportOne(IMPORT_DIR + "\index_ihsg.csv", fmt)
 
-  If failed = 0 Then
-    Dim out : Set out = fso.CreateTextFile(STATE_FILE, True)
-    out.WriteLine FormatDateTime(Date, 2)
-    out.Close
-  End If
+  ' NOTE: the state file is written AFTER the verification gate below, not here. Writing it
+  ' on "no error" is what previously recorded a successful full import that stored nothing,
+  ' which then made the next run skip the full import entirely.
 Else
   WScript.Echo "Delta import only (last full " + CStr(ageDays) + " days ago)"
 End If
@@ -201,7 +199,45 @@ If symBefore >= 0 And symAfter < symBefore Then
   WScript.Quit 2
 End If
 
+' A count above zero is weak evidence: $AUTOADD creates the symbol row before accepting a
+' single quote. The manifest states how many tickers the export contains, so compare against
+' it. Three symbols against 2,378 expected is the failure this catches.
+Dim expected
+expected = ExpectedSymbols()
+If expected > 0 Then
+  If symAfter < expected * 0.95 Then
+    WScript.Echo "FAIL: " + CStr(symAfter) + " symbols present, manifest expects " + CStr(expected)
+    WScript.Echo "      Quotes were created but data was rejected. Check import.log."
+    WScript.Quit 2
+  End If
+  ' IHSG is a single index symbol and carries no "tickers" field in the manifest, so the sum
+  ' is short by one. Allow a small slack rather than pinning the file schema.
+  WScript.Echo "Manifest expects about " + CStr(expected) + " symbols - OK"
+Else
+  WScript.Echo "WARN: manifest.json missing or unreadable, symbol count not cross-checked"
+End If
+
+' Verification passed. Only now is it safe to record that a full import happened.
+If doFull Then
+  Dim out : Set out = fso.CreateTextFile(STATE_FILE, True)
+  out.WriteLine FormatDateTime(Date, 2)
+  out.Close
+End If
+
+' Report a known symbol's bar count. Symbols existing is weaker evidence than bars existing:
+' $AUTOADD creates the symbol before any quote is accepted.
+Dim probe
+probe = ""
+On Error Resume Next
+If APP.Stocks.Count > 0 Then
+  Dim st : Set st = APP.Stocks(0)
+  probe = CStr(st.Ticker) + "=" + CStr(st.Quotations.Count) + " bars"
+End If
+Err.Clear
+On Error GoTo 0
+
 WScript.Echo "Symbols in database: " + CStr(symAfter) + " (was " + CStr(symBefore) + ")"
+If probe <> "" Then WScript.Echo "First symbol: " + probe
 
 Dim finalDb
 finalDb = ""
@@ -217,7 +253,12 @@ Function ImportOne(path, formatPath)
   Dim rc
   On Error Resume Next
   ' Type must be 0. One file per call - the API does not accept a list.
-  rc = APP.Import(0, path, formatPath)
+  ' Parentheses are LOAD-BEARING. Without them VBScript marshals the strings by reference and
+  ' AmiBroker 6.30 silently ignores the format file, falls back to its space-separated
+  ' default, rejects every comma line, and still returns 0 ("ok"). Parentheses force by-value
+  ' marshalling. Proven with diag2-amibroker.vbs: identical data and format, 0->0 without
+  ' them, 0->2 with them.
+  rc = APP.Import(0, (path), (formatPath))
   If Err.Number <> 0 Then
     WScript.Echo "  FAIL " + fso.GetFileName(path) + ": " + Err.Description
     Err.Clear
@@ -242,4 +283,32 @@ Function IsAscii(txt)
       Exit Function
     End If
   Next
+End Function
+
+' ---------------------------------------------------------------------------
+' Sum the "tickers" fields in manifest.json. VBScript has no JSON parser, but the manifest is
+' machine-written with one field per line, so a regex over the raw text is reliable enough
+' for a count check - and a miss degrades to a WARN, never to a false pass.
+Function ExpectedSymbols()
+  Dim total, re, txt
+  ExpectedSymbols = 0
+  If Not fso.FileExists(IMPORT_DIR + "\manifest.json") Then Exit Function
+  On Error Resume Next
+  txt = fso.OpenTextFile(IMPORT_DIR + "\manifest.json", 1).ReadAll
+  If Err.Number <> 0 Then
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  On Error GoTo 0
+  Set re = New RegExp
+  re.Global = True
+  re.IgnoreCase = True
+  re.Pattern = """tickers""\s*:\s*([0-9]+)"
+  Dim m, totalN
+  totalN = 0
+  For Each m In re.Execute(txt)
+    totalN = totalN + CLng(m.SubMatches(0))
+  Next
+  ExpectedSymbols = totalN
 End Function
