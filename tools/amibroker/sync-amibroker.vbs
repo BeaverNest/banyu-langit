@@ -88,9 +88,21 @@ If Not fso.FolderExists(DB_PATH) Then
   WScript.Quit 2
 End If
 
+Const FULL_REIMPORT_DAYS = 14
+
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
 If Not fso.FileExists(fmt) Then
   WScript.Echo "FAIL: format file not found: " + fmt
+  WScript.Echo "      Copy it from " + IMPORT_DIR + "\banyulangit.format"
+  WScript.Quit 2
+End If
+
+' AmiBroker's ASCII importer cannot open a path with non-ASCII characters. The user account
+' here is "KoberuSO" (ASCII) but %LOCALAPPDATA% or a renamed profile can break it, and the
+' error AmiBroker returns for that is generic. Fail early with the real reason.
+If Not IsAscii(IMPORT_DIR) Then
+  WScript.Echo "FAIL: import folder contains non-ASCII characters: " + IMPORT_DIR
+  WScript.Echo "      Move it to e.g. C:\AmibrokerData\import and re-run."
   WScript.Quit 2
 End If
 
@@ -104,8 +116,6 @@ failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 ' A delta holds 30 sessions of bars. Twenty days was wrong on two counts: it re-imported
 ' 337 MB while the delta could still have covered the gap, and it did not account for the
 ' sessions the laptop missed. 14 sessions leaves 16 sessions of slack.
-Const FULL_REIMPORT_DAYS = 14
-
 Dim doFull, lastFull, ageDays, dbEmpty
 doFull = True
 ageDays = 9999
@@ -185,4 +195,19 @@ Function ImportOne(path, formatPath)
   On Error GoTo 0
   WScript.Echo "  ok " + fso.GetFileName(path)
   ImportOne = 0
+End Function
+
+' ---------------------------------------------------------------------------
+' True when every character is 7-bit. Used to reject a path the importer cannot open.
+Function IsAscii(txt)
+  Dim i, cc
+  IsAscii = True
+  For i = 1 To Len(txt)
+    cc = AscW(Mid(txt, i, 1))
+    If cc < 0 Then cc = cc + 65536
+    If cc > 127 Then
+      IsAscii = False
+      Exit Function
+    End If
+  Next
 End Function

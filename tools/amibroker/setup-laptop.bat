@@ -1,29 +1,29 @@
 @echo off
 REM ============================================================================
 REM  Bootstrap the AmiBroker EOD sync on this Windows laptop.
-REM  Run once from an ordinary Command Prompt (no admin needed).
+REM  Run once from an ordinary Command Prompt or PowerShell - NO admin needed.
 REM
 REM  TRANSPORT: plain HTTP over Tailscale (WireGuard-encrypted on the wire).
 REM  This used to be rsync-over-SSH and it kept asking for a password: the key in the
 REM  server's authorized_keys belongs to a different Windows account, and a password
 REM  prompt cannot be automated. So the transport changed, not the credentials.
 REM
-REM  Nothing is required from you beyond running this file.
+REM  NOTE ON SCHEDULING: schtasks /SC ONLOGON requires administrator. A normal user gets
+REM  "ERROR: Access is denied." This script therefore uses the Startup folder, which needs
+REM  no elevation at all, and skips any task registration that fails instead of dying.
 REM ============================================================================
 
 set NAME=beavernest.taile871ab.ts.net
 set PORT=8089
 set BASE=http://%NAME%:%PORT%
-REM C:\ root is not writable for a normal user on Windows (only subfolders are), so fall
-REM back to %LOCALAPPDATA% when the preferred folder cannot be created.
-set DEST=C:\AmibrokerData\import
-mkdir "C:\AmibrokerData\import" >nul 2>&1
-if not exist "C:\AmibrokerData\import" (
-  set DEST=%LOCALAPPDATA%\AmibrokerData\import
-)
 set CURL=curl.exe -fsS --retry 3 --retry-delay 2 --connect-timeout 10
 
-echo [1/4] Checking the Tailscale link ...
+REM C:\ root is not writable for a normal user; only subfolders are.
+set DEST=C:\AmibrokerData\import
+mkdir "%DEST%" >nul 2>&1
+if not exist "%DEST%" set DEST=%LOCALAPPDATA%\AmibrokerData\import
+
+echo [1/5] Checking the Tailscale link ...
 ping -n 1 -w 2000 %NAME% >nul 2>&1
 if errorlevel 1 (
   echo   FAIL: cannot reach %NAME%.
@@ -32,17 +32,16 @@ if errorlevel 1 (
 )
 echo   OK
 
-echo [2/4] Preparing %DEST% ...
+echo [2/5] Preparing %DEST% ...
+echo         ^(folder must be ASCII-only: AmiBroker's importer cannot open non-ASCII paths^)
 if not exist "%DEST%" mkdir "%DEST%"
 if not exist "%DEST%" (
   echo   FAIL: cannot create %DEST%
   exit /b 2
 )
-echo   OK
+echo   OK -^> %DEST%
 
-echo [3/4] Pulling data (unchanged files are skipped) ...
-REM Fetch pull.bat from the server rather than expecting it next to this script: the
-REM user only has to get ONE file onto the laptop, and that file fetches the rest.
+echo [3/5] Pulling data (unchanged files are skipped) ...
 %CURL% -o "%DEST%\pull.bat" "%BASE%/pull.bat"
 if errorlevel 1 (
   echo   FAIL: could not download pull.bat from %BASE%
@@ -53,27 +52,44 @@ if errorlevel 1 (
   echo   FAIL: the initial pull did not complete. Check Tailscale, then re-run.
   exit /b 2
 )
-echo   OK
-dir /b "%DEST%\*.csv" | find /c ".csv" >nul
-
-echo [4/4] Registering scheduled tasks ...
-schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "\"%DEST%\pull.bat\"" /F >nul
-if errorlevel 1 (
-  echo   FAIL: schtasks could not register the hourly pull.
-  exit /b 2
-)
-schtasks /Create /TN "BanyuLangit-Import" /SC ONLOGON /TR "cscript //nologo \"%DEST%\sync-amibroker.vbs\"" /F >nul
-if errorlevel 1 (
-  echo   FAIL: schtasks could not register the import task.
+for %%F in ("%DEST%\delta_recent.csv") do if %%~zF LSS 1000 (
+  echo   FAIL: delta_recent.csv looks empty ^(%%~zF bytes^)
   exit /b 2
 )
 echo   OK
 
+echo [4/5] Registering the hourly pull ...
+REM /SC HOURLY does not need elevation. Try it; if the policy refuses, fall back to a
+REM Startup shortcut that pulls once per logon - degraded, but never silently missing.
+schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "%DEST%\pull.bat" /F >nul 2>&1
+if errorlevel 1 (
+  echo   WARN: hourly task refused ^(policy^); using a logon-time pull instead.
+  set HOURLY=0
+) else (
+  echo   OK -^> hourly
+  set HOURLY=1
+)
+
+echo [5/5] Registering the import at logon ...
+REM No elevation: a shortcut in the user's Startup folder.
+set STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+if not exist "%STARTUP%" mkdir "%STARTUP%" >nul 2>&1
+> "%STARTUP%\BanyuLangit Import.cmd" echo @echo off
+>> "%STARTUP%\BanyuLangit Import.cmd" echo call "%DEST%\import.bat"
+if exist "%STARTUP%\BanyuLangit Import.cmd" (
+  echo   OK -^> %STARTUP%
+) else (
+  echo   WARN: could not create the Startup shortcut. Run manually:
+  echo         call "%DEST%\import.bat"
+)
+
 echo.
-echo Done. Files are in %DEST%.
+echo Done. Data folder: %DEST%
+echo AmiBroker database expected at: C:\BanyuLangit\
 echo.
-echo Test the import once now:
-echo   cscript //nologo %DEST%\sync-amibroker.vbs
+echo Test the import once now ^(no admin, no AmiBroker open needed^):
+echo   call "%DEST%\import.bat"
+echo   type "%DEST%\last-import.log"
 echo.
 echo It should end with: OK: AmiBroker import complete -^> C:\BanyuLangit\
 exit /b 0
