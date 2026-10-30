@@ -179,7 +179,7 @@ WScript.Echo ""
 ' that matters - did the assignment survive?
 WScript.Echo "Reloading from disk to verify ..."
 On Error Resume Next
-Dim reOk
+Dim reOk, mCount, gCount, mid2, gid2, st4, nm, k
 reOk = APP.LoadDatabase(DB_PATH)
 If Err.Number <> 0 Then
   WScript.Echo "  reload raised " + CStr(Err.Number) + " " + Err.Description
@@ -190,7 +190,6 @@ WScript.Echo "Symbols after reload: " + CStr(APP.Stocks.Count)
 
 WScript.Echo ""
 WScript.Echo "---- census (read back from disk) ----"
-Dim mCount, gCount, mid2, gid2, st4, nm, k
 Set mCount = CreateObject("Scripting.Dictionary")
 Set gCount = CreateObject("Scripting.Dictionary")
 On Error Resume Next

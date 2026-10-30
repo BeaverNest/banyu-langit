@@ -44,9 +44,12 @@ REM  Idempotent: symbols already assigned correctly are skipped, so this costs o
 REM  pass over the symbol table on a normal night, not 2,377 writes.
 REM ============================================================================
 echo ---- categories ---- >> "%LOG%"
-cscript //nologo "%DEST%assign-categories.vbs" >> "%LOG%" 2>&1
-echo exit=%ERRORLEVEL% >> "%LOG%"
+cscript //nologo "%DEST%assign-categories.vbs" > "%DEST%cat-out.txt" 2>&1
 set RC3=%ERRORLEVEL%
+type "%DEST%cat-out.txt" >> "%LOG%"
+REM Also print to the console: the log on this machine has shown stale content after a run,
+REM and a result nobody can see is indistinguishable from a result that never happened.
+type "%DEST%cat-out.txt"
 echo exit=%RC3% >> "%LOG%"
 if not "%RC3%"=="0" (
   echo CATEGORY ASSIGNMENT FAILED >> "%LOG%"

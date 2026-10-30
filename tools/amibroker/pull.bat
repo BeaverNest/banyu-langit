@@ -32,6 +32,8 @@ for %%F in (
   import.bat
   sync-amibroker.vbs
   verify-persist.vbs
+  diag-amibroker.vbs
+  diag2-amibroker.vbs
   assign-categories.vbs
   category_assign.csv
   category_names.csv
@@ -43,8 +45,19 @@ for %%F in (
   us_part01.csv us_part02.csv us_part03.csv us_part04.csv us_part05.csv
   idx_part01.csv idx_part02.csv idx_part03.csv idx_part04.csv
 ) do (
-  %CURL% -o "%DEST%%%F" -z "%DEST%%%F" "%BASE%/%%F"
-  if errorlevel 1 echo WARN: %%F failed
+  REM Atomic replace: download to .tmp, then move over the target. Writing straight onto a file
+  REM that Windows (or a script still executing) holds produces a truncated or stale copy that
+  REM keeps executing as the previous version - which is exactly what happened during testing.
+  %CURL% -o "%DEST%%%F.tmp" "%BASE%/%%F"
+  if errorlevel 1 (
+    echo WARN: %%F failed
+  ) else (
+    move /Y "%DEST%%%F.tmp" "%DEST%%%F" >nul 2>&1
+    if errorlevel 1 (
+      echo WARN: %%F could not be replaced - a process may be holding it
+      del "%DEST%%%F.tmp" >nul 2>&1
+    )
+  )
   REM Small stagger between files. Without it several curl processes can hit the same file
   REM while AmiBroker is opening the folder, and Windows answers "being used by another
   REM process" - which looks like a failed download but is a sharing conflict.

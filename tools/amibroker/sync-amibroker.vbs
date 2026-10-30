@@ -376,28 +376,40 @@ If probe <> "" Then WScript.Echo "First symbol: " + probe
 
 ' ---- persist ---------------------------------------------------------------
 ' ---- market census (informational) ---------------------------------------
-' Prints ONLY markets that actually hold symbols. The database reserves 256 market slots and
-' 254 of them are empty forever, so looping over all of them printed 256 lines of noise on
-' every run and buried the lines that matter. The real gate lives in assign-categories.vbs,
-' which knows which markets were supposed to be filled.
+' ONE pass over the symbols, not one pass per market slot.
+' WHY THIS WAS REWRITTEN: the previous version looped mIdx = 0..255 and called a helper per
+' slot. That helper ended with `On Error GoTo 0`, which resets error handling for the CALLER
+' as well, so the first unexpected error aborted the whole script - right after the imports,
+' before SaveDatabase. The symptom was a run that printed the census line for market 0 and
+' then exited 1 with no "Saving database" at all. It also made 256 x 2,378 = 608,000 OLE calls
+' for information a single pass answers.
+Dim mIdx, mName, mCount, censusHits, stc, midc
+Dim cKeys, cVals
+Set cKeys = CreateObject("Scripting.Dictionary")
 On Error Resume Next
-Dim mIdx, mObj, mName, mCount, censusHits
-censusHits = 0
-For mIdx = 0 To APP.Markets.Count - 1
-  mCount = CountSymbolsInMarket(APP, mIdx)
-  If Err.Number <> 0 Then
-    Err.Clear
-  ElseIf mCount > 0 Then
-    mName = APP.Markets.Item(mIdx).Name
-    Err.Clear
-    If mCount >= 1 Then
-      WScript.Echo "  market " + CStr(mIdx) + " (" + mName + "): " + CStr(mCount) + " symbols"
-    End If
-    censusHits = censusHits + 1
+For mIdx = 0 To APP.Stocks.Count - 1
+  Set stc = APP.Stocks.Item(mIdx)
+  midc = -1
+  If Err.Number = 0 Then midc = stc.MarketID
+  If Err.Number = 0 Then
+    If cKeys.Exists(midc) Then cKeys(midc) = cKeys(midc) + 1 Else cKeys(midc) = 1
   End If
+  Err.Clear
 Next
 On Error GoTo 0
-If censusHits = 0 Then WScript.Echo "  no market assignment present yet"
+
+If cKeys.Count = 0 Then
+  WScript.Echo "  no market assignment present yet"
+Else
+  For Each mIdx In cKeys.Keys
+    mName = "?"
+    On Error Resume Next
+    mName = APP.Markets.Item(mIdx).Name
+    Err.Clear
+    On Error GoTo 0
+    WScript.Echo "  market " + CStr(mIdx) + " (" + mName + "): " + CStr(cKeys(mIdx)) + " symbols"
+  Next
+End If
 
 ' SaveDatabase() is not optional. Without it the imported bars exist only in the running
 ' instance: the script reports 2,518 bars, the process ends, and the next run finds 30 again.
@@ -557,19 +569,4 @@ Function MaxBarsInDatabase()
   Next
   On Error GoTo 0
   MaxBarsInDatabase = best
-End Function
-
-' Count symbols assigned to one market. Stock.MarketID is a 0-based index into Markets.
-Function CountSymbolsInMarket(app, marketIdx)
-  Dim n, k, st
-  n = 0
-  On Error Resume Next
-  For k = 0 To app.Stocks.Count - 1
-    Set st = app.Stocks.Item(k)
-    If Err.Number <> 0 Then Err.Clear
-    If st.MarketID = marketIdx Then n = n + 1
-    Err.Clear
-  Next
-  On Error GoTo 0
-  CountSymbolsInMarket = n
 End Function

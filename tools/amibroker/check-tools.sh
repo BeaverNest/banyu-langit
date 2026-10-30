@@ -133,6 +133,18 @@ for f in $(grep -oE '^  [a-zA-Z0-9_.-]+\.(csv|vbs|bat|format|abb|json)$' pull.ba
 done
 chk "pull.bat has no dead references" $?
 
+
+# 17. VBScript: a Dim inside a loop body re-executes and, under Option Explicit, aborts with
+# "Variable is undefined". It cost a saved-then-failed run. Every Dim must sit at column 0 of
+# its scope, before the loop that uses it.
+bad=$(awk '/^ *(For|Do|While)\b/{depth++} /^ *Next\b|^ *Loop\b/{if(depth>0)depth--} /^ *Dim /{if(depth>0) print FILENAME":"FNR}' *.vbs 2>/dev/null)
+if [ -z "$bad" ]; then
+  chk "no Dim inside a loop in any .vbs" 0
+else
+  echo "  $bad"
+  chk "no Dim inside a loop in any .vbs" 1
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2
