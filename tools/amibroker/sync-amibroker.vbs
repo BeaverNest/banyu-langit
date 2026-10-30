@@ -18,10 +18,14 @@
 
 Option Explicit
 
-Dim IMPORT_DIR, FMT_DIR, STATE_FILE, APP
+Dim IMPORT_DIR, FMT_DIR, STATE_FILE, APP, DB_PATH
 IMPORT_DIR = "C:\AmibrokerData\import"
 FMT_DIR    = "C:\Program Files\AmiBroker\Formats"
 STATE_FILE = IMPORT_DIR + "\last_full_import.txt"
+' The owner's database directory. AmiBroker opens whichever database was last active, so an
+' import can land in the default "data" database and look successful while C:\BanyuLangit stays
+' untouched. Always verify DatabasePath before importing.
+DB_PATH    = "C:\BanyuLangit"
 
 ' Re-import the 332 MB history only when the laptop has been away long enough that the
 ' 30-session delta can no longer cover the gap. Any shorter absence is served by the delta.
@@ -53,6 +57,35 @@ On Error Resume Next
 APP.Visible = False
 Err.Clear
 On Error GoTo 0
+
+' ---- force the database, do not inherit "last used" ------------------------
+' AmiBroker opens whichever database was active last time. Importing into that one "succeeds"
+' while C:\BanyuLangit stays empty, which is the worst kind of failure: silent and plausible.
+Dim cur
+cur = ""
+On Error Resume Next
+cur = APP.DatabasePath
+Err.Clear
+On Error GoTo 0
+
+If InStr(1, cur, "BanyuLangit", vbTextCompare) = 0 Then
+  On Error Resume Next
+  APP.SaveDatabase
+  APP.LoadDatabase(DB_PATH)
+  If Err.Number <> 0 Then
+    WScript.Echo "FAIL: could not switch database to " + DB_PATH + " (" + Err.Description + ")"
+    WScript.Quit 2
+  End If
+  Err.Clear
+  On Error GoTo 0
+  WScript.Echo "Switched database: '" + CStr(cur) + "' -> " + DB_PATH
+End If
+
+If Not fso.FolderExists(DB_PATH) Then
+  WScript.Echo "FAIL: database folder " + DB_PATH + " does not exist."
+  WScript.Echo "      Create it once in AmiBroker: File -> New Database -> " + DB_PATH
+  WScript.Quit 2
+End If
 
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
 If Not fso.FileExists(fmt) Then
@@ -111,7 +144,13 @@ If failed > 0 Then
   WScript.Quit 2
 End If
 
-WScript.Echo "OK: AmiBroker import complete"
+Dim finalDb
+finalDb = ""
+On Error Resume Next
+finalDb = APP.DatabasePath
+Err.Clear
+On Error GoTo 0
+WScript.Echo "OK: AmiBroker import complete -> " + CStr(finalDb)
 WScript.Quit 0
 
 ' ---------------------------------------------------------------------------
