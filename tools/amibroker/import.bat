@@ -20,8 +20,11 @@ REM Persistence check: run a second, fresh cscript. A new process can only see w
 REM disk, so "Symbols before import" in THIS run is the real test of the previous run's save.
 REM If the previous run genuinely saved, this run starts from 2000+ symbols and skips the full
 REM import; if it did not, this run pays for 337 MB again and the log shows was=0.
-echo ---- persistence check ---- >> "%LOG%"
-cscript //nologo "%DEST%sync-amibroker.vbs" >> "%LOG%" 2>&1
+REM Cold-start check: closes AmiBroker and reopens it, so this reads from disk only.
+REM Without the restart, GetObject attaches to the instance still holding the import in memory
+REM and "was 2378" would prove nothing.
+echo ---- persistence check (cold start) ---- >> "%LOG%"
+cscript //nologo "%DEST%sync-amibroker.vbs" verify >> "%LOG%" 2>&1
 set RC2=%ERRORLEVEL%
 echo exit=%RC2% >> "%LOG%"
 

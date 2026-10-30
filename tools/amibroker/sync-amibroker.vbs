@@ -56,6 +56,65 @@ If APP Is Nothing Then
   WScript.Quit 2
 End If
 
+' ---- verify mode ----------------------------------------------------------
+' "was 2378" does NOT prove persistence: GetObject attaches to the instance left open by the
+' previous run, so an unsaved import reads back identically. Only a process that never saw the
+' import can tell. This mode closes AmiBroker, waits, starts a fresh instance, and reports what
+' it can read from disk.
+Dim verifyOnly
+verifyOnly = False
+If WScript.Arguments.Count > 0 Then
+  If LCase(WScript.Arguments(0)) = "verify" Then verifyOnly = True
+End If
+
+If verifyOnly Then
+  WScript.Echo "Closing AmiBroker to force a cold read ..."
+  On Error Resume Next
+  APP.SaveDatabase
+  APP.Quit
+  Err.Clear
+  On Error GoTo 0
+  WScript.Sleep 8000
+
+  Dim cold, coldBars, coldTries, coldCount
+  cold = Nothing
+  coldBars = 0
+  coldTries = 0
+  coldCount = 0
+  On Error Resume Next
+  Set cold = CreateObject("Broker.Application")
+  Err.Clear
+  On Error GoTo 0
+
+  If cold Is Nothing Then
+    WScript.Echo "FAIL: could not restart AmiBroker"
+    WScript.Quit 2
+  End If
+
+  Do While coldTries < 30
+    On Error Resume Next
+    coldCount = cold.Stocks.Count
+    If coldCount > 0 Then
+      Dim cs : Set cs = cold.Stocks(0)
+      coldBars = cs.Quotations.Count
+    End If
+    Err.Clear
+    On Error GoTo 0
+    If coldBars >= MIN_HISTORY_BARS Then Exit Do
+    WScript.Sleep 1000
+    coldTries = coldTries + 1
+  Loop
+
+  WScript.Echo "Cold start reads: " + CStr(coldCount) + " symbols, first holds " + CStr(coldBars) + " bars"
+  If coldBars >= MIN_HISTORY_BARS Then
+    WScript.Echo "PERSISTENT: data survived a full restart"
+    WScript.Quit 0
+  Else
+    WScript.Echo "FAIL: bars vanished after restart - SaveDatabase is not writing"
+    WScript.Quit 2
+  End If
+End If
+
 ' Keep the window out of the way while it works; this is cosmetic only.
 On Error Resume Next
 APP.Visible = False
