@@ -472,7 +472,12 @@ function renderRotationHeatmap(){
   });
 
   h+='</tbody></table></div>';
-  h+='<div style="margin-top:8px;font-size:10px;color:var(--t3)">🟢 Positive (inflow/gain) → 🔴 Negative (outflow/loss). Click name to drill down. Click header to sort. Monthly aggregated.</div>';
+  // Label must describe what the table actually shows: the API returns weekly
+  // buckets (weeks param, default 12), and this function aggregates those weeks
+  // into calendar months. Saying just "Monthly aggregated" implied the API itself
+  // served months, and with a 12-week window the first and last buckets are partial
+  // months — so the window is stated explicitly.
+  h+='<div style="margin-top:8px;font-size:10px;color:var(--t3)">🟢 Positive (inflow/gain) → 🔴 Negative (outflow/loss). Click name to drill down. Click header to sort. Weekly data (' + secIntWeeks + ' weeks) aggregated into calendar months; first and last buckets are partial months.</div>';
   el.innerHTML=h;
 }
 
