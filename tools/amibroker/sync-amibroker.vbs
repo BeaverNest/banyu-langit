@@ -19,7 +19,9 @@
 Option Explicit
 
 Dim IMPORT_DIR, FMT_DIR, STATE_FILE, APP, DB_PATH
-IMPORT_DIR = "C:\AmibrokerData\import"
+' Derive the import folder from where this script lives, so moving the folder does not
+' require editing paths. Hardcoded paths were the first thing to rot in the old build.
+IMPORT_DIR = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
 FMT_DIR    = "C:\Program Files\AmiBroker\Formats"
 STATE_FILE = IMPORT_DIR + "\last_full_import.txt"
 ' The owner's database directory. AmiBroker opens whichever database was last active, so an
@@ -27,14 +29,13 @@ STATE_FILE = IMPORT_DIR + "\last_full_import.txt"
 ' untouched. Always verify DatabasePath before importing.
 DB_PATH    = "C:\BanyuLangit\"
 
-' Re-import the 332 MB history only when the laptop has been away long enough that the
-' 30-session delta can no longer cover the gap. Any shorter absence is served by the delta.
-Const FULL_REIMPORT_DAYS = 20
+' Re-import the 332 MB history only when the delta can no longer cover the gap.
+' See the decision block below for the exact rule.
 
 Dim fso : Set fso = CreateObject("Scripting.FileSystemObject")
 
 If Not fso.FileExists(IMPORT_DIR + "\delta_recent.csv") Then
-  WScript.Echo "FAIL: " + IMPORT_DIR + "\delta_recent.csv not found - did the rsync task run?"
+  WScript.Echo "FAIL: " + IMPORT_DIR + "\delta_recent.csv not found - did the pull task run?"
   WScript.Quit 2
 End If
 
@@ -100,9 +101,25 @@ failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
 failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 
 ' ---- full snapshot only when the delta cannot cover the gap ----------------
-Dim doFull, lastFull, ageDays
+' A delta holds 30 sessions of bars. Twenty days was wrong on two counts: it re-imported
+' 337 MB while the delta could still have covered the gap, and it did not account for the
+' sessions the laptop missed. 14 sessions leaves 16 sessions of slack.
+Const FULL_REIMPORT_DAYS = 14
+
+Dim doFull, lastFull, ageDays, dbEmpty
 doFull = True
-If fso.FileExists(STATE_FILE) Then
+ageDays = 9999
+dbEmpty = True
+On Error Resume Next
+dbEmpty = (APP.Stocks.Count = 0)
+Err.Clear
+On Error GoTo 0
+
+' An empty database MUST get the full snapshot: the delta alone would leave 10 years missing
+' while reporting success, which is the failure mode this whole script exists to avoid.
+If dbEmpty Then
+  WScript.Echo "Empty database - full import required"
+ElseIf fso.FileExists(STATE_FILE) Then
   Dim t : t = fso.OpenTextFile(STATE_FILE, 1).ReadAll
   If IsDate(Trim(t)) Then
     lastFull = CDate(Trim(t))
@@ -112,7 +129,7 @@ If fso.FileExists(STATE_FILE) Then
 End If
 
 If doFull Then
-  WScript.Echo "Full re-import (last full: " + CStr(ageDays) + " days ago or never)"
+  WScript.Echo "Full import (last full: " + CStr(ageDays) + " days ago)"
   Dim i, p
   For i = 1 To 5
     p = IMPORT_DIR + "\us_part0" + CStr(i) + ".csv"

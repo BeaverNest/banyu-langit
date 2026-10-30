@@ -14,7 +14,13 @@ REM ============================================================================
 set NAME=beavernest.taile871ab.ts.net
 set PORT=8089
 set BASE=http://%NAME%:%PORT%
+REM C:\ root is not writable for a normal user on Windows (only subfolders are), so fall
+REM back to %LOCALAPPDATA% when the preferred folder cannot be created.
 set DEST=C:\AmibrokerData\import
+mkdir "C:\AmibrokerData\import" >nul 2>&1
+if not exist "C:\AmibrokerData\import" (
+  set DEST=%LOCALAPPDATA%\AmibrokerData\import
+)
 set CURL=curl.exe -fsS --retry 3 --retry-delay 2 --connect-timeout 10
 
 echo [1/4] Checking the Tailscale link ...
