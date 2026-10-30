@@ -110,8 +110,13 @@ If Not IsAscii(IMPORT_DIR) Then
 End If
 
 ' ---- delta first: newest bars land in seconds, before any big import -------
-Dim failed, f
+Dim failed, symBefore, symAfter
 failed = 0
+symBefore = -1
+On Error Resume Next
+symBefore = APP.Stocks.Count
+Err.Clear
+On Error GoTo 0
 failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
 failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 
@@ -173,6 +178,30 @@ If failed > 0 Then
   WScript.Echo "FAIL: " + CStr(failed) + " file(s) failed to import"
   WScript.Quit 2
 End If
+
+' ---- prove the data actually landed ---------------------------------------
+' OLE Import() returns no error even when every line is rejected (wrong separator, missing
+' format, bad dates). The first build reported "ok" eleven times against an empty database.
+' Counting symbols is cheap and it is the only evidence available from inside this script.
+symAfter = -1
+On Error Resume Next
+symAfter = APP.Stocks.Count
+Err.Clear
+On Error GoTo 0
+
+If symAfter <= 0 Then
+  WScript.Echo "FAIL: import reported no errors but the database holds " + CStr(symAfter) + " symbols."
+  WScript.Echo "      The format file was probably rejected: check " + fmt
+  WScript.Echo "      and look for import.log next to the AmiBroker executable."
+  WScript.Quit 2
+End If
+
+If symBefore >= 0 And symAfter < symBefore Then
+  WScript.Echo "FAIL: symbol count fell from " + CStr(symBefore) + " to " + CStr(symAfter)
+  WScript.Quit 2
+End If
+
+WScript.Echo "Symbols in database: " + CStr(symAfter) + " (was " + CStr(symBefore) + ")"
 
 Dim finalDb
 finalDb = ""

@@ -1,17 +1,20 @@
 ; AmiBroker ASCII import format for the Banyu Langit export.
 ;
-; WHERE THIS GOES:  C:\Program Files\AmiBroker\Formats\  (next to the other .format files)
-; File name matters: this one is "banyulangit.format" only as a label — AmiBroker picks the
-; format by the DATA file's extension (.csv). If you already have a .csv format defined, either
-; merge these lines into it or rename the exported files to .blk / .txt and name this format to
-; match. Do not let two different .csv formats compete for the same extension.
+; The OLE Import() call passes this file explicitly, so it does NOT have to live in
+; C:\Program Files\AmiBroker\Formats - which a normal user cannot write to.
 ;
-; The column order here MUST match server/scripts/export-amibroker.js:
+; Column order MUST match server/scripts/export-amibroker.js:
 ;   Ticker,YYYY-MM-DD,Open,High,Low,Close,Volume
+;
+; $BREAKONERR 1 is deliberate: without it a rejected line is skipped silently, Import()
+; reports no error, and the database stays empty while the script prints "ok". A gate that
+; cannot go red is worse than no gate.
+;
+; $OVERWRITE is NOT set: it belongs to symbol-information imports ($NOQUOTES), not quotes.
 
 $FORMAT Ticker,Date_YMD,Open,High,Low,Close,Volume
 $SEPARATOR ,
-$AUTOADD 1
-$OVERWRITE 1
 $SKIPLINES 0
+$AUTOADD 1
+$BREAKONERR 1
 $DEBUG 1
