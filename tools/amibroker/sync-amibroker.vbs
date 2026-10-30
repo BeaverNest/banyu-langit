@@ -22,7 +22,10 @@ Dim IMPORT_DIR, FMT_DIR, STATE_FILE, APP, DB_PATH
 ' Derive the import folder from where this script lives, so moving the folder does not
 ' require editing paths. Hardcoded paths were the first thing to rot in the old build.
 IMPORT_DIR = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-FMT_DIR    = "C:\Program Files\AmiBroker\Formats"
+' The format file does NOT need to live in Program Files. OLE Import() takes the format path
+' as an explicit argument, so it can sit next to the data - which matters because
+' C:\Program Files is not writable for a normal user and copying there needs admin.
+FMT_DIR    = IMPORT_DIR
 STATE_FILE = IMPORT_DIR + "\last_full_import.txt"
 ' The owner's database directory. AmiBroker opens whichever database was last active, so an
 ' import can land in the default "data" database and look successful while C:\BanyuLangit stays
@@ -93,7 +96,7 @@ Const FULL_REIMPORT_DAYS = 14
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
 If Not fso.FileExists(fmt) Then
   WScript.Echo "FAIL: format file not found: " + fmt
-  WScript.Echo "      Copy it from " + IMPORT_DIR + "\banyulangit.format"
+  WScript.Echo "      It should have been pulled with the data. Re-run pull.bat."
   WScript.Quit 2
 End If
 
