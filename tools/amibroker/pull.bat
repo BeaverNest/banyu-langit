@@ -26,6 +26,8 @@ for %%F in (
   delta_index.csv
   index_ihsg.csv
   banyulangit-categories.format
+  banyulangit-sector.format
+  banyulangit-industry.format
   categories_idx.csv
   categories_us.csv
   banyulangit.format
@@ -33,6 +35,15 @@ for %%F in (
   import.bat
   sync-amibroker.vbs
   verify-persist.vbs
+  assign-categories.vbs
+  diag-categories.vbs
+  diag-categories2.vbs
+  diag-categories3.vbs
+  diag-categories4.vbs
+  category_assign.csv
+  category_names.csv
+  categories_sector.csv
+  categories_industry.csv
   refresh.bat
   open-amibroker.bat
   setup-laptop.bat

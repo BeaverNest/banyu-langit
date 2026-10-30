@@ -56,24 +56,62 @@ grep -q 'build %BUILD%' setup-laptop.bat 2>/dev/null
 chk "setup-laptop.bat prints a build stamp" $?
 
 
-# 8. Category files must ship: a market/group import cannot run without them.
-for f in categories_us.csv categories_idx.csv banyulangit-categories.format; do
+# 8. Category files must ship: a market/group pass cannot run without them.
+for f in category_assign.csv category_names.csv categories_sector.csv categories_industry.csv \
+         banyulangit-sector.format banyulangit-industry.format; do
   grep -q "  $f" pull.bat 2>/dev/null
   chk "pull.bat ships $f" $?
 done
 
-# 9. The category format must NOT auto-add symbols: a typo would invent empty tickers.
-grep -q '^\$AUTOADD 0' banyulangit-categories.format 2>/dev/null
-chk "category format keeps AUTOADD 0" $?
+# 9. The category formats must NOT auto-add symbols: a typo would invent empty tickers, and
+# they must overwrite, because every symbol already exists from the quote import.
+for f in banyulangit-sector.format banyulangit-industry.format; do
+  grep -q '^\$AUTOADD 0' "$f" 2>/dev/null
+  chk "$f keeps AUTOADD 0" $?
+  grep -q '^\$OVERWRITE 1' "$f" 2>/dev/null
+  chk "$f keeps OVERWRITE 1" $?
+done
 
-# 10. Categories must be imported AFTER the quotes ($AUTOADD 0 needs existing symbols).
-qt=$(grep -n 'ImportOne(IMPORT_DIR + "\\index_ihsg.csv"' sync-amibroker.vbs | head -1 | cut -d: -f1)
-ct=$(grep -n 'catFiles = Array' sync-amibroker.vbs | head -1 | cut -d: -f1)
+# 10. Categories must be imported AFTER the quotes, or $OVERWRITE has nothing to overwrite.
+qt=$(grep -n 'index_ihsg.csv' sync-amibroker.vbs | head -1 | cut -d: -f1)
+ct=$(grep -n 'categories_sector.csv' sync-amibroker.vbs | head -1 | cut -d: -f1)
 if [ -n "$qt" ] && [ -n "$ct" ] && [ "$ct" -gt "$qt" ]; then
   chk "categories import after the quote files" 0
 else
   chk "categories import after the quote files" 1
 fi
+
+# 11. Sector/industry must go in by NAME. MARKET/GROUP take an ID and silently discard a name -
+# that is the bug that made the first attempt report rc=0 and change nothing.
+grep -q '^\$FORMAT Ticker,SectorName' banyulangit-sector.format 2>/dev/null
+chk "sector format uses SectorName" $?
+grep -q '^\$FORMAT Ticker,SectorName,IndustryName' banyulangit-industry.format 2>/dev/null
+chk "industry format carries its sector" $?
+
+# 12. Group IDs are ONE namespace across markets. Numbering US and IDX both from 1 makes the
+# second name write land on the first - the exact bug found before shipping.
+grep -q 'let gNext = 1' ../../server/scripts/export-amibroker.js 2>/dev/null
+chk "group IDs allocated from one counter" $?
+grep -q "gIndex\['US:' + g\] = gNext++" ../../server/scripts/export-amibroker.js 2>/dev/null
+chk "US groups numbered from the shared counter" $?
+
+# 13. The assigner must verify from disk, not from the live instance: a memory-only count is
+# what made an earlier persistence check lie.
+grep -q 'LoadDatabase(DB_PATH)' assign-categories.vbs 2>/dev/null
+chk "assigner reloads from disk before counting" $?
+
+
+# 14. The assigner must run AFTER the import: it assigns symbols, and the quote import is what
+# creates them. Running it first would find an empty database and assign nothing.
+for f in import.bat refresh.bat; do
+  si=$(grep -n 'sync-amibroker.vbs' "$f" | head -1 | cut -d: -f1)
+  ai=$(grep -n 'assign-categories.vbs' "$f" | head -1 | cut -d: -f1)
+  if [ -n "$si" ] && [ -n "$ai" ] && [ "$ai" -gt "$si" ]; then
+    chk "$f assigns categories after the import" 0
+  else
+    chk "$f assigns categories after the import" 1
+  fi
+done
 
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"

@@ -32,6 +32,26 @@ cscript //nologo "%DEST%sync-amibroker.vbs" >> "%LOG%" 2>&1
 set RC=%ERRORLEVEL%
 echo exit=%RC% >> "%LOG%"
 
+REM ============================================================================
+REM  Categories: name the markets and assign every symbol.
+REM
+REM  Runs AFTER sync-amibroker.vbs on purpose. Sector and industry are imported by
+REM  sync-amibroker.vbs (ASCII SECTORNAME/INDUSTRYNAME); market and group have no
+REM  importable name field at all - MARKET/GROUP take a numeric ID - so they are
+REM  set over OLE here, after the symbols exist.
+REM
+REM  Idempotent: symbols already assigned correctly are skipped, so this costs one
+REM  pass over the symbol table on a normal night, not 2,377 writes.
+REM ============================================================================
+echo ---- categories ---- >> "%LOG%"
+cscript //nologo "%DEST%assign-categories.vbs" >> "%LOG%" 2>&1
+set RC3=%ERRORLEVEL%
+echo exit=%RC3% >> "%LOG%"
+if not "%RC3%"=="0" (
+  echo CATEGORY ASSIGNMENT FAILED >> "%LOG%"
+  set RC=%RC3%
+)
+
 REM Keep the log bounded: this appends 24 times a day.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"
 

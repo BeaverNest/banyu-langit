@@ -1,0 +1,23 @@
+; ---------------------------------------------------------------------------
+; Sector assignment for Banyu Langit symbols.
+;
+; Ticker,SectorName - and SECTORNAME is the only ASCII field that accepts a NAME.
+; MARKET and GROUP take an ID and discard a name silently; SECTORNAME/INDUSTRYNAME
+; create the sector/industry on the fly if it does not exist yet. Measured: the
+; first attempt used names for MARKET/GROUP, both imports returned rc=0, and all
+; 2,378 symbols stayed in market 0.
+;
+; $OVERWRITE 1 is required: these symbols already exist from the quote import, and
+; the assignment fields only apply to existing symbols when overwrite is on.
+;
+; $NOQUOTES 1 because no field here is quoted; the exporter strips commas instead,
+; since a quote character would be kept literally and become part of the name.
+; ---------------------------------------------------------------------------
+$FORMAT Ticker,SectorName
+$SEPARATOR ,
+$SKIPLINES 0
+$NOQUOTES 1
+$OVERWRITE 1
+$AUTOADD 0
+$BREAKONERR 1
+$DEBUG 1

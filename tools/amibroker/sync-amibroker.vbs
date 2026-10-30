@@ -275,23 +275,30 @@ Else
   WScript.Echo "Delta import only (last full " + CStr(ageDays) + " days ago)"
 End If
 
-' ---- categories: market / group / sector / industry -----------------------
-' Runs on BOTH paths, full and delta. Categories are cheap (2,377 rows, ~120 KB) and they are
-' not quote data: skipping them on a delta night would leave a newly listed symbol with no
-' market assignment until the next full import - invisible, because the chart still draws.
+' ---- categories: sector / industry -------------------------------------
+' Market and group are NOT here: the ASCII importer takes a numeric ID for those and discards
+' a name without an error, while SECTORNAME/INDUSTRYNAME accept a name and create it. Market
+' and group assignment is done by assign-categories.vbs over OLE instead.
 '
-' ORDER MATTERS: $AUTOADD 0 in this format means it only assigns symbols that already exist,
-' so importing categories before the quotes would assign nothing at all.
-Dim catFmt : catFmt = FMT_DIR + "\banyulangit-categories.format"
+' Order: sector file first, then industry. INDUSTRYNAME attaches the industry to the sector
+' named in the SAME row, so industries land under the right sector; a symbol's sector in
+' AmiBroker is derived from its industry, so the sector-only pass is a fallback for symbols
+' whose industry is unknown.
+'
+' Runs on BOTH the full and delta paths. A newly listed symbol must get its categories the
+' same night it gets its quotes, otherwise it sits in Undefined with a chart that still draws.
+Dim catFmt : catFmt = FMT_DIR + "\banyulangit-sector.format"
+Dim indFmt : indFmt = FMT_DIR + "\banyulangit-industry.format"
 If fso.FileExists(catFmt) Then
-  Dim catFiles, cf, cp
-  catFiles = Array("categories_us.csv", "categories_idx.csv")
-  For Each cf In catFiles
-    cp = IMPORT_DIR + "\" + cf
-    If fso.FileExists(cp) Then failed = failed + ImportOne(cp, catFmt)
-  Next
+  Dim cp
+  cp = IMPORT_DIR + "\categories_sector.csv"
+  If fso.FileExists(cp) Then failed = failed + ImportOne(cp, catFmt)
+  If fso.FileExists(indFmt) Then
+    cp = IMPORT_DIR + "\categories_industry.csv"
+    If fso.FileExists(cp) Then failed = failed + ImportOne(cp, indFmt)
+  End If
 Else
-  WScript.Echo "WARN: banyulangit-categories.format not found - market/group not assigned"
+  WScript.Echo "WARN: banyulangit-sector.format missing - categories skipped"
 End If
 
 ' ---- make the new bars visible --------------------------------------------

@@ -282,33 +282,71 @@ function writeCategories() {
     ORDER BY d.code
   `).all().filter(r => KEPT.has(r.code));
 
-  function write(file, rows, marketName, suffix) {
-    const cat = rows.map(r => ({
-      ticker: r.code + suffix, market: marketName, group: r.grp,
-      sector: r.sector, industry: r.industry,
-    }));
-    if (!cat.length) return null;
-    // A comma inside a name shifts every column after it, so a stock lands in the wrong market
-    // and the import still succeeds. Measured on the first run: 29 rows carried commas
-    // ("Furnishings, Fixtures and Appliances", "Pendukung Minyak, Gas and Batu Bara").
-    // Replace them rather than quoting: $NOQUOTES 1 means a quote character would be kept
-    // literally and become part of the sector name itself.
-    const clean = (v) => String(v).replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
-    const lines = cat.map(r =>
-      [clean(r.ticker), clean(r.market), clean(r.group), clean(r.sector), clean(r.industry)].join(','));
-    // Same atomic write as the quote CSVs and for the same reason: a pull mid-write would
-    // import a truncated category file, and a category import that stops early silently leaves
-    // half the universe in the wrong market.
+  // ---- category files ---------------------------------------------------
+  // AmiBroker's ASCII importer has an asymmetric API, and getting it wrong is silent:
+  //   MARKET / GROUP       take a numeric ID only  -> a name is accepted and discarded
+  //   SECTORNAME / INDUSTRYNAME  take a NAME and create it on the fly
+  // Measured: the first attempt shipped names for MARKET/GROUP, both files returned rc=0, and
+  // all 2,378 symbols stayed in market 0 ("Undefined"). rc=0 proves the file parsed, nothing more.
+  //
+  // So the work is split in three:
+  //   category_assign.csv  ticker,market_id,group_id      -> applied over OLE (exact, no parsing)
+  //   categories_sector.csv ticker,sector_name            -> ASCII, creates sectors
+  //   categories_industry.csv ticker,industry_name        -> ASCII, attaches industry to sector
+  // GICS/ICB are deliberately absent: the vendor ships only the classification TREES
+  // (gics.txt / icb.txt are "code; name" lists), not a ticker -> code map. Filling them would
+  // mean inventing the mapping, so they stay empty until a licensed crosswalk exists.
+  const clean = (v) => String(v).replace(/,/g, ' ').replace(/[;\t]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  function atomic(file, lines) {
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, lines.join('\n') + '\n');
     fs.renameSync(tmp, file);
-    return { file: path.basename(file), rows: cat.length, bytes: fs.statSync(file).size };
+    return { file: path.basename(file), rows: lines.length, bytes: fs.statSync(file).size };
   }
 
-  const usW = write(path.join(OUT, 'categories_us.csv'), us, 'US', '');
-  const idxW = write(path.join(OUT, 'categories_idx.csv'), idx, 'IDX', '.JK');
-  if (usW) files.push(usW);
-  if (idxW) files.push(idxW);
+  const usGroups = [...new Set(us.map(r => r.grp))].sort();
+  const idxGroups = [...new Set(idx.map(r => r.grp))].sort();
+  const mIndex = { US: 1, IDX: 2 };          // 0 = Undefined, 255 = reserved
+  // Group IDs are ONE namespace across all markets, not one per market. Numbering US from 1 and
+  // IDX from 1 as well would put "US EQUITY" and "IDX Akselerasi" both in group 1, and the
+  // second name write would silently overwrite the first. Allocate the whole range up front.
+  const gIndex = {};
+  let gNext = 1;
+  usGroups.forEach(g => { gIndex['US:' + g] = gNext++; });
+  idxGroups.forEach(g => { gIndex['IDX:' + g] = gNext++; });
+
+  const tagged = [
+    ...us.map(r => ({ sym: r.code, market: 'US', grp: r.grp, sector: r.sector, industry: r.industry })),
+    ...idx.map(r => ({ sym: r.code + '.JK', market: 'IDX', grp: r.grp, sector: r.sector, industry: r.industry })),
+  ];
+
+  files.push(atomic(path.join(OUT, 'category_assign.csv'),
+    tagged.map(r => `${clean(r.sym)},${mIndex[r.market]},${gIndex[r.market + ':' + r.grp]}`)));
+
+  files.push(atomic(path.join(OUT, 'categories_sector.csv'),
+    tagged.map(r => `${clean(r.sym)},${clean(r.sector)}`)));
+
+  files.push(atomic(path.join(OUT, 'categories_industry.csv'),
+    tagged.map(r => `${clean(r.sym)},${clean(r.sector)},${clean(r.industry)}`)));
+
+  // Market and group names cannot ride in on the CSV (the importer takes IDs), and OLE cannot
+  // enumerate Groups/Watchlists/Sectors at all in 6.30 - so the names ship as a small list and
+  // the Windows side applies them through Markets.Item(n).Name, the one collection OLE exposes.
+  files.push(atomic(path.join(OUT, 'category_names.csv'),
+    [`MARKET,1,US`, `MARKET,2,IDX`,
+     ...usGroups.map(g => `GROUP,${gIndex['US:' + g]},US ${g}`),
+     ...idxGroups.map(g => `GROUP,${gIndex['IDX:' + g]},IDX ${g}`)]));
+
+  const catSummary = {
+    symbols: tagged.length,
+    markets: { US: us.length, IDX: idx.length },
+    groups: { US: usGroups, IDX: idxGroups },
+    sectors: [...new Set(tagged.map(r => r.sector))].sort(),
+    industries: [...new Set(tagged.map(r => r.industry))].length,
+    gics: 'not populated - no ticker->code crosswalk in the vendor files',
+    icb: 'not populated - no ticker->code crosswalk in the vendor files',
+  };
 
   for (const [key, rows] of [['us', us], ['idx', idx]]) {
     const byM = {}, byG = {}, byS = {};
@@ -319,7 +357,7 @@ function writeCategories() {
     summary[key] = { symbols: rows.length, groups: byG, sectors: byS,
                      unclassified_sector: rows.filter(r => r.sector === 'Unclassified').length };
   }
-  return { files, summary };
+  return { files, summary, categories: catSummary };
 }
 
 // ------------------------------------------------------------------ main
@@ -373,12 +411,14 @@ function main() {
   // for having too little history must not be given a market/group assignment either.
   const cats = writeCategories();
   manifest.categories = {
-    format: 'Ticker,Market,Group,Sector,Industry',
-    assignment: 'market/group/industry are single-valued; watchlists are not used',
+    format: 'split by importer capability - see files[]',
+    assignment: 'market/group applied over OLE (numeric IDs only); sector/industry applied via ASCII SECTORNAME/INDUSTRYNAME; gics/icb intentionally empty',
     files: cats.files,
     markets: cats.summary,
-    note: 'Import with banyulangit-categories.format AFTER the quote files: $AUTOADD 0 means it ' +
-          'only assigns what already exists, so a typo cannot invent a symbol.',
+    note: 'Sector/industry import AFTER the quote files: $OVERWRITE 1 targets symbols that must ' +
+          'already exist. Market/group have no name field in the importer, so assign-categories.vbs ' +
+          'applies them over OLE. GICS/ICB stay empty: the vendor ships only the code trees, not a ' +
+          'ticker crosswalk, and inventing one would be worse than leaving them blank.',
   };
 
   manifest.notes = [

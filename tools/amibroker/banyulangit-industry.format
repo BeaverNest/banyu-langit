@@ -1,0 +1,19 @@
+; ---------------------------------------------------------------------------
+; Industry assignment for Banyu Langit symbols.
+;
+; Ticker,SectorName,IndustryName - sector FIRST, and that order matters.
+; Per the vendor docs, INDUSTRYNAME creates the industry AND, when SECTORNAME is
+; also present, attaches that industry to the given sector. Sending the industry
+; without its sector would leave 190 industries unattached, and AmiBroker derives
+; a symbol's sector from its industry - so the sector list would stay wrong.
+;
+; $OVERWRITE 1: the symbols already exist from the quote import.
+; ---------------------------------------------------------------------------
+$FORMAT Ticker,SectorName,IndustryName
+$SEPARATOR ,
+$SKIPLINES 0
+$NOQUOTES 1
+$OVERWRITE 1
+$AUTOADD 0
+$BREAKONERR 1
+$DEBUG 1
