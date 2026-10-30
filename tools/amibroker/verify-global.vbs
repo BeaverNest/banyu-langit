@@ -79,6 +79,11 @@ Next
 WScript.Echo ""
 If bad0 = 0 Then
   WScript.Echo "OK: every probe carries real High/Low"
+  WScript.Quit 0
 Else
   WScript.Echo "FAIL: " + CStr(bad0) + " series still carry zero High/Low"
+  ' The exit code matters: refresh.bat branches on ERRORLEVEL, and a gate that prints FAIL
+  ' but exits 0 is a gate that never fires. Verified by sabotage - forcing the branch and
+  ' watching ERRORLEVEL stay 0 is how this was found.
+  WScript.Quit 1
 End If

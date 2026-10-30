@@ -56,6 +56,22 @@ if not "%RC3%"=="0" (
   set RC=%RC3%
 )
 
+REM ---- gate: prove the GLOBAL market actually holds bars ------------------
+REM The import prints "ok" per FILE, not per BAR. A series can be added and still carry 0 in
+REM Open/High/Low, and the log would look perfectly healthy. This reads the database back and
+REM fails loudly instead of leaving a silent hole behind a green log line.
+echo ---- verify-global ---- >> "%LOG%"
+cscript //nologo "%DEST%verify-global.vbs" > "%DEST%vg-out.txt" 2>&1
+set RC4=%ERRORLEVEL%
+type "%DEST%vg-out.txt" >> "%LOG%"
+REM Print to the console too. A gate whose result only ever lands in a log nobody opens is
+REM indistinguishable from a gate that never ran.
+findstr /C:"OK:" /C:"FAIL:" /C:"MISSING" "%DEST%vg-out.txt"
+if not "%RC4%"=="0" (
+  echo GLOBAL VERIFY FAILED >> "%LOG%"
+  if "%RC%"=="0" set RC=%RC4%
+)
+
 REM Keep the log bounded: this appends 24 times a day.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"
 
