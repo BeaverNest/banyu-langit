@@ -3,92 +3,60 @@ REM ============================================================================
 REM  Bootstrap the AmiBroker EOD sync on this Windows laptop.
 REM  Run once from an ordinary Command Prompt (no admin needed).
 REM
-REM  Passwordless SSH is required: this script generates a key on the laptop and
-REM  prints it. Paste that line into the server's ~/.ssh/authorized_keys once
-REM  (the server is Linux/Tailscale, IP 100.64.168.90).
+REM  TRANSPORT: plain HTTP over Tailscale (WireGuard-encrypted on the wire).
+REM  This used to be rsync-over-SSH and it kept asking for a password: the key in the
+REM  server's authorized_keys belongs to a different Windows account, and a password
+REM  prompt cannot be automated. So the transport changed, not the credentials.
 REM
-REM  Why hourly rather than once at logon: the server exports at 19:25 WIB. A task
-REM  that only ran at logon would show yesterday's close to a laptop opened at 08:00.
+REM  Nothing is required from you beyond running this file.
 REM ============================================================================
 
-set SERVER=100.64.168.90
-set USER_NAME=beavernest
-set SRC=%USER_NAME%@%SERVER%:/home/beavernest/amibroker-export/
+set NAME=beavernest.taile871ab.ts.net
+set PORT=8089
+set BASE=http://%NAME%:%PORT%
 set DEST=C:\AmibrokerData\import
-set KEY=%USERPROFILE%\.ssh\amibroker_sync
+set CURL=curl.exe -fsS --retry 3 --retry-delay 2 --connect-timeout 10
 
-echo [1/6] Checking Tailscale link to %SERVER% ...
-ping -n 2 %SERVER% >nul 2>&1
+echo [1/4] Checking the Tailscale link ...
+ping -n 1 -w 2000 %NAME% >nul 2>&1
 if errorlevel 1 (
-  echo   FAIL: cannot reach %SERVER%. Is Tailscale up on both machines?
+  echo   FAIL: cannot reach %NAME%.
+  echo         Is Tailscale running and logged in on this laptop?
   exit /b 2
 )
 echo   OK
 
-echo [2/6] Checking for an SSH key that already works ...
+echo [2/4] Preparing %DEST% ...
 if not exist "%DEST%" mkdir "%DEST%"
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new %USER_NAME%@%SERVER% "echo link-ok" >nul 2>&1
-if not errorlevel 1 (
-  echo   Already authorised with your existing key - no new key needed.
-  set KEY=
-  goto :havekey
-)
-
-if not exist "%USERPROFILE%\.ssh" mkdir "%USERPROFILE%\.ssh"
-if not exist "%KEY%" (
-  ssh-keygen -t ed25519 -f "%KEY%" -N "" -C "amibroker-sync@laptop" >nul
-  echo   Created a dedicated key: %KEY%
-) else (
-  echo   Dedicated key already present.
-)
-echo.
-echo   ---- COPY THE LINE BELOW INTO THE SERVER'S ~/.ssh/authorized_keys ----
-type "%KEY%.pub"
-echo   ---------------------------------------------------------------------
-echo.
-
-:havekey
-echo [3/6] Testing the pull ...
-if defined KEY set SSHC=-i "%KEY%"
-if not defined KEY set SSHC=
-ssh %SSHC% -o StrictHostKeyChecking=accept-new %USER_NAME%@%SERVER% "echo link-ok" >nul 2>&1
-if errorlevel 1 (
-  echo   SSH still not authorised. Add the public key line above to the server, then re-run.
-  exit /b 2
-)
-where rsync >nul 2>&1
-if errorlevel 1 (
-  echo   rsync not found. Install it ^(Git for Windows ships one^), then re-run.
-  exit /b 2
-)
-rsync -az --delete -e "ssh %SSHC%" "%SRC%" "%DEST%\"
-if errorlevel 1 (
-  echo   FAIL: rsync could not pull the folder.
+if not exist "%DEST%" (
+  echo   FAIL: cannot create %DEST%
   exit /b 2
 )
 echo   OK
 
-echo [4/6] Installing the ASCII format ...
-if not exist "%ProgramFiles%\AmiBroker" (
-  echo   WARN: AmiBroker not found at %ProgramFiles%\AmiBroker - copy
-  echo         banyulangit.format into ^<your AmiBroker^>\Formats yourself.
-) else (
-  copy /Y "%DEST%\banyulangit.format" "%ProgramFiles%\AmiBroker\Formats\banyulangit.format" >nul
-  echo   OK
-)
-
-echo [5/6] Registering the hourly pull ...
-schtasks /Create /TN "BanyuLangit-Export-Pull" /SC HOURLY /MO 1 ^
-  /TR "rsync -az --delete -e \"ssh %SSHC:\"=\"\" %SRC% %DEST%\" /F >nul
+echo [3/4] Pulling data (unchanged files are skipped) ...
+REM Fetch pull.bat from the server rather than expecting it next to this script: the
+REM user only has to get ONE file onto the laptop, and that file fetches the rest.
+%CURL% -o "%DEST%\pull.bat" "%BASE%/pull.bat"
 if errorlevel 1 (
-  echo   FAIL: schtasks could not register the pull task.
+  echo   FAIL: could not download pull.bat from %BASE%
+  exit /b 2
+)
+call "%DEST%\pull.bat"
+if errorlevel 1 (
+  echo   FAIL: the initial pull did not complete. Check Tailscale, then re-run.
   exit /b 2
 )
 echo   OK
+dir /b "%DEST%\*.csv" | find /c ".csv" >nul
 
-echo [6/6] Registering the import at logon ...
-schtasks /Create /TN "BanyuLangit-Import" /SC ONLOGON ^
-  /TR "cscript //nologo \"%DEST%\sync-amibroker.vbs\"" /F >nul
+echo [4/4] Registering scheduled tasks ...
+schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "\"%DEST%\pull.bat\"" /F >nul
+if errorlevel 1 (
+  echo   FAIL: schtasks could not register the hourly pull.
+  exit /b 2
+)
+schtasks /Create /TN "BanyuLangit-Import" /SC ONLOGON /TR "cscript //nologo \"%DEST%\sync-amibroker.vbs\"" /F >nul
 if errorlevel 1 (
   echo   FAIL: schtasks could not register the import task.
   exit /b 2
@@ -96,6 +64,10 @@ if errorlevel 1 (
 echo   OK
 
 echo.
-echo Done. AmiBroker does not need to be open: the logon task starts it, imports, and exits.
-echo To test now:  cscript //nologo "%DEST%\sync-amibroker.vbs"
+echo Done. Files are in %DEST%.
+echo.
+echo Test the import once now:
+echo   cscript //nologo %DEST%\sync-amibroker.vbs
+echo.
+echo It should end with: OK: AmiBroker import complete -^> C:\BanyuLangit\
 exit /b 0
