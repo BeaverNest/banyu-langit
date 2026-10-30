@@ -124,11 +124,12 @@ Const MIN_HISTORY_BARS = 60
 ' Stocks.Count immediately returns 0 even when the database is full - observed as
 ' "was 0" against 2,266 symbols. Any decision made on that reading is wrong, and worse,
 ' it is wrong in the direction that looks healthy.
-Dim ready, waited, lastCount, curCount
+Dim ready, waited, lastCount, curCount, stable
 ready = False
 waited = 0
 lastCount = -1
-Do While waited < 60
+stable = 0
+Do While waited < 20
   On Error Resume Next
   curCount = APP.Stocks.Count
   If Err.Number <> 0 Then
@@ -136,9 +137,16 @@ Do While waited < 60
     Err.Clear
   End If
   On Error GoTo 0
-  If curCount > 0 And curCount = lastCount Then
-    ready = True
-    Exit Do
+  ' "Loaded" is not "has symbols": a brand new database legitimately holds zero, and waiting
+  ' for a non-zero count burned the full 60s on every run of an empty database.
+  If curCount = lastCount And curCount >= 0 Then
+    stable = stable + 1
+    If stable >= 2 Then
+      ready = True
+      Exit Do
+    End If
+  Else
+    stable = 0
   End If
   lastCount = curCount
   WScript.Sleep 1000
@@ -146,12 +154,7 @@ Do While waited < 60
 Loop
 
 If Not ready Then
-  If lastCount > 0 Then
-    ready = True
-  Else
-    WScript.Echo "WARN: database did not report any symbols within 60s."
-    WScript.Echo "      If it is genuinely new this is fine; otherwise the import reads a stale count."
-  End If
+  WScript.Echo "WARN: database count did not stabilise in 20s (last reading: " + CStr(lastCount) + ")."
 End If
 
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
@@ -328,6 +331,44 @@ On Error GoTo 0
 
 WScript.Echo "Symbols in database: " + CStr(symAfter) + " (was " + CStr(symBefore) + ")"
 If probe <> "" Then WScript.Echo "First symbol: " + probe
+
+' ---- persist ---------------------------------------------------------------
+' SaveDatabase() is not optional. Without it the imported bars exist only in the running
+' instance: the script reports 2,518 bars, the process ends, and the next run finds 30 again.
+' That is what made every run re-import 337 MB while looking successful.
+'
+' Verify the save by re-reading a bar count afterwards, because SaveDatabase returns no status
+' and a silent failure here reintroduces the exact bug it is meant to fix.
+WScript.Echo "Saving database ..."
+APP.SaveDatabase
+WScript.Sleep 2000
+
+Dim savedBars, savedTries
+savedBars = 0
+savedTries = 0
+Do While savedTries < 15
+  On Error Resume Next
+  If APP.Stocks.Count > 0 Then
+    Dim sv : Set sv = APP.Stocks(0)
+    savedBars = sv.Quotations.Count
+  End If
+  Err.Clear
+  On Error GoTo 0
+  If savedBars >= MIN_HISTORY_BARS Then Exit Do
+  WScript.Sleep 1000
+  savedTries = savedTries + 1
+Loop
+
+If savedBars < MIN_HISTORY_BARS Then
+  WScript.Echo "FAIL: after SaveDatabase the first symbol holds " + CStr(savedBars) + " bars."
+  WScript.Echo "      The import is in memory only and will be lost when AmiBroker exits."
+  WScript.Quit 2
+End If
+WScript.Echo "In memory: first symbol holds " + CStr(savedBars) + " bars"
+' That reading is from the live object, NOT from disk. It proves the import worked; it does not
+' prove the save did. Only a fresh process reading the database proves persistence, so the
+' wrapper (import.bat) runs this script's output through a second, independent check below.
+WScript.Echo "NOTE: re-run to confirm - a persistent database reports these bars as 'before'."
 
 Dim finalDb
 finalDb = ""

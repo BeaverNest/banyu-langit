@@ -16,6 +16,15 @@ cscript //nologo "%DEST%sync-amibroker.vbs" >> "%LOG%" 2>&1
 set RC=%ERRORLEVEL%
 echo exit=%RC% >> "%LOG%"
 
+REM Persistence check: run a second, fresh cscript. A new process can only see what reached
+REM disk, so "Symbols before import" in THIS run is the real test of the previous run's save.
+REM If the previous run genuinely saved, this run starts from 2000+ symbols and skips the full
+REM import; if it did not, this run pays for 337 MB again and the log shows was=0.
+echo ---- persistence check ---- >> "%LOG%"
+cscript //nologo "%DEST%sync-amibroker.vbs" >> "%LOG%" 2>&1
+set RC2=%ERRORLEVEL%
+echo exit=%RC2% >> "%LOG%"
+
 REM Keep the log bounded: it is appended hourly-ish and nobody rotates it.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"
 
