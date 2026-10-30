@@ -25,13 +25,21 @@ if errorlevel 1 (
 )
 echo   OK
 
-echo [2/6] Preparing the SSH key ...
+echo [2/6] Checking for an SSH key that already works ...
+if not exist "%DEST%" mkdir "%DEST%"
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new %USER_NAME%@%SERVER% "echo link-ok" >nul 2>&1
+if not errorlevel 1 (
+  echo   Already authorised with your existing key - no new key needed.
+  set KEY=
+  goto :havekey
+)
+
 if not exist "%USERPROFILE%\.ssh" mkdir "%USERPROFILE%\.ssh"
 if not exist "%KEY%" (
   ssh-keygen -t ed25519 -f "%KEY%" -N "" -C "amibroker-sync@laptop" >nul
-  echo   Created %KEY%
+  echo   Created a dedicated key: %KEY%
 ) else (
-  echo   Key already present.
+  echo   Dedicated key already present.
 )
 echo.
 echo   ---- COPY THE LINE BELOW INTO THE SERVER'S ~/.ssh/authorized_keys ----
@@ -39,11 +47,13 @@ type "%KEY%.pub"
 echo   ---------------------------------------------------------------------
 echo.
 
+:havekey
 echo [3/6] Testing the pull ...
-if not exist "%DEST%" mkdir "%DEST%"
-ssh -i "%KEY%" -o StrictHostKeyChecking=accept-new %USER_NAME%@%SERVER% "echo link-ok" >nul 2>&1
+if defined KEY set SSHC=-i "%KEY%"
+if not defined KEY set SSHC=
+ssh %SSHC% -o StrictHostKeyChecking=accept-new %USER_NAME%@%SERVER% "echo link-ok" >nul 2>&1
 if errorlevel 1 (
-  echo   SSH key not authorised yet. Add the line above to the server, then re-run.
+  echo   SSH still not authorised. Add the public key line above to the server, then re-run.
   exit /b 2
 )
 where rsync >nul 2>&1
@@ -51,7 +61,7 @@ if errorlevel 1 (
   echo   rsync not found. Install it ^(Git for Windows ships one^), then re-run.
   exit /b 2
 )
-rsync -az --delete -e "ssh -i %KEY%" "%SRC%" "%DEST%\"
+rsync -az --delete -e "ssh %SSHC%" "%SRC%" "%DEST%\"
 if errorlevel 1 (
   echo   FAIL: rsync could not pull the folder.
   exit /b 2
@@ -69,7 +79,7 @@ if not exist "%ProgramFiles%\AmiBroker" (
 
 echo [5/6] Registering the hourly pull ...
 schtasks /Create /TN "BanyuLangit-Export-Pull" /SC HOURLY /MO 1 ^
-  /TR "rsync -az --delete -e \"ssh -i %KEY%\" %SRC% %DEST%\" /F >nul
+  /TR "rsync -az --delete -e \"ssh %SSHC:\"=\"\" %SRC% %DEST%\" /F >nul
 if errorlevel 1 (
   echo   FAIL: schtasks could not register the pull task.
   exit /b 2
