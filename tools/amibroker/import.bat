@@ -27,6 +27,10 @@ echo ---- persistence check (cold start) ---- >> "%LOG%"
 cscript //nologo "%DEST%sync-amibroker.vbs" verify >> "%LOG%" 2>&1
 set RC2=%ERRORLEVEL%
 echo exit=%RC2% >> "%LOG%"
+if not "%RC2%"=="0" (
+  echo PERSISTENCE CHECK FAILED >> "%LOG%"
+  set RC=%RC2%
+)
 
 REM Keep the log bounded: it is appended hourly-ish and nobody rotates it.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"

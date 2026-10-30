@@ -68,13 +68,11 @@ If WScript.Arguments.Count > 0 Then
 End If
 
 If verifyOnly Then
+  ' APP may be Nothing here: when no AmiBroker process is running, GetObject fails and
+  ' CreateObject would START one - which is not a cold read of the previous run's data. So
+  ' verify mode does not reuse APP at all. It closes whatever is running and opens cleanly.
   WScript.Echo "Closing AmiBroker to force a cold read ..."
-  On Error Resume Next
-  APP.SaveDatabase
-  APP.Quit
-  Err.Clear
-  On Error GoTo 0
-  WScript.Sleep 8000
+  CloseAmiBroker
 
   Dim cold, coldBars, coldTries, coldCount
   cold = Nothing
@@ -551,3 +549,30 @@ Function MaxBarsInDatabase()
   On Error GoTo 0
   MaxBarsInDatabase = best
 End Function
+
+' ---------------------------------------------------------------------------
+' Stop AmiBroker via WMI. Killing the process is deliberate: SaveDatabase on an instance the
+' script did not create is unreliable once the previous run has exited, and a cold read needs
+' the process actually gone. Errors are reported, never swallowed - a silent failure here
+' would make the persistence check meaningless.
+Sub CloseAmiBroker()
+  Dim svc, procs, p, killed
+  killed = 0
+  On Error Resume Next
+  Set svc = GetObject("winmgmts:\\.\root\cimv2")
+  If Err.Number <> 0 Then
+    WScript.Echo "  WARN: WMI unavailable (" + Err.Description + "), cannot force-close AmiBroker"
+    Err.Clear
+    On Error GoTo 0
+    Exit Sub
+  End If
+  Set procs = svc.ExecQuery("SELECT * FROM Win32_Process WHERE Name='broker.exe'")
+  If Err.Number = 0 Then
+    For Each p In procs
+      If p.Terminate() = 0 Then killed = killed + 1
+    Next
+  End If
+  Err.Clear
+  On Error GoTo 0
+  WScript.Echo "  closed " + CStr(killed) + " broker.exe process(es)"
+End Sub
