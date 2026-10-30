@@ -159,6 +159,39 @@ ok(aapl && Math.abs(aapl.c - dbAapl.close) < 0.01,
    `AAPL last close ${aapl && aapl.c} != DB ${dbAapl.close}`);
 ok(aapl && aapl.d === String(dbAapl.trade_date).slice(0, 10), `AAPL last date mismatch`);
 
+// ---------------------------------------------------------------- 5. delta file
+// The delta is what the nightly laptop import actually reads, so it must be a strict SUBSET of
+// the full snapshot for the same ticker/date — otherwise the small file silently disagrees with
+// the big one and the laptop's database diverges from the server's.
+const deltaPath = path.join(DIR, 'delta_recent.csv');
+ok(fs.existsSync(deltaPath), 'delta_recent.csv missing — laptop would import nothing new');
+let deltaStat = null;
+if (fs.existsSync(deltaPath)) {
+  const dRows = readCsv(deltaPath).rows;
+  const full = Object.assign({}, us, idx);
+  let mism = 0, sample = [], covered = 0;
+  for (const [t, list] of Object.entries(dRows)) {
+    const src = full[t];
+    if (!src) { mism++; if (sample.length < 3) sample.push(`${t} absent from snapshot`); continue; }
+    const byDate = new Map(src.map(r => [r.d, r]));
+    for (const r of list) {
+      const f = byDate.get(r.d);
+      if (!f) { mism++; if (sample.length < 4) sample.push(`${t} ${r.d} not in snapshot`); continue; }
+      covered++;
+      if (Math.abs(f.c - r.c) > 1e-6 || Math.abs(f.o - r.o) > 1e-6
+          || Math.abs(f.h - r.h) > 1e-6 || Math.abs(f.l - r.l) > 1e-6 || f.v !== r.v) {
+        mism++;
+        if (sample.length < 4) sample.push(`${t} ${r.d} c:${r.c} vs ${f.c}`);
+      }
+    }
+  }
+  const rows = Object.values(dRows).reduce((a, b) => a + b.length, 0);
+  ok(mism === 0, `delta disagrees with snapshot on ${mism} rows: ${sample.join(' | ')}`);
+  ok(rows < (manifest.us.rows + manifest.idx.rows) / 10,
+     `delta has ${rows} rows — not small enough to be an incremental file`);
+  deltaStat = { rows, tickers: Object.keys(dRows).length, matched_against_snapshot: covered };
+}
+
 // ---------------------------------------------------------------- report
 const summary = {
   files: files.length,
@@ -166,6 +199,7 @@ const summary = {
   idx: { tickers: Object.keys(idx).length, rows: Object.values(idx).reduce((a, b) => a + b.length, 0) },
   ihsg: { rows: jkse.length, last_date: lastJkse && lastJkse.d, last_close: lastJkse && lastJkse.c },
   bbca_split_check: before && after ? { d_before: before.d, c_before: before.c, d_after: after.d, c_after: after.c } : null,
+  delta: deltaStat,
   fails: fails.length,
   warns: warns.length,
 };

@@ -39,8 +39,31 @@ const MARKET = String(arg('market', 'all')).toLowerCase();
 const CHUNK = Number(arg('chunk', 300));       // symbols per file
 const MIN_BARS = Number(arg('min-bars', 60));  // drop symbols with too little history to test on
 const LITE = !!arg('lite', false);             // skip the per-row OHLC sanity pass (faster)
+// Rolling window of recent sessions written to ONE small file. The full snapshot is 332 MB and
+// rewrites every row, so a laptop that syncs it daily moves megabytes it already has. The delta
+// is ~9 MB, self-healing (re-importing is idempotent under $OVERWRITE 1), and needs no per-file
+// bookkeeping on the laptop — which is what lets "open AmiBroker and it is current" work after
+// any gap up to this many sessions.
+const DELTA_SESSIONS = Number(arg('delta-sessions', 30));
 
 const db = new Database(DB_PATH, { readonly: true });
+
+// Cutoff = the Nth most recent distinct session across both markets.
+const cutoff = (() => {
+  const rows = db.prepare(`
+    SELECT d FROM (
+      SELECT trade_date AS d FROM us_daily
+      UNION SELECT trade_date AS d FROM idx_daily
+    ) WHERE d IS NOT NULL ORDER BY d DESC LIMIT ?
+  `).all(DELTA_SESSIONS);
+  return rows.length ? isoDate(rows[rows.length - 1].d) : '0000-00-00';
+})();
+
+const DELTA = [];
+// Tickers that survive MIN_BARS into the full snapshot. The delta MUST be filtered by this too:
+// a symbol dropped from the snapshot (too few bars) must not arrive through the incremental file,
+// or the "subset" contract breaks and the laptop accumulates symbols the server does not have.
+const KEPT = new Set();
 
 function isoDate(s) {
   // idx_daily uses both '2026-10-29' and '2026/10/09' in adjacent tables; normalise.
@@ -87,6 +110,7 @@ function exportUs() {
     if (oc < l) oc = l;
     if (oc > h) oc = h;
     if (oc !== o) openClamped++;
+    if (d >= cutoff) DELTA.push({ ticker: r.code, date: d, o: oc, h, l, c, v: num(r.volume, 0), src: 'us' });
     (byCode.get(r.code) || byCode.set(r.code, []).get(r.code)).push({
       ticker: r.code, date: d, o: oc, h, l, c, v: num(r.volume, 0),
     });
@@ -150,6 +174,9 @@ function exportIdx() {
       r.h = Math.max(r.h, r.o, r.c);
       r.l = Math.min(r.l, r.o, r.c);
     }
+    for (const r of list) {
+      if (r.date >= cutoff) DELTA.push({ ticker: r.ticker, date: r.date, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v, src: 'idx' });
+    }
   }
 
   const stats = flush(byCode, 'idx', {
@@ -186,6 +213,7 @@ function flush(byCode, market, meta) {
   for (const t of tickers) {
     const list = byCode.get(t);
     if (list.length < MIN_BARS) { dropped.push({ ticker: t, bars: list.length }); continue; }
+    KEPT.add(String(t).replace(/\.JK$/, ''));   // delta stores the suffixed ticker
     keep.push([t, list]);
   }
   let batch = [], idx = 0, rowsTotal = 0, bytesTotal = 0;
@@ -232,6 +260,32 @@ function main() {
   if (MARKET === 'idx' || MARKET === 'all') {
     manifest.idx = exportIdx();
     manifest.ihsg = exportIhsg();
+  }
+
+  // One small file for the nightly incremental import. Sorted by ticker then date so the file
+  // is deterministic: an unchanged session produces byte-identical output, and a sync client
+  // sees no change at all instead of re-sending the whole thing.
+  // Compare on the unsuffixed code: KEPT keys come from the DB, delta carries '.JK'.
+  const deltaRows = DELTA.filter(r => KEPT.has(String(r.ticker).replace(/\.JK$/, '')));
+  if (deltaRows.length) {
+    const w = writeCsv(path.join(OUT, 'delta_recent.csv'), deltaRows);
+    // The index is a symbol too; without it the chart of JKSE would lag the constituents.
+    const ihsg = db.prepare(`
+      SELECT trade_date, open, high, low, close, volume FROM index_ohlc
+      WHERE index_code='COMPOSITE' AND trade_date >= ? ORDER BY trade_date
+    `).all(cutoff);
+    const iw = ihsg.length
+      ? writeCsv(path.join(OUT, 'delta_index.csv'), ihsg.map(r => ({
+          ticker: 'JKSE', date: isoDate(r.trade_date),
+          o: num(r.open, 0), h: num(r.high, 0), l: num(r.low, 0), c: num(r.close, 0), v: num(r.volume, 0),
+        })).filter(r => r.c > 0))
+      : null;
+    manifest.delta = {
+      sessions: DELTA_SESSIONS, cutoff,
+      files: [w, iw].filter(Boolean),
+      rows: w.rows + (iw ? iw.rows : 0),
+      bytes: w.bytes + (iw ? iw.bytes : 0),
+    };
   }
 
   manifest.notes = [
