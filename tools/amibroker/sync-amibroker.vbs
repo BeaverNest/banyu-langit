@@ -275,6 +275,25 @@ Else
   WScript.Echo "Delta import only (last full " + CStr(ageDays) + " days ago)"
 End If
 
+' ---- categories: market / group / sector / industry -----------------------
+' Runs on BOTH paths, full and delta. Categories are cheap (2,377 rows, ~120 KB) and they are
+' not quote data: skipping them on a delta night would leave a newly listed symbol with no
+' market assignment until the next full import - invisible, because the chart still draws.
+'
+' ORDER MATTERS: $AUTOADD 0 in this format means it only assigns symbols that already exist,
+' so importing categories before the quotes would assign nothing at all.
+Dim catFmt : catFmt = FMT_DIR + "\banyulangit-categories.format"
+If fso.FileExists(catFmt) Then
+  Dim catFiles, cf, cp
+  catFiles = Array("categories_us.csv", "categories_idx.csv")
+  For Each cf In catFiles
+    cp = IMPORT_DIR + "\" + cf
+    If fso.FileExists(cp) Then failed = failed + ImportOne(cp, catFmt)
+  Next
+Else
+  WScript.Echo "WARN: banyulangit-categories.format not found - market/group not assigned"
+End If
+
 ' ---- make the new bars visible --------------------------------------------
 On Error Resume Next
 APP.RefreshAll
@@ -349,6 +368,31 @@ WScript.Echo "Symbols in database: " + CStr(symAfter) + " (was " + CStr(symBefor
 If probe <> "" Then WScript.Echo "First symbol: " + probe
 
 ' ---- persist ---------------------------------------------------------------
+' ---- market census gate ---------------------------------------------------
+' A category import that silently does nothing is invisible: every chart still draws, every
+' quote is still there, and only the Symbols window would look wrong. Count symbols per market
+' and fail when more than one market is empty - a single-market universe means the assignment
+' never landed.
+On Error Resume Next
+Dim mIdx, mObj, mName, mCount, marketsSeen, emptyMarkets
+marketsSeen = 0 : emptyMarkets = ""
+For mIdx = 0 To APP.Markets.Count - 1
+  Set mObj = APP.Markets.Item(mIdx)
+  mName = mObj.Name
+  mCount = 0
+  Err.Clear
+  On Error Resume Next
+  mCount = CountSymbolsInMarket(APP, mIdx)
+  Err.Clear
+  On Error GoTo 0
+  If Len(Trim(mName)) > 0 Then
+    marketsSeen = marketsSeen + 1
+    If mCount = 0 Then emptyMarkets = emptyMarkets + " [" + mName + "]"
+    WScript.Echo "  market " + mName + ": " + CStr(mCount) + " symbols"
+  End If
+Next
+On Error GoTo 0
+
 ' SaveDatabase() is not optional. Without it the imported bars exist only in the running
 ' instance: the script reports 2,518 bars, the process ends, and the next run finds 30 again.
 ' That is what made every run re-import 337 MB while looking successful.
@@ -507,4 +551,19 @@ Function MaxBarsInDatabase()
   Next
   On Error GoTo 0
   MaxBarsInDatabase = best
+End Function
+
+' Count symbols assigned to one market. Stock.MarketID is a 0-based index into Markets.
+Function CountSymbolsInMarket(app, marketIdx)
+  Dim n, k, st
+  n = 0
+  On Error Resume Next
+  For k = 0 To app.Stocks.Count - 1
+    Set st = app.Stocks.Item(k)
+    If Err.Number <> 0 Then Err.Clear
+    If st.MarketID = marketIdx Then n = n + 1
+    Err.Clear
+  Next
+  On Error GoTo 0
+  CountSymbolsInMarket = n
 End Function

@@ -55,6 +55,26 @@ done
 grep -q 'build %BUILD%' setup-laptop.bat 2>/dev/null
 chk "setup-laptop.bat prints a build stamp" $?
 
+
+# 8. Category files must ship: a market/group import cannot run without them.
+for f in categories_us.csv categories_idx.csv banyulangit-categories.format; do
+  grep -q "  $f" pull.bat 2>/dev/null
+  chk "pull.bat ships $f" $?
+done
+
+# 9. The category format must NOT auto-add symbols: a typo would invent empty tickers.
+grep -q '^\$AUTOADD 0' banyulangit-categories.format 2>/dev/null
+chk "category format keeps AUTOADD 0" $?
+
+# 10. Categories must be imported AFTER the quotes ($AUTOADD 0 needs existing symbols).
+qt=$(grep -n 'ImportOne(IMPORT_DIR + "\\index_ihsg.csv"' sync-amibroker.vbs | head -1 | cut -d: -f1)
+ct=$(grep -n 'catFiles = Array' sync-amibroker.vbs | head -1 | cut -d: -f1)
+if [ -n "$qt" ] && [ -n "$ct" ] && [ "$ct" -gt "$qt" ]; then
+  chk "categories import after the quote files" 0
+else
+  chk "categories import after the quote files" 1
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2

@@ -247,6 +247,81 @@ function flush(byCode, market, meta) {
   }, meta);
 }
 
+// ------------------------------------------------------------------ categories
+// AmiBroker has six orthogonal dimensions. A symbol belongs to exactly ONE market and ONE group
+// and ONE industry (industry implies sector), but to MANY watchlists. That single-assignment rule
+// is why "filter US vs IDX" belongs in Market/Group, not in a watchlist: a watchlist would let a
+// symbol sit in both markets, which is exactly the mistake the .JK suffix exists to prevent.
+//
+// Sector/industry are imported verbatim from the source. IDX sectors stay in Indonesian - the
+// database is the system of record for them, and translating here would create a second place
+// where the mapping can drift.
+function writeCategories() {
+  const files = [];
+  const summary = {};
+
+  // --- US: Market=US, Group=tradable type, Sector/Industry from us_symbols_meta
+  const us = db.prepare(`
+    SELECT d.code,
+           COALESCE(NULLIF(m.quote_type,''), 'Other')  AS grp,
+           COALESCE(NULLIF(m.sector,''),   'Unclassified') AS sector,
+           COALESCE(NULLIF(m.industry,''), 'Unclassified') AS industry
+    FROM (SELECT DISTINCT code FROM us_daily WHERE close > 0) d
+    LEFT JOIN us_symbols_meta m ON m.code = d.code
+    ORDER BY d.code
+  `).all().filter(r => KEPT.has(r.code));
+
+  // --- IDX: Market=IDX, Group=listing board, Sector/Industry from company_profiles
+  const idx = db.prepare(`
+    SELECT d.code,
+           COALESCE(NULLIF(p.board,''),    'Unclassified') AS grp,
+           COALESCE(NULLIF(p.sector,''),   'Unclassified') AS sector,
+           COALESCE(NULLIF(p.industry,''), 'Unclassified') AS industry
+    FROM (SELECT DISTINCT code FROM idx_daily WHERE close > 0) d
+    LEFT JOIN company_profiles p ON p.code = d.code
+    ORDER BY d.code
+  `).all().filter(r => KEPT.has(r.code));
+
+  function write(file, rows, marketName, suffix) {
+    const cat = rows.map(r => ({
+      ticker: r.code + suffix, market: marketName, group: r.grp,
+      sector: r.sector, industry: r.industry,
+    }));
+    if (!cat.length) return null;
+    // A comma inside a name shifts every column after it, so a stock lands in the wrong market
+    // and the import still succeeds. Measured on the first run: 29 rows carried commas
+    // ("Furnishings, Fixtures and Appliances", "Pendukung Minyak, Gas and Batu Bara").
+    // Replace them rather than quoting: $NOQUOTES 1 means a quote character would be kept
+    // literally and become part of the sector name itself.
+    const clean = (v) => String(v).replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+    const lines = cat.map(r =>
+      [clean(r.ticker), clean(r.market), clean(r.group), clean(r.sector), clean(r.industry)].join(','));
+    // Same atomic write as the quote CSVs and for the same reason: a pull mid-write would
+    // import a truncated category file, and a category import that stops early silently leaves
+    // half the universe in the wrong market.
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, lines.join('\n') + '\n');
+    fs.renameSync(tmp, file);
+    return { file: path.basename(file), rows: cat.length, bytes: fs.statSync(file).size };
+  }
+
+  const usW = write(path.join(OUT, 'categories_us.csv'), us, 'US', '');
+  const idxW = write(path.join(OUT, 'categories_idx.csv'), idx, 'IDX', '.JK');
+  if (usW) files.push(usW);
+  if (idxW) files.push(idxW);
+
+  for (const [key, rows] of [['us', us], ['idx', idx]]) {
+    const byM = {}, byG = {}, byS = {};
+    for (const r of rows) {
+      byG[r.grp] = (byG[r.grp] || 0) + 1;
+      byS[r.sector] = (byS[r.sector] || 0) + 1;
+    }
+    summary[key] = { symbols: rows.length, groups: byG, sectors: byS,
+                     unclassified_sector: rows.filter(r => r.sector === 'Unclassified').length };
+  }
+  return { files, summary };
+}
+
 // ------------------------------------------------------------------ main
 function main() {
   fs.mkdirSync(OUT, { recursive: true });
@@ -293,6 +368,18 @@ function main() {
       bytes: w.bytes + (iw ? iw.bytes : 0),
     };
   }
+
+  // Categories are written after both markets so KEPT holds the full universe; a symbol dropped
+  // for having too little history must not be given a market/group assignment either.
+  const cats = writeCategories();
+  manifest.categories = {
+    format: 'Ticker,Market,Group,Sector,Industry',
+    assignment: 'market/group/industry are single-valued; watchlists are not used',
+    files: cats.files,
+    markets: cats.summary,
+    note: 'Import with banyulangit-categories.format AFTER the quote files: $AUTOADD 0 means it ' +
+          'only assigns what already exists, so a typo cannot invent a symbol.',
+  };
 
   manifest.notes = [
     'One file per market chunk. Columns: Ticker,Date_YMD,Open,High,Low,Close,Volume.',

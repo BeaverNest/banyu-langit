@@ -1,0 +1,40 @@
+; ---------------------------------------------------------------------------
+; Category assignment for Banyu Langit symbols.
+;
+; This file is NOT a quote format. It is imported with its own category CSVs
+; (categories_us.csv, categories_idx.csv) and only assigns metadata to symbols
+; that already exist.
+;
+; WHY $AUTOADD 0:
+;   With $AUTOADD 1 a typo in a ticker would CREATE an empty symbol, and the
+;   database would grow phantom rows that hold no quotes and silently inflate
+;   the symbol count that other gates rely on. The categories are written from
+;   the same KEPT set as the quotes, so every ticker here already exists.
+;
+; WHY $OVERWRITE 1:
+;   Without it, MARKET/GROUP/INDUSTRY/SECTORNAME are only applied to NEW
+;   symbols. Re-running the nightly category import would then change nothing
+;   once the symbol existed, and a corrected sector would never land.
+;
+; WHY $NOQUOTES 1:
+;   Tells the importer these rows carry no OHLC. Without it every category row
+;   is also parsed as a quote and rejected, which trips $BREAKONERR.
+;
+; WHY $BREAKONERR 1 and no $DEBUG:
+;   A silently skipped line here puts a stock in the wrong market, which is the
+;   same class of error as a bar that never imported - but harder to notice,
+;   because the chart still works. Fail the whole file instead. $DEBUG stays
+;   off so no import.log is written for a metadata pass; the VBScript gate
+;   verifies by counting symbols per market afterwards.
+;
+; Import order: quotes FIRST, categories SECOND. The reverse order assigns
+; nothing because $AUTOADD 0 requires the symbol to exist already.
+; ---------------------------------------------------------------------------
+
+$FORMAT Ticker,Market,Group,SectorName,IndustryName
+$SEPARATOR ,
+$NOQUOTES 1
+$AUTOADD 0
+$OVERWRITE 1
+$BREAKONERR 1
+$CONT 1

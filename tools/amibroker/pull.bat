@@ -25,6 +25,9 @@ for %%F in (
   delta_recent.csv
   delta_index.csv
   index_ihsg.csv
+  banyulangit-categories.format
+  categories_idx.csv
+  categories_us.csv
   banyulangit.format
   import-all.abb
   import.bat
