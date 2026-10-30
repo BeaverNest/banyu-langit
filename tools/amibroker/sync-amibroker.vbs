@@ -356,7 +356,14 @@ Function ImportOne(path, formatPath)
     Exit Function
   End If
   On Error GoTo 0
-  WScript.Echo "  ok " + fso.GetFileName(path)
+  ' Documented return codes: 0=ok, 4=no file, 2/3=bad data (details in import.log).
+  ' The old version printed "ok" without looking at rc at all.
+  If rc <> 0 Then
+    WScript.Echo "  FAIL " + fso.GetFileName(path) + ": Import() returned " + CStr(rc)
+    ImportOne = 1
+    Exit Function
+  End If
+  WScript.Echo "  ok " + fso.GetFileName(path) + " (rc=0)"
   ImportOne = 0
 End Function
 
