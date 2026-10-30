@@ -46,10 +46,14 @@ grep -q 'cscript' pull.bat 2>/dev/null
 chk "pull.bat does NOT import (single responsibility)" $((!$?))
 
 # 6. Every file the laptop needs must be in the pull list, or it never arrives.
-for f in refresh.bat open-amibroker.bat verify-persist.vbs sync-amibroker.vbs import.bat; do
+for f in refresh.bat open-amibroker.bat setup-laptop.bat verify-persist.vbs sync-amibroker.vbs import.bat; do
   grep -q "  $f" pull.bat 2>/dev/null
   chk "pull.bat ships $f" $?
 done
+
+# 7. The setup must identify itself, so a stale copy on the laptop is visible at a glance.
+grep -q 'build %BUILD%' setup-laptop.bat 2>/dev/null
+chk "setup-laptop.bat prints a build stamp" $?
 
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"

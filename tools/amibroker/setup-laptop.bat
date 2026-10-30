@@ -23,6 +23,9 @@ set DEST=C:\AmibrokerData\import
 mkdir "%DEST%" >nul 2>&1
 if not exist "%DEST%" set DEST=%LOCALAPPDATA%\AmibrokerData\import
 
+set BUILD=2026-10-30-e
+echo Banyu Langit laptop setup - build %BUILD%
+echo.
 echo [1/7] Checking the Tailscale link ...
 ping -n 1 -w 2000 %NAME% >nul 2>&1
 if errorlevel 1 (
