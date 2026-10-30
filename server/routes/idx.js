@@ -4086,7 +4086,7 @@ module.exports = function(upload) {
           continue;
         }
         try {
-          const r = await eodFetcher.fetchEOD(t.code, t.category, process.env.ALPHA_VANTAGE_KEY || '', false);
+          const r = await eodFetcher.fetchEOD(t.code, t.category, false);
           let written = 0;
           const barStates = {};
           db.transaction(() => {
@@ -4138,13 +4138,12 @@ module.exports = function(upload) {
       const fullHistory = !!req.body.full_history;
       if (!code) return res.status(400).json({ error: 'Missing code' });
 
-      const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
       const det = eodFetcher.detectSource(code, category);
       pullCode = code;
       pullSource = String(det.source || 'external');
       pullRef = pullRefDate();
 
-      const result = await eodFetcher.fetchEOD(code, category, apiKey, fullHistory);
+      const result = await eodFetcher.fetchEOD(code, category, fullHistory);
       const rows = result.rows;
       pullSource = String(result.source || pullSource);
       if (!rows.length) {
@@ -4201,7 +4200,6 @@ module.exports = function(upload) {
   router.post('/custom/sync-stale', async (req, res) => {
     if (!eodFetcher) return res.status(500).json({ error: 'eod-fetcher module not found' });
     try {
-      const apiKey = process.env.ALPHA_VANTAGE_KEY || '';
       const staleDays = parseInt(req.body.stale_days) || 7;
       const today = new Date().toISOString().split('T')[0];
       const all = db.prepare('SELECT code, name, category, source, last_date FROM custom_tickers ORDER BY code').all();
@@ -4220,7 +4218,7 @@ module.exports = function(upload) {
         try {
           const det = eodFetcher.detectSource(ticker.code, ticker.category);
 
-          const data = await eodFetcher.fetchEOD(ticker.code, ticker.category, apiKey, false);
+          const data = await eodFetcher.fetchEOD(ticker.code, ticker.category, false);
           let inserted = 0, updated = 0;
           const upsert = gatedUpsertStmt();
           const barStates = {};

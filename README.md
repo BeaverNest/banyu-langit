@@ -143,7 +143,7 @@ All configuration is environment variables; secrets stay in `.env` (never commit
 | `RAIL_WINDOW_START` | *(auto)* | First session the rail will consider |
 | `RAIL_WRITER_SINCE` | *(auto)* | Cut-off used when deciding which writers own a series |
 | `BL_DB`, `BL_URL`, `DENO_SYNC_URL` | *(empty)* | Optional bridges to an external sync service |
-| `ALPHA_VANTAGE_KEY` | *(empty)* | Optional fallback price source |
+| `ALPHA_VANTAGE_KEY` | *(dihapus 2026-10-30)* | Tidak dipakai. `eod-fetcher` hanya mengenal Yahoo & CoinGecko; kunci ini dulu diterima sebagai parameter lalu diabaikan. Dihapus karena kunci lama bocor di repo publik sementara tidak ada kode yang memakainya. |
 
 ## API reference
 

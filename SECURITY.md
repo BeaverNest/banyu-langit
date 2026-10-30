@@ -55,7 +55,7 @@ Tanggal = tanggal kunci lama dinyatakan tidak berlaku. **Nilai tidak pernah dica
 
 | Kunci | Terekspos | Media | Status | Tanggal rotasi |
 |---|---|---|---|---|
-| `ALPHA_VANTAGE_KEY` | 2026-03-24 (commit `064b41d`), masih 200 via raw untuk `064b41d`/`7dfb06e`/`eda9cf3` | repo publik `banyu-langit` (berkas `.env`) | **terverifikasi masih AKTIF** pada 2026-10-28 (memanggil `GLOBAL_QUOTE` → 200, `Global Quote` berisi harga IBM) — menunggu rotasi di dashboard Alpha Vantage | — (belum) |
+| `ALPHA_VANTAGE_KEY` | 2026-03-24 (commit `064b41d`), masih 200 via raw untuk `064b41d`/`7dfb06e`/`eda9cf3` | repo publik `banyu-langit` (berkas `.env`) | **terverifikasi masih AKTIF** pada 2026-10-30 (memanggil `GLOBAL_QUOTE` → 200, `Global Quote` berisi harga IBM) — **tidak dipakai kode mana pun**: `eod-fetcher.js` hanya punya cabang `yahoo` dan `coingecko`, `apiKey` diterima sebagai parameter lalu diabaikan, dan tidak ada satu pun request ke `alphavantage.co`. Kode pemakaiannya sudah dihapus 2026-10-30; yang tersisa hanya pencabutan kunci di dashboard Alpha Vantage | — (belum dicabut) |
 
 Catatan cakupan: nilai lama **tidak** ditemukan di host ini (0 dari 927.950 berkas yang dipindai di profil agen, `ops/`, `market-rails`, `IDX-API`, `toku-kanban-web`, `banyu-langit-bt`, `.config`). Artinya kunci itu tidak dipakai jalur produksi mana pun sekarang; yang bocor adalah kuota gratis milik pemilik akun, bukan akses ke data kita.
 

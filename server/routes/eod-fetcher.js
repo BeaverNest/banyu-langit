@@ -167,7 +167,7 @@ function detectSource(code, category) {
 }
 
 // ═══ MAIN ═══
-async function fetchEOD(code, category, apiKey, fullHistory = false) {
+async function fetchEOD(code, category, fullHistory = false) {
   const det = detectSource(code, category);
   let rows;
 
