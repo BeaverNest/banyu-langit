@@ -92,6 +92,9 @@ If Not fso.FolderExists(DB_PATH) Then
 End If
 
 Const FULL_REIMPORT_DAYS = 14
+' Below this, the database is too shallow to be a real history - it was built from a delta.
+' The export enforces a 60-bar minimum per ticker, so anything under 60 is unambiguous.
+Const MIN_HISTORY_BARS = 60
 
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
 If Not fso.FileExists(fmt) Then
@@ -124,7 +127,7 @@ failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 ' A delta holds 30 sessions of bars. Twenty days was wrong on two counts: it re-imported
 ' 337 MB while the delta could still have covered the gap, and it did not account for the
 ' sessions the laptop missed. 14 sessions leaves 16 sessions of slack.
-Dim doFull, lastFull, ageDays, dbEmpty
+Dim doFull, lastFull, ageDays, dbEmpty, maxBars
 doFull = True
 ageDays = 9999
 dbEmpty = True
@@ -133,10 +136,30 @@ dbEmpty = (APP.Stocks.Count = 0)
 Err.Clear
 On Error GoTo 0
 
-' An empty database MUST get the full snapshot: the delta alone would leave 10 years missing
-' while reporting success, which is the failure mode this whole script exists to avoid.
-If dbEmpty Then
+' History is measured, not remembered. The state file lied once already: a broken run stored
+' nothing yet still recorded a successful full import, so the next run "helpfully" served only
+' the 30-session delta and left 2,266 symbols with 30 bars each. A database that has no
+' history is not a database with history, whatever the file says.
+maxBars = MaxBarsInDatabase()
+If maxBars > 0 Then
+  WScript.Echo "Deepest symbol holds " + CStr(maxBars) + " bars"
+End If
+
+Dim forceFull
+forceFull = False
+If WScript.Arguments.Count > 0 Then
+  If LCase(WScript.Arguments(0)) = "full" Then forceFull = True
+End If
+
+If forceFull Then
+  WScript.Echo "Forced full import (argument)"
+ElseIf dbEmpty Then
+  ' An empty database MUST get the full snapshot: the delta alone would leave 10 years missing
+  ' while reporting success, which is the failure mode this whole script exists to avoid.
   WScript.Echo "Empty database - full import required"
+ElseIf maxBars > 0 And maxBars < MIN_HISTORY_BARS Then
+  ' Symbols exist but none carries real history: this database was built from a delta only.
+  WScript.Echo "Shallow database (" + CStr(maxBars) + " bars max) - full import required"
 ElseIf fso.FileExists(STATE_FILE) Then
   Dim t : t = fso.OpenTextFile(STATE_FILE, 1).ReadAll
   If IsDate(Trim(t)) Then
@@ -311,4 +334,46 @@ Function ExpectedSymbols()
     totalN = totalN + CLng(m.SubMatches(0))
   Next
   ExpectedSymbols = totalN
+End Function
+
+' ---------------------------------------------------------------------------
+' Deepest bar count found by sampling the collection. Sampling beats scanning: 2,378 symbols
+' read one by one over OLE is slow, and the answer only needs to distinguish "has history"
+' from "only a delta". A miss returns 0, which is treated as unknown and never as a pass.
+Function MaxBarsInDatabase()
+  Dim total, i, best, n
+  MaxBarsInDatabase = 0
+  On Error Resume Next
+  total = APP.Stocks.Count
+  If Err.Number <> 0 Then
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  If total = 0 Then
+    On Error GoTo 0
+    Exit Function
+  End If
+
+  best = 0
+  ' First, last and middle: cheap and spread across the collection.
+  For i = 0 To 2
+    Select Case i
+      Case 0 : n = 0
+      Case 1 : n = Int(total / 2)
+      Case 2 : n = total - 1
+    End Select
+    Dim st, q
+    Set st = APP.Stocks(n)
+    If Err.Number = 0 Then
+      Set q = st.Quotations
+      If Err.Number = 0 Then
+        If q.Count > best Then best = q.Count
+      End If
+      Err.Clear
+    End If
+    Err.Clear
+  Next
+  On Error GoTo 0
+  MaxBarsInDatabase = best
 End Function
