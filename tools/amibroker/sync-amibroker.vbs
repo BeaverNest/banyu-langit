@@ -56,63 +56,6 @@ If APP Is Nothing Then
   WScript.Quit 2
 End If
 
-' ---- verify mode ----------------------------------------------------------
-' "was 2378" does NOT prove persistence: GetObject attaches to the instance left open by the
-' previous run, so an unsaved import reads back identically. Only a process that never saw the
-' import can tell. This mode closes AmiBroker, waits, starts a fresh instance, and reports what
-' it can read from disk.
-Dim verifyOnly
-verifyOnly = False
-If WScript.Arguments.Count > 0 Then
-  If LCase(WScript.Arguments(0)) = "verify" Then verifyOnly = True
-End If
-
-If verifyOnly Then
-  ' APP may be Nothing here: when no AmiBroker process is running, GetObject fails and
-  ' CreateObject would START one - which is not a cold read of the previous run's data. So
-  ' verify mode does not reuse APP at all. It closes whatever is running and opens cleanly.
-  WScript.Echo "Closing AmiBroker to force a cold read ..."
-  CloseAmiBroker
-
-  Dim cold, coldBars, coldTries, coldCount
-  cold = Nothing
-  coldBars = 0
-  coldTries = 0
-  coldCount = 0
-  On Error Resume Next
-  Set cold = CreateObject("Broker.Application")
-  Err.Clear
-  On Error GoTo 0
-
-  If cold Is Nothing Then
-    WScript.Echo "FAIL: could not restart AmiBroker"
-    WScript.Quit 2
-  End If
-
-  Do While coldTries < 30
-    On Error Resume Next
-    coldCount = cold.Stocks.Count
-    If coldCount > 0 Then
-      Dim cs : Set cs = cold.Stocks(0)
-      coldBars = cs.Quotations.Count
-    End If
-    Err.Clear
-    On Error GoTo 0
-    If coldBars >= MIN_HISTORY_BARS Then Exit Do
-    WScript.Sleep 1000
-    coldTries = coldTries + 1
-  Loop
-
-  WScript.Echo "Cold start reads: " + CStr(coldCount) + " symbols, first holds " + CStr(coldBars) + " bars"
-  If coldBars >= MIN_HISTORY_BARS Then
-    WScript.Echo "PERSISTENT: data survived a full restart"
-    WScript.Quit 0
-  Else
-    WScript.Echo "FAIL: bars vanished after restart - SaveDatabase is not writing"
-    WScript.Quit 2
-  End If
-End If
-
 ' Keep the window out of the way while it works; this is cosmetic only.
 On Error Resume Next
 APP.Visible = False
@@ -549,30 +492,3 @@ Function MaxBarsInDatabase()
   On Error GoTo 0
   MaxBarsInDatabase = best
 End Function
-
-' ---------------------------------------------------------------------------
-' Stop AmiBroker via WMI. Killing the process is deliberate: SaveDatabase on an instance the
-' script did not create is unreliable once the previous run has exited, and a cold read needs
-' the process actually gone. Errors are reported, never swallowed - a silent failure here
-' would make the persistence check meaningless.
-Sub CloseAmiBroker()
-  Dim svc, procs, p, killed
-  killed = 0
-  On Error Resume Next
-  Set svc = GetObject("winmgmts:\\.\root\cimv2")
-  If Err.Number <> 0 Then
-    WScript.Echo "  WARN: WMI unavailable (" + Err.Description + "), cannot force-close AmiBroker"
-    Err.Clear
-    On Error GoTo 0
-    Exit Sub
-  End If
-  Set procs = svc.ExecQuery("SELECT * FROM Win32_Process WHERE Name='broker.exe'")
-  If Err.Number = 0 Then
-    For Each p In procs
-      If p.Terminate() = 0 Then killed = killed + 1
-    Next
-  End If
-  Err.Clear
-  On Error GoTo 0
-  WScript.Echo "  closed " + CStr(killed) + " broker.exe process(es)"
-End Sub

@@ -24,7 +24,7 @@ REM Cold-start check: closes AmiBroker and reopens it, so this reads from disk o
 REM Without the restart, GetObject attaches to the instance still holding the import in memory
 REM and "was 2378" would prove nothing.
 echo ---- persistence check (cold start) ---- >> "%LOG%"
-cscript //nologo "%DEST%sync-amibroker.vbs" verify >> "%LOG%" 2>&1
+cscript //nologo "%DEST%verify-persist.vbs" >> "%LOG%" 2>&1
 set RC2=%ERRORLEVEL%
 echo exit=%RC2% >> "%LOG%"
 if not "%RC2%"=="0" (
