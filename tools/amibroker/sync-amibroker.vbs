@@ -275,6 +275,21 @@ Else
   WScript.Echo "Delta import only (last full " + CStr(ageDays) + " days ago)"
 End If
 
+' ---- GLOBAL block: imported on EVERY run, never behind the full/delta switch --------------
+' These series are not part of the equity snapshot. The first version put this import inside the
+' full branch only, and because the state file already marked the last full as today, every
+' later run took the delta branch: the market stayed empty while the log printed OK. The block
+' is 75 symbols, so there is no reason to gate it.
+Dim fmtClose : fmtClose = FMT_DIR + "\banyulangit-close.format"
+If fso.FileExists(IMPORT_DIR + "\global_all.csv") Then
+  failed = failed + ImportOne(IMPORT_DIR + "\global_all.csv", fmt)
+End If
+' Close-only bars need their OWN format: the source never had Open/High/Low for them, and
+' importing 0 into those fields would silently corrupt every candle and moving average.
+If fso.FileExists(IMPORT_DIR + "\global_close.csv") Then
+  failed = failed + ImportOne(IMPORT_DIR + "\global_close.csv", fmtClose)
+End If
+
 ' ---- categories: sector / industry -------------------------------------
 ' Market and group are NOT here: the ASCII importer takes a numeric ID for those and discards
 ' a name without an error, while SECTORNAME/INDUSTRYNAME accept a name and create it. Market

@@ -1,0 +1,20 @@
+; AmiBroker ASCII import format for CLOSE-ONLY series in the Banyu Langit export.
+;
+; Why a separate format: 34 of the GLOBAL series have no true Open/High/Low at the source.
+; Every yield curve series (ID1M..ID30Y), every macro release (CPI, PMI, SRBI, GDP), plus
+; COAL, TIN and RUBBER RSS3 only ever published a settlement/close price. custom_ohlc stores
+; 0 in open/high/low for those rows.
+;
+; Feeding 0 into Open/High/Low is not a small blemish: every candle, moving average, ATR and
+; backtest built on those bars would be wrong, while looking perfectly healthy. AmiBroker fills
+; the missing fields from Close when the column is absent, so the fix is to omit them.
+;
+; $BREAKONERR 1 is deliberate, same reason as banyulangit.format: a rejected line must fail
+; loudly instead of leaving a half-empty database that reports "ok".
+
+$FORMAT Ticker,Date_YMD,Close
+$SEPARATOR ,
+$SKIPLINES 0
+$AUTOADD 1
+$BREAKONERR 1
+$DEBUG 1

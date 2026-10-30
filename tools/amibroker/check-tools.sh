@@ -145,6 +145,20 @@ else
   chk "no Dim inside a loop in any .vbs" 1
 fi
 
+
+# 18. The GLOBAL block must never overwrite an equity. Renaming is allowed, dropping is not:
+# 'CORN' is both a US ticker and the agricultural contract, and refusing to export the contract
+# would be a silent data loss.
+grep -q "US_NAMES" ../../server/scripts/export-amibroker.js 2>/dev/null
+chk "global block checks US name collisions" $?
+grep -q "name = 'Us' + t.code" ../../server/scripts/export-amibroker.js 2>/dev/null
+chk "colliding global series is renamed, not dropped" $?
+
+# 19. Global series have their own floor: macro is monthly releases, so requiring 60 bars would
+# empty the category, and padding it to look daily would put a fiction in the database.
+grep -q "global-min-bars" ../../server/scripts/export-amibroker.js 2>/dev/null
+chk "global has its own min-bars floor" $?
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2

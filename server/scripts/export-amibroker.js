@@ -64,6 +64,10 @@ const DELTA = [];
 // a symbol dropped from the snapshot (too few bars) must not arrive through the incremental file,
 // or the "subset" contract breaks and the laptop accumulates symbols the server does not have.
 const KEPT = new Set();
+// Symbols already present in a US or IDX snapshot. The GLOBAL block must not reuse one: AmiBroker
+// keys a symbol by name, so a commodity named AAPL would silently overwrite the equity.
+const ALL_TAKEN = new Set();
+const GLOBAL_KEPT = new Set();
 
 function isoDate(s) {
   // idx_daily uses both '2026-10-29' and '2026/10/09' in adjacent tables; normalise.
@@ -76,12 +80,15 @@ function num(v, dflt) {
 }
 
 /** Write one CSV made of {ticker,date,o,h,l,c,v} records, sorted ticker then date. */
-function writeCsv(file, records) {
+function writeCsv(file, records, closeOnly) {
   records.sort((a, b) => (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : a.date < b.date ? -1 : 1));
   const lines = new Array(records.length);
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
-    lines[i] = `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v}`;
+    // closeOnly writes 3 columns so the importer never sees a fabricated Open/High/Low.
+    lines[i] = closeOnly
+      ? `${r.ticker},${r.date},${r.c}`
+      : `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v}`;
   }
   // Write to a temporary name and rename into place. The HTTP server exposes this directory
   // continuously, so a client pulling mid-write would otherwise receive a truncated CSV and
@@ -196,6 +203,89 @@ function exportIdx() {
   return stats;
 }
 
+// ------------------------------------------------------------------ GLOBAL market
+// Forex, commodities, global indices and macro series live in custom_ohlc, not in idx_daily or
+// us_daily - they reach the app through the same manual table the dashboard reads.
+//
+// WHY A SEPARATE MIN-BARS: macro series are monthly RELEASES (CPI, PMI, SRBI), not daily bars.
+// Requiring 60 of them would empty that category, and padding them to look daily would put a
+// fiction in the database. A 12-sample floor keeps a series that can be plotted while refusing
+// the ones too young to mean anything, and the manifest records how many were dropped.
+function exportGlobal() {
+  const GLOBAL_MIN_BARS = Number(arg('global-min-bars', 12));
+  // 'rates' is the SBN yield curve (ID1M..ID30Y). It is not a currency and not a macro release -
+  // it is the risk-free term structure, and leaving it out silently dropped 12 series.
+  const cats = ['currency', 'commodity', 'commodity_unverified', 'global_index', 'macro', 'rates'];
+  const tickers = db.prepare(
+    `SELECT code, name, category, rows FROM custom_tickers WHERE category IN (${cats.map(() => '?').join(',')}) ORDER BY code`
+  ).all(...cats);
+
+  const byCode = new Map();
+  const dropped = [];
+  const renamed = [];
+  const US_NAMES = new Set([...ALL_TAKEN]);   // US market only: bare names, no suffix
+  for (const t of tickers) {
+    // Never let a commodity overwrite an equity symbol, but do not throw the series away either:
+    // the US market already owns 'CORN' (a ticker), so the agricultural contract ships as UsCorn.
+    // Bare-code collision only. 'COAL' vs 'COAL.JK' is NOT a collision - those are different
+    // AmiBroker symbols - so only rename when the export really would overwrite: a US ticker
+    // with the exact same name and no suffix. The rename keeps the series usable.
+    let name = t.code;
+    if (US_NAMES.has(name)) name = 'Us' + t.code;
+    if (US_NAMES.has(name)) { dropped.push({ ticker: t.code, reason: 'still clashes after rename' }); continue; }
+    if (name !== t.code) renamed.push({ from: t.code, to: name });
+    const rows = db.prepare(`
+      SELECT trade_date, open, high, low, close, volume FROM custom_ohlc
+      WHERE code = ? AND close > 0 ORDER BY trade_date
+    `).all(t.code);
+    const recs = rows.map(r => ({
+      ticker: name, date: isoDate(r.trade_date),
+      o: num(r.open, 0), h: num(r.high, 0), l: num(r.low, 0), c: num(r.close, 0), v: num(r.volume, 0),
+    })).filter(r => r.c > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date));
+    if (recs.length < GLOBAL_MIN_BARS) {
+      dropped.push({ ticker: t.code, bars: recs.length, category: t.category });
+      continue;
+    }
+    byCode.set(name, recs);
+    GLOBAL_KEPT.add(name);
+  }
+
+  // Two files, because a close-only series cannot travel in the OHLC file.
+  // 34 of these series (all yields, every macro release, COAL, TIN, RUBBER) have open=high=low=0
+  // in custom_ohlc: the source only ever gave a settlement price. Writing them into the OHLC
+  // column set would put 0 in Open/High/Low and every candle, MA and ATR built on those bars
+  // would be garbage. AmiBroker fills O/H/L from Close when the field is absent, so the honest
+  // fix is a separate file that carries Close only - not a fabricated O/H/L.
+  // Split per ROW, not per symbol. ALUMINIUM has 59 such days out of ~500, XAUUSD 2, USDIDR 2:
+  // the source published a settlement only on those dates. Sending the whole symbol to the
+  // close file would throw away its real High/Low on every other day, and keeping the zero row
+  // in the OHLC file would put a bar with Low=0 on the chart. Dates are disjoint between the two
+  // files, so the second import adds the missing bars instead of overwriting good ones.
+  const flat = [], flatClose = [];
+  for (const code of [...byCode.keys()].sort()) {
+    const list = byCode.get(code);
+    KEPT.add(code);
+    for (const r of list) ((r.o === 0 && r.h === 0 && r.l === 0) ? flatClose : flat).push(r);
+  }
+  const w = writeCsv(path.join(OUT, 'global_all.csv'), flat);
+  const wc = writeCsv(path.join(OUT, 'global_close.csv'), flatClose, true);
+  let minD = '9999', maxD = '0000';
+  for (const list of byCode.values()) {
+    if (list[0].date < minD) minD = list[0].date;
+    if (list[list.length - 1].date > maxD) maxD = list[list.length - 1].date;
+  }
+  return {
+    market: 'global', files: [w, wc], tickers: byCode.size,
+    rows: w.rows + wc.rows, bytes: w.bytes + wc.bytes,
+    ohcl_bars: flat.length,
+    close_only_bars: flatClose.length,
+    close_only_symbols: new Set(flatClose.map(r => r.ticker)).size,
+    date_min: minD, date_max: maxD, min_bars: GLOBAL_MIN_BARS,
+    dropped_too_short: dropped.length, dropped_sample: dropped.slice(0, 12), renamed,
+    note: 'macro series are monthly releases, not daily bars - do not read a flat stretch as missing data; close_only symbols carry no true Open/High/Low in the source',
+  };
+}
+
 // ------------------------------------------------------------------ IHSG index
 function exportIhsg() {
   const rows = db.prepare(`
@@ -220,6 +310,10 @@ function flush(byCode, market, meta) {
     const list = byCode.get(t);
     if (list.length < MIN_BARS) { dropped.push({ ticker: t, bars: list.length }); continue; }
     KEPT.add(String(t).replace(/\.JK$/, ''));   // delta stores the suffixed ticker
+    // US only: a bare name with no suffix is the only thing that can collide. Adding the IDX
+    // bare code too would collide 'COAL' (commodity) with 'COAL' (IDX ticker, exported as
+    // COAL.JK - a different symbol) and rename a series for no reason.
+    if (market === 'us') ALL_TAKEN.add(String(t));
     keep.push([t, list]);
   }
   let batch = [], idx = 0, rowsTotal = 0, bytesTotal = 0;
@@ -305,9 +399,27 @@ function writeCategories() {
     return { file: path.basename(file), rows: lines.length, bytes: fs.statSync(file).size };
   }
 
+  // --- GLOBAL: forex / commodity / global index / macro, one group per category
+  const gl = db.prepare(`
+    SELECT code,
+           CASE category
+             WHEN 'currency'             THEN 'FOREX'
+             WHEN 'commodity'            THEN 'COMMODITY'
+             WHEN 'commodity_unverified' THEN 'COMMODITY'
+             WHEN 'global_index'         THEN 'INDEX'
+             WHEN 'macro'                THEN 'MACRO'
+             WHEN 'rates'                THEN 'RATES'
+             ELSE 'OTHER' END AS grp
+    FROM custom_tickers
+    WHERE category IN ('currency','commodity','commodity_unverified','global_index','macro','rates')
+    ORDER BY code
+  `).all().filter(r => GLOBAL_KEPT.has(r.code) || GLOBAL_KEPT.has('Us' + r.code))
+      .map(r => ({ ...r, code: GLOBAL_KEPT.has(r.code) ? r.code : 'Us' + r.code }));
+
   const usGroups = [...new Set(us.map(r => r.grp))].sort();
   const idxGroups = [...new Set(idx.map(r => r.grp))].sort();
-  const mIndex = { US: 1, IDX: 2 };          // 0 = Undefined, 255 = reserved
+  const glGroups = [...new Set(gl.map(r => r.grp))].sort();
+  const mIndex = { US: 1, IDX: 2, GLOBAL: 3 };   // 0 = Undefined, 255 = reserved
   // Group IDs are ONE namespace across all markets, not one per market. Numbering US from 1 and
   // IDX from 1 as well would put "US EQUITY" and "IDX Akselerasi" both in group 1, and the
   // second name write would silently overwrite the first. Allocate the whole range up front.
@@ -315,33 +427,40 @@ function writeCategories() {
   let gNext = 1;
   usGroups.forEach(g => { gIndex['US:' + g] = gNext++; });
   idxGroups.forEach(g => { gIndex['IDX:' + g] = gNext++; });
+  glGroups.forEach(g => { gIndex['GLOBAL:' + g] = gNext++; });
 
   const tagged = [
     ...us.map(r => ({ sym: r.code, market: 'US', grp: r.grp, sector: r.sector, industry: r.industry })),
     ...idx.map(r => ({ sym: r.code + '.JK', market: 'IDX', grp: r.grp, sector: r.sector, industry: r.industry })),
+    // GLOBAL carries no sector/industry on purpose. The Series window would fill with 75
+    // one-member industries, which is noise, and AmiBroker derives sector FROM industry - so
+    // inventing an industry here would quietly create a bogus sector tree.
+    ...gl.map(r => ({ sym: r.code, market: 'GLOBAL', grp: r.grp, sector: 'Unclassified', industry: 'Unclassified', noSector: true })),
   ];
 
   files.push(atomic(path.join(OUT, 'category_assign.csv'),
     tagged.map(r => `${clean(r.sym)},${mIndex[r.market]},${gIndex[r.market + ':' + r.grp]}`)));
 
+  const eq = tagged.filter(r => !r.noSector);
   files.push(atomic(path.join(OUT, 'categories_sector.csv'),
-    tagged.map(r => `${clean(r.sym)},${clean(r.sector)}`)));
+    eq.map(r => `${clean(r.sym)},${clean(r.sector)}`)));
 
   files.push(atomic(path.join(OUT, 'categories_industry.csv'),
-    tagged.map(r => `${clean(r.sym)},${clean(r.sector)},${clean(r.industry)}`)));
+    eq.map(r => `${clean(r.sym)},${clean(r.sector)},${clean(r.industry)}`)));
 
   // Market and group names cannot ride in on the CSV (the importer takes IDs), and OLE cannot
   // enumerate Groups/Watchlists/Sectors at all in 6.30 - so the names ship as a small list and
   // the Windows side applies them through Markets.Item(n).Name, the one collection OLE exposes.
   files.push(atomic(path.join(OUT, 'category_names.csv'),
-    [`MARKET,1,US`, `MARKET,2,IDX`,
+    [`MARKET,1,US`, `MARKET,2,IDX`, `MARKET,3,GLOBAL`,
      ...usGroups.map(g => `GROUP,${gIndex['US:' + g]},US ${g}`),
-     ...idxGroups.map(g => `GROUP,${gIndex['IDX:' + g]},IDX ${g}`)]));
+     ...idxGroups.map(g => `GROUP,${gIndex['IDX:' + g]},IDX ${g}`),
+     ...glGroups.map(g => `GROUP,${gIndex['GLOBAL:' + g]},GLOBAL ${g}`)]));
 
   const catSummary = {
     symbols: tagged.length,
-    markets: { US: us.length, IDX: idx.length },
-    groups: { US: usGroups, IDX: idxGroups },
+    markets: { US: us.length, IDX: idx.length, GLOBAL: gl.length },
+    groups: { US: usGroups, IDX: idxGroups, GLOBAL: glGroups },
     sectors: [...new Set(tagged.map(r => r.sector))].sort(),
     industries: [...new Set(tagged.map(r => r.industry))].length,
     gics: 'not populated - no ticker->code crosswalk in the vendor files',
@@ -380,6 +499,8 @@ function main() {
     manifest.idx = exportIdx();
     manifest.ihsg = exportIhsg();
   }
+  // GLOBAL last: it needs ALL_TAKEN populated by the equity snapshots to avoid a name collision.
+  if (MARKET === 'global' || MARKET === 'all') manifest.global = exportGlobal();
 
   // One small file for the nightly incremental import. Sorted by ticker then date so the file
   // is deterministic: an unchanged session produces byte-identical output, and a sync client

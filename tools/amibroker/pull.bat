@@ -25,6 +25,9 @@ for %%F in (
   delta_recent.csv
   delta_index.csv
   index_ihsg.csv
+  global_all.csv
+  global_close.csv
+  banyulangit-close.format
   banyulangit-sector.format
   banyulangit-industry.format
   banyulangit.format
