@@ -120,3 +120,22 @@
   width: 3px; height: 36px; border-radius: 2px; background: var(--b2); transition: background 0.15s;
 }
 .chart-resize:hover::after { background: var(--bl); }
+
+/* Narrow viewports: the topbar carries 11 controls in a single flex row, so on a
+   phone it overflows past the right edge and the last buttons become unreachable.
+   Wrapping keeps every control visible instead of letting them run off-screen.
+   Sizes shrink too, so the row usually still fits on one line on tablets. */
+@media (max-width: 700px) {
+  .chart-topbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding: 4px 6px;
+    min-height: 0;
+  }
+  .chart-ticker-input { width: 62px; }
+  .chart-topbar .chart-tool-btn,
+  .chart-topbar .chart-tf-btn,
+  .chart-topbar .chart-ind-btn,
+  .chart-topbar .chart-close-btn { padding: 2px 5px; }
+  .chart-price-info { flex: 1 1 100%; order: 9; margin-top: 2px; }
+}
