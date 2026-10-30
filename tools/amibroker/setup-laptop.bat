@@ -61,7 +61,10 @@ echo   OK
 echo [4/6] Registering the hourly pull ...
 REM /SC HOURLY does not need elevation. Try it; if the policy refuses, fall back to a
 REM Startup shortcut that pulls once per logon - degraded, but never silently missing.
-schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "%DEST%\pull.bat" /F >nul 2>&1
+REM Points at refresh.bat, NOT pull.bat: pull only downloads, so an hourly task aimed at it
+REM fetched fresh CSVs every hour and never imported them. The data sat in the folder while
+REM AmiBroker kept showing the previous close.
+schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "%DEST%\refresh.bat" /F >nul 2>&1
 if errorlevel 1 (
   echo   WARN: hourly task refused ^(policy^); using a logon-time pull instead.
   set HOURLY=0

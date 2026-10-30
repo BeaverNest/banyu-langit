@@ -30,6 +30,7 @@ for %%F in (
   import.bat
   sync-amibroker.vbs
   verify-persist.vbs
+  refresh.bat
   us_part01.csv us_part02.csv us_part03.csv us_part04.csv us_part05.csv
   idx_part01.csv idx_part02.csv idx_part03.csv idx_part04.csv
 ) do (
