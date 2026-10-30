@@ -85,6 +85,29 @@ If InStr(1, cur, "BanyuLangit", vbTextCompare) = 0 Then
   WScript.Echo "Switched database: '" + CStr(cur) + "' -> " + DB_PATH
 End If
 
+' LoadDatabase returns before the switch completes; confirm it actually landed rather than
+' trusting the call. Reading DatabasePath too early still reports the old database.
+Dim sw, okDb, tries
+okDb = False
+tries = 0
+Do While tries < 30
+  On Error Resume Next
+  sw = APP.DatabasePath
+  Err.Clear
+  On Error GoTo 0
+  If InStr(1, CStr(sw), "BanyuLangit", vbTextCompare) > 0 Then
+    okDb = True
+    Exit Do
+  End If
+  WScript.Sleep 500
+  tries = tries + 1
+Loop
+
+If Not okDb Then
+  WScript.Echo "FAIL: still on '" + CStr(sw) + "' after 15s - refusing to import elsewhere."
+  WScript.Quit 2
+End If
+
 If Not fso.FolderExists(DB_PATH) Then
   WScript.Echo "FAIL: database folder " + DB_PATH + " does not exist."
   WScript.Echo "      Create it once in AmiBroker: File -> New Database -> " + DB_PATH
@@ -95,6 +118,41 @@ Const FULL_REIMPORT_DAYS = 14
 ' Below this, the database is too shallow to be a real history - it was built from a delta.
 ' The export enforces a 60-bar minimum per ticker, so anything under 60 is unambiguous.
 Const MIN_HISTORY_BARS = 60
+
+' ---- wait for the database to finish loading -------------------------------
+' CreateObject starts a fresh AmiBroker and loads the database asynchronously. Reading
+' Stocks.Count immediately returns 0 even when the database is full - observed as
+' "was 0" against 2,266 symbols. Any decision made on that reading is wrong, and worse,
+' it is wrong in the direction that looks healthy.
+Dim ready, waited, lastCount, curCount
+ready = False
+waited = 0
+lastCount = -1
+Do While waited < 60
+  On Error Resume Next
+  curCount = APP.Stocks.Count
+  If Err.Number <> 0 Then
+    curCount = -1
+    Err.Clear
+  End If
+  On Error GoTo 0
+  If curCount > 0 And curCount = lastCount Then
+    ready = True
+    Exit Do
+  End If
+  lastCount = curCount
+  WScript.Sleep 1000
+  waited = waited + 1
+Loop
+
+If Not ready Then
+  If lastCount > 0 Then
+    ready = True
+  Else
+    WScript.Echo "WARN: database did not report any symbols within 60s."
+    WScript.Echo "      If it is genuinely new this is fine; otherwise the import reads a stale count."
+  End If
+End If
 
 Dim fmt : fmt = FMT_DIR + "\banyulangit.format"
 If Not fso.FileExists(fmt) Then
@@ -113,13 +171,22 @@ If Not IsAscii(IMPORT_DIR) Then
 End If
 
 ' ---- delta first: newest bars land in seconds, before any big import -------
+' symBefore must be read with a real error check. The log showed "was 0" against a database
+' that already held 2,266 symbols, which silently disabled the "count fell" guard: any number
+' is >= 0, so the comparison could never fire.
 Dim failed, symBefore, symAfter
 failed = 0
 symBefore = -1
 On Error Resume Next
-symBefore = APP.Stocks.Count
 Err.Clear
+symBefore = APP.Stocks.Count
+If Err.Number <> 0 Then
+  WScript.Echo "WARN: could not read symbol count before import (" + Err.Description + ")"
+  symBefore = -1
+  Err.Clear
+End If
 On Error GoTo 0
+WScript.Echo "Symbols before import: " + CStr(symBefore)
 failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
 failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 
@@ -217,7 +284,7 @@ If symAfter <= 0 Then
   WScript.Quit 2
 End If
 
-If symBefore >= 0 And symAfter < symBefore Then
+If symBefore > 0 And symAfter < symBefore Then
   WScript.Echo "FAIL: symbol count fell from " + CStr(symBefore) + " to " + CStr(symAfter)
   WScript.Quit 2
 End If
