@@ -334,14 +334,14 @@ function buildContext(db, opts) {
     : rail === idx ? 'rail+idx_daily'
     : rail > idx ? 'rail:custom_ohlc' : 'idx_daily';
 
-  let sessions = [];
+  let sessionsAll = [];
   try {
-    sessions = db.prepare('SELECT DISTINCT trade_date AS d FROM idx_daily ORDER BY trade_date DESC LIMIT ?')
+    sessionsAll = db.prepare('SELECT DISTINCT trade_date AS d FROM idx_daily ORDER BY trade_date DESC LIMIT ?')
       .all(SESSION_LOOKBACK).map(r => r.d);
   } catch (e) { /* kalender kosong -> lag null, pemanggil menampilkan apa adanya */ }
   // ref dari rail bisa lebih baru dari idx_daily; sesi itu tetap sesi.
-  if (ref && sessions.indexOf(ref) === -1) sessions.push(ref);
-  sessions.sort();
+  if (ref && sessionsAll.indexOf(ref) === -1) sessionsAll.push(ref);
+  sessionsAll.sort();
 
   // Ekspektasi per seri: satu query, dibaca sekali per request. Sumbernya keputusan manual
   // (scripts/seed_expected_lag.js), bukan hasil turunan pull — lihat komentar di kepala berkas.
@@ -369,6 +369,23 @@ function buildContext(db, opts) {
   const calendar = Object.prototype.hasOwnProperty.call(o, 'calendar')
     ? o.calendar
     : loadCalendar(o.calendarFile);
+  // Sesi yang cutoff-nya BELUM lewat tidak boleh ditagih sebagai tertinggal.
+  //
+  // `ref` diambil sebagai MAX frontier mentah, dan rail luar (indeks Asia, crypto) menulis
+  // bar hari berjalan pagi hari — sebelum bursa AS/Eropa tutup, sebelum IDX tutup. Selama
+  // tanggal itu < hari ini, ia lebih besar dari frontier IDX (2026-10-29) sehingga jadi ref,
+  // lalu SETIAP seri yang jujur berhenti di sesi terakhir yang sudah tutup terbaca
+  // "terlambat 1 sesi". Dengan expected_lag_sessions=0, excess=1 dan seluruh panel menulis
+  // "basi" untuk data yang baru saja diperbarui.
+  //
+  // Aturannya: sesi yang lebih tua dari hari ini selalu terhitung; sesi hari ini hanya
+  // terhitung setelah cutoff 21:00 WIB (sinkronisasi 19:00 + margin), yaitu fungsi
+  // cutoffPassed() yang sudah dipakai pipelineSignal di berkas ini — bukan aturan kedua.
+  const clock = wibClock(now);
+  const refundable = s => cutoffPassed(s, clock);
+  const sessions = sessionsAll.filter(refundable);
+  const refBillable = ref && refundable(ref) ? ref : (sessions.length ? sessions[sessions.length - 1] : null);
+
   const pipeline = pipelineSignal({
     refDate: ref || null,
     now,
@@ -378,6 +395,7 @@ function buildContext(db, opts) {
 
   return {
     ref_date: ref,
+    ref_billable: refBillable,
     ref_source,
     rail_frontier: rail,
     idx_frontier: idx,
@@ -466,11 +484,12 @@ function seriesFreshness(ctx, lastDate, code) {
     };
   }
   let lag = 0;
-  for (const s of ctx.sessions) if (s > lastDate && s <= ctx.ref_date) lag++;
+  const billable = ctx.ref_billable || ctx.ref_date;
+  for (const s of ctx.sessions) if (s > lastDate && s <= billable) lag++;
   const capped = !!ctx.window_from && lastDate < ctx.window_from;
   const excessive = lag > expected;
   return {
-    ref_date: ctx.ref_date,
+    ref_date: billable,
     last_date: lastDate,
     lag_sessions: lag,
     lag_capped: capped,
