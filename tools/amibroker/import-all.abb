@@ -1,0 +1,32 @@
+// Banyu Langit -> AmiBroker batch import.
+//
+// WHERE THIS GOES: any folder on the Windows laptop, e.g. C:\AmibrokerData\import-all.abb
+// RUN IT:  AmiBroker -> Tools -> Batch/Scheduled Tasks -> Add -> point at this file, and
+//          schedule it daily. AmiBroker runs no background process: a task fires only while it
+//          is open, and a task MISSED while it was closed runs once at the next start. That is
+//          precisely why opening AmiBroker after a week on the road still leaves you current.
+//
+// ORDER MATTERS: the two delta files come first. They are ~5 MB and carry the last 30 sessions,
+// so the newest bars are in the database within seconds of opening — before the 332 MB history
+// import has finished. $OVERWRITE 1 makes re-importing the same rows idempotent, so the full
+// files afterwards cannot corrupt what the delta already wrote.
+//
+// Edit the paths if your sync folder differs. NEVER strip the .JK suffix: 22 tickers exist on
+// BOTH exchanges (AGRO, CBRE, COIN, FAST, INDO, LION, ...) and stripping it merges a Jakarta
+// bank with a US company.
+
+DataImportASCII "C:\AmibrokerData\import\delta_recent.csv"
+DataImportASCII "C:\AmibrokerData\import\delta_index.csv"
+
+DataImportASCII "C:\AmibrokerData\import\us_part01.csv"
+DataImportASCII "C:\AmibrokerData\import\us_part02.csv"
+DataImportASCII "C:\AmibrokerData\import\us_part03.csv"
+DataImportASCII "C:\AmibrokerData\import\us_part04.csv"
+DataImportASCII "C:\AmibrokerData\import\us_part05.csv"
+
+DataImportASCII "C:\AmibrokerData\import\idx_part01.csv"
+DataImportASCII "C:\AmibrokerData\import\idx_part02.csv"
+DataImportASCII "C:\AmibrokerData\import\idx_part03.csv"
+DataImportASCII "C:\AmibrokerData\import\idx_part04.csv"
+
+DataImportASCII "C:\AmibrokerData\import\index_ihsg.csv"

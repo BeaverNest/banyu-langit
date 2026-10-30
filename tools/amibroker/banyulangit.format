@@ -1,0 +1,17 @@
+; AmiBroker ASCII import format for the Banyu Langit export.
+;
+; WHERE THIS GOES:  C:\Program Files\AmiBroker\Formats\  (next to the other .format files)
+; File name matters: this one is "banyulangit.format" only as a label — AmiBroker picks the
+; format by the DATA file's extension (.csv). If you already have a .csv format defined, either
+; merge these lines into it or rename the exported files to .blk / .txt and name this format to
+; match. Do not let two different .csv formats compete for the same extension.
+;
+; The column order here MUST match server/scripts/export-amibroker.js:
+;   Ticker,YYYY-MM-DD,Open,High,Low,Close,Volume
+
+$FORMAT Ticker,Date_YMD,Open,High,Low,Close,Volume
+$SEPARATOR ,
+$AUTOADD 1
+$OVERWRITE 1
+$SKIPLINES 0
+$DEBUG 1
