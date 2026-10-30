@@ -419,6 +419,10 @@ function writeCategories() {
   const usGroups = [...new Set(us.map(r => r.grp))].sort();
   const idxGroups = [...new Set(idx.map(r => r.grp))].sort();
   const glGroups = [...new Set(gl.map(r => r.grp))].sort();
+  // JKSE is an index, not a stock: it has no company profile, so it never entered the IDX
+  // snapshot and stayed in market 0 forever. It gets its own group under market 2.
+  idxGroups.push('INDEX');
+  idxGroups.sort();
   const mIndex = { US: 1, IDX: 2, GLOBAL: 3 };   // 0 = Undefined, 255 = reserved
   // Group IDs are ONE namespace across all markets, not one per market. Numbering US from 1 and
   // IDX from 1 as well would put "US EQUITY" and "IDX Akselerasi" both in group 1, and the
@@ -436,6 +440,9 @@ function writeCategories() {
     // one-member industries, which is noise, and AmiBroker derives sector FROM industry - so
     // inventing an industry here would quietly create a bogus sector tree.
     ...gl.map(r => ({ sym: r.code, market: 'GLOBAL', grp: r.grp, sector: 'Unclassified', industry: 'Unclassified', noSector: true })),
+    // IHSG. Market 0 is 'Undefined' and a symbol sitting there is invisible to any market filter,
+    // which is how it survived three rounds of verification without anyone noticing.
+    { sym: 'JKSE', market: 'IDX', grp: 'INDEX', sector: 'Unclassified', industry: 'Unclassified', noSector: true },
   ];
 
   files.push(atomic(path.join(OUT, 'category_assign.csv'),
