@@ -26,7 +26,7 @@ Const DB_PATH = "C:\BanyuLangit\"
 Const GROUP_CHUNK_REPORT = 250
 
 Dim APP, fso, csvPath, ts, line, parts, applied, skipped, unknown, sawSymbol
-Dim key, targetM, targetG, st, doneMap
+Dim key, targetM, targetG, st, doneMap, idxMap, symIdx
 
 Set fso = CreateObject("Scripting.FileSystemObject")
 
@@ -89,13 +89,15 @@ On Error GoTo 0
 ' A dict of ticker -> "m,g" built from what is ALREADY correct in the database,
 ' so a re-run costs one pass over Symbols instead of writing all of them again.
 Set doneMap = CreateObject("Scripting.Dictionary")
+Set idxMap = CreateObject("Scripting.Dictionary")
 Dim i2, st2, curKey
 On Error Resume Next
 For i2 = 0 To APP.Stocks.Count - 1
   Set st2 = APP.Stocks.Item(i2)
   curKey = st2.Ticker
-  If Err.Number = 0 Then
+  If Err.Number = 0 And Len(curKey) > 0 Then
     doneMap(curKey) = CStr(st2.MarketID) + "," + CStr(st2.GroupID)
+    idxMap(curKey) = i2
   Else
     Err.Clear
   End If
@@ -113,11 +115,20 @@ Do While Not ts.AtEndOfStream
       key = parts(0)
       targetM = CLng(parts(1))
       targetG = CLng(parts(2))
+      ' Stocks.Item does NOT accept a ticker string (it yields a Stock whose fields are empty,
+      ' so every write fails with "Object required" 424) and Stocks.Find does not exist at all
+      ' in 6.30 (error 438). The only reliable handle is the numeric index, taken from the same
+      ' single pass that built doneMap.
       sawSymbol = False
       On Error Resume Next
-      Set st = APP.Stocks.Item(key)
-      If Err.Number = 0 And Not st Is Nothing Then sawSymbol = True
+      symIdx = -1
+      If idxMap.Exists(key) Then symIdx = idxMap(key)
       Err.Clear
+      If symIdx >= 0 Then
+        Set st = APP.Stocks.Item(symIdx)
+        If Err.Number = 0 Then sawSymbol = True
+        Err.Clear
+      End If
       On Error GoTo 0
 
       If Not sawSymbol Then
@@ -179,7 +190,7 @@ WScript.Echo "Symbols after reload: " + CStr(APP.Stocks.Count)
 
 WScript.Echo ""
 WScript.Echo "---- census (read back from disk) ----"
-Dim mCount, gCount, mid2, gid2, st4, nm
+Dim mCount, gCount, mid2, gid2, st4, nm, k
 Set mCount = CreateObject("Scripting.Dictionary")
 Set gCount = CreateObject("Scripting.Dictionary")
 On Error Resume Next

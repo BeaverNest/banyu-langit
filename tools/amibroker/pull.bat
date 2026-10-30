@@ -25,21 +25,14 @@ for %%F in (
   delta_recent.csv
   delta_index.csv
   index_ihsg.csv
-  banyulangit-categories.format
   banyulangit-sector.format
   banyulangit-industry.format
-  categories_idx.csv
-  categories_us.csv
   banyulangit.format
   import-all.abb
   import.bat
   sync-amibroker.vbs
   verify-persist.vbs
   assign-categories.vbs
-  diag-categories.vbs
-  diag-categories2.vbs
-  diag-categories3.vbs
-  diag-categories4.vbs
   category_assign.csv
   category_names.csv
   categories_sector.csv
@@ -52,6 +45,10 @@ for %%F in (
 ) do (
   %CURL% -o "%DEST%%%F" -z "%DEST%%%F" "%BASE%/%%F"
   if errorlevel 1 echo WARN: %%F failed
+  REM Small stagger between files. Without it several curl processes can hit the same file
+  REM while AmiBroker is opening the folder, and Windows answers "being used by another
+  REM process" - which looks like a failed download but is a sharing conflict.
+  %SystemRoot%\System32\ping.exe -n 1 -w 60 127.0.0.1 >nul
 )
 
 exit /b 0

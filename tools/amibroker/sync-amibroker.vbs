@@ -375,30 +375,29 @@ WScript.Echo "Symbols in database: " + CStr(symAfter) + " (was " + CStr(symBefor
 If probe <> "" Then WScript.Echo "First symbol: " + probe
 
 ' ---- persist ---------------------------------------------------------------
-' ---- market census gate ---------------------------------------------------
-' A category import that silently does nothing is invisible: every chart still draws, every
-' quote is still there, and only the Symbols window would look wrong. Count symbols per market
-' and fail when more than one market is empty - a single-market universe means the assignment
-' never landed.
+' ---- market census (informational) ---------------------------------------
+' Prints ONLY markets that actually hold symbols. The database reserves 256 market slots and
+' 254 of them are empty forever, so looping over all of them printed 256 lines of noise on
+' every run and buried the lines that matter. The real gate lives in assign-categories.vbs,
+' which knows which markets were supposed to be filled.
 On Error Resume Next
-Dim mIdx, mObj, mName, mCount, marketsSeen, emptyMarkets
-marketsSeen = 0 : emptyMarkets = ""
+Dim mIdx, mObj, mName, mCount, censusHits
+censusHits = 0
 For mIdx = 0 To APP.Markets.Count - 1
-  Set mObj = APP.Markets.Item(mIdx)
-  mName = mObj.Name
-  mCount = 0
-  Err.Clear
-  On Error Resume Next
   mCount = CountSymbolsInMarket(APP, mIdx)
-  Err.Clear
-  On Error GoTo 0
-  If Len(Trim(mName)) > 0 Then
-    marketsSeen = marketsSeen + 1
-    If mCount = 0 Then emptyMarkets = emptyMarkets + " [" + mName + "]"
-    WScript.Echo "  market " + mName + ": " + CStr(mCount) + " symbols"
+  If Err.Number <> 0 Then
+    Err.Clear
+  ElseIf mCount > 0 Then
+    mName = APP.Markets.Item(mIdx).Name
+    Err.Clear
+    If mCount >= 1 Then
+      WScript.Echo "  market " + CStr(mIdx) + " (" + mName + "): " + CStr(mCount) + " symbols"
+    End If
+    censusHits = censusHits + 1
   End If
 Next
 On Error GoTo 0
+If censusHits = 0 Then WScript.Echo "  no market assignment present yet"
 
 ' SaveDatabase() is not optional. Without it the imported bars exist only in the running
 ' instance: the script reports 2,518 bars, the process ends, and the next run finds 30 again.

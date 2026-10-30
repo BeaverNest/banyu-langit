@@ -45,6 +45,7 @@ REM  pass over the symbol table on a normal night, not 2,377 writes.
 REM ============================================================================
 echo ---- categories ---- >> "%LOG%"
 cscript //nologo "%DEST%assign-categories.vbs" >> "%LOG%" 2>&1
+echo exit=%ERRORLEVEL% >> "%LOG%"
 set RC3=%ERRORLEVEL%
 echo exit=%RC3% >> "%LOG%"
 if not "%RC3%"=="0" (

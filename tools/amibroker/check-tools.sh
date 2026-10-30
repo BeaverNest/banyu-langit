@@ -113,6 +113,26 @@ for f in import.bat refresh.bat; do
   fi
 done
 
+
+# 15. CSV line endings. Windows cscript reads a lone \n file unreliably and can report stale
+# content, so the published copies must be CRLF. This bit during verification: a correct file
+# downloaded from the server was still executed as the previous version.
+for f in assign-categories.vbs sync-amibroker.vbs verify-persist.vbs; do
+  if grep -q $'\r' "$f" 2>/dev/null; then
+    chk "$f uses CRLF" 0
+  else
+    chk "$f uses CRLF (run unix2dos)" 1
+  fi
+done
+
+# 16. No dead references: pull.bat must not ship files that no longer exist upstream.
+for f in $(grep -oE '^  [a-zA-Z0-9_.-]+\.(csv|vbs|bat|format|abb|json)$' pull.bat | tr -d ' '); do
+  if [ ! -f "$f" ] && ! docker exec -w /app banyu-langit test -f "/app/data/export/$f" 2>/dev/null; then
+    chk "pull.bat ships an existing file: $f" 1
+  fi
+done
+chk "pull.bat has no dead references" $?
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2
