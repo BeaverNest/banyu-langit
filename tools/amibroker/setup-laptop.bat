@@ -59,19 +59,18 @@ for %%F in ("%DEST%\delta_recent.csv") do if %%~zF LSS 1000 (
 echo   OK
 
 echo [4/7] Registering the daily refresh ...
-REM /SC HOURLY does not need elevation. Try it; if the policy refuses, fall back to a
-REM Startup shortcut that pulls once per logon - degraded, but never silently missing.
-REM Points at refresh.bat, NOT pull.bat: pull only downloads, so an hourly task aimed at it
-REM fetched fresh CSVs every hour and never imported them. The data sat in the folder while
-REM AmiBroker kept showing the previous close.
-schtasks /Create /TN "BanyuLangit-Pull" /SC HOURLY /MO 1 /TR "%DEST%\refresh.bat" /F >nul 2>&1
+REM Daily at 20:00, NOT hourly. The export only changes once a day (19:25 WIB), so 24 polls
+REM would be 23 wasted round-trips. /SC DAILY needs no elevation.
+REM Points at refresh.bat, NOT pull.bat: pull only downloads, so a task aimed at it fetches CSVs
+REM and never imports them - the files look current while AmiBroker shows the previous close.
+schtasks /Create /TN "BanyuLangit-Refresh" /SC DAILY /ST 20:00 /TR "%DEST%\refresh.bat" /F >nul 2>&1
 if errorlevel 1 (
-  echo   WARN: hourly task refused ^(policy^); using a logon-time pull instead.
-  set HOURLY=0
+  echo   WARN: daily task refused ^(policy^). The logon import and the desktop shortcut still work.
 ) else (
-  echo   OK -^> hourly
-  set HOURLY=1
+  echo   OK -^> daily at 20:00
 )
+REM Remove the old hourly task from earlier installs; leaving it would keep polling 24x a day.
+schtasks /Delete /TN "BanyuLangit-Pull" /F >nul 2>&1
 
 echo [5/7] Registering the import at logon ...
 REM No elevation: a shortcut in the user's Startup folder.
