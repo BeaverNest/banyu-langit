@@ -56,11 +56,27 @@ If APP Is Nothing Then
   WScript.Quit 2
 End If
 
-' Keep the window out of the way while it works; this is cosmetic only.
+' Hide the window ONLY if this script started AmiBroker. When launched from the owner's
+' shortcut, AmiBroker is already running and visible - hiding it would make the program
+' disappear the moment he opens it.
+Dim startedHere
+startedHere = False
 On Error Resume Next
-APP.Visible = False
-Err.Clear
+Set APP = GetObject(, "Broker.Application")
+If Err.Number <> 0 Then
+  startedHere = True
+  Err.Clear
+End If
 On Error GoTo 0
+
+If startedHere Then
+  On Error Resume Next
+  APP.Visible = False
+  Err.Clear
+  On Error GoTo 0
+Else
+  WScript.Echo "Attached to the running AmiBroker instance (window left visible)"
+End If
 
 ' ---- force the database, do not inherit "last used" ------------------------
 ' AmiBroker opens whichever database was active last time. Importing into that one "succeeds"

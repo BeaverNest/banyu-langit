@@ -23,7 +23,7 @@ set DEST=C:\AmibrokerData\import
 mkdir "%DEST%" >nul 2>&1
 if not exist "%DEST%" set DEST=%LOCALAPPDATA%\AmibrokerData\import
 
-echo [1/6] Checking the Tailscale link ...
+echo [1/7] Checking the Tailscale link ...
 ping -n 1 -w 2000 %NAME% >nul 2>&1
 if errorlevel 1 (
   echo   FAIL: cannot reach %NAME%.
@@ -32,7 +32,7 @@ if errorlevel 1 (
 )
 echo   OK
 
-echo [2/6] Preparing %DEST% ...
+echo [2/7] Preparing %DEST% ...
 echo         ^(folder must be ASCII-only: AmiBroker's importer cannot open non-ASCII paths^)
 if not exist "%DEST%" mkdir "%DEST%"
 if not exist "%DEST%" (
@@ -41,7 +41,7 @@ if not exist "%DEST%" (
 )
 echo   OK -^> %DEST%
 
-echo [3/6] Pulling data (unchanged files are skipped) ...
+echo [3/7] Pulling data (unchanged files are skipped) ...
 %CURL% -o "%DEST%\pull.bat" "%BASE%/pull.bat"
 if errorlevel 1 (
   echo   FAIL: could not download pull.bat from %BASE%
@@ -58,7 +58,7 @@ for %%F in ("%DEST%\delta_recent.csv") do if %%~zF LSS 1000 (
 )
 echo   OK
 
-echo [4/6] Registering the hourly pull ...
+echo [4/7] Registering the daily refresh ...
 REM /SC HOURLY does not need elevation. Try it; if the policy refuses, fall back to a
 REM Startup shortcut that pulls once per logon - degraded, but never silently missing.
 REM Points at refresh.bat, NOT pull.bat: pull only downloads, so an hourly task aimed at it
@@ -73,7 +73,7 @@ if errorlevel 1 (
   set HOURLY=1
 )
 
-echo [5/6] Registering the import at logon ...
+echo [5/7] Registering the import at logon ...
 REM No elevation: a shortcut in the user's Startup folder.
 set STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 if not exist "%STARTUP%" mkdir "%STARTUP%" >nul 2>&1
@@ -87,12 +87,31 @@ if exist "%STARTUP%\BanyuLangit Import.cmd" (
 )
 
 echo.
-echo [6/6] Verifying the format file is next to the data ...
+echo [6/7] Verifying the format file is next to the data ...
 if not exist "%DEST%\banyulangit.format" (
   echo   FAIL: banyulangit.format missing from %DEST% - the import cannot work.
   exit /b 2
 )
 echo   OK ^(no admin needed: OLE Import takes the format path explicitly^)
+
+echo [7/7] Creating the "Buka AmiBroker" shortcut ...
+set DESKTOP=%USERPROFILE%\Desktop
+set LNK=%TEMP%\banyulangit_open.lnk
+> "%TEMP%\mklnk.vbs" echo Set oWS = WScript.CreateObject("WScript.Shell")
+>> "%TEMP%\mklnk.vbs" echo sLinkFile = "%LNK%"
+>> "%TEMP%\mklnk.vbs" echo Set oLink = oWS.CreateShortcut(sLinkFile)
+>> "%TEMP%\mklnk.vbs" echo oLink.TargetPath = "%DEST%\open-amibroker.bat"
+>> "%TEMP%\mklnk.vbs" echo oLink.WorkingDirectory = "%DEST%"
+>> "%TEMP%\mklnk.vbs" echo oLink.IconLocation = "C:\Program Files\AmiBroker\Broker.exe,0"
+>> "%TEMP%\mklnk.vbs" echo oLink.Description = "Update Banyu Langit data, then open AmiBroker"
+>> "%TEMP%\mklnk.vbs" echo oLink.Save
+cscript //nologo "%TEMP%\mklnk.vbs" >nul 2>&1
+if exist "%LNK%" (
+  copy /Y "%LNK%" "%DESKTOP%\Buka AmiBroker.lnk" >nul 2>&1
+  echo   OK -^> %DESKTOP%\Buka AmiBroker.lnk
+) else (
+  echo   WARN: shortcut not created. Run %DEST%\open-amibroker.bat manually.
+)
 
 echo Done. Data folder: %DEST%
 echo AmiBroker database expected at: C:\BanyuLangit\
