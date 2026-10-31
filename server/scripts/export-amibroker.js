@@ -369,12 +369,23 @@ function writeCategories() {
   const idx = db.prepare(`
     SELECT d.code,
            COALESCE(NULLIF(p.board,''),    'Unclassified') AS grp,
+           (SELECT MAX(dd.name) FROM idx_daily dd WHERE dd.code = d.code) AS rowname,
            COALESCE(NULLIF(p.sector,''),   'Unclassified') AS sector,
            COALESCE(NULLIF(p.industry,''), 'Unclassified') AS industry
     FROM (SELECT DISTINCT code FROM idx_daily WHERE close > 0) d
     LEFT JOIN company_profiles p ON p.code = d.code
     ORDER BY d.code
   `).all().filter(r => KEPT.has(r.code));
+
+  // ---- symbol information lookups ---------------------------------------
+  // Kept as Map for O(1) lookups over ~2.4k rows; a JOIN would also work but these three
+  // sources live in different shapes and a missing row must be COUNTED, not silently dropped.
+  const profiles = new Map(db.prepare(
+    `SELECT code, name, address, website FROM company_profiles`).all().map(r => [r.code, r]));
+  const usMeta = new Map(db.prepare(
+    `SELECT code, name, exchange, currency FROM us_symbols_meta`).all().map(r => [r.code, r]));
+  const customInfo = new Map(db.prepare(
+    `SELECT code, name FROM custom_tickers`).all().map(r => [r.code, r]));
 
   // ---- category files ---------------------------------------------------
   // AmiBroker's ASCII importer has an asymmetric API, and getting it wrong is silent:
@@ -464,7 +475,78 @@ function writeCategories() {
      ...idxGroups.map(g => `GROUP,${gIndex['IDX:' + g]},IDX ${g}`),
      ...glGroups.map(g => `GROUP,${gIndex['GLOBAL:' + g]},GLOBAL ${g}`)]));
 
+  // ---- SYMBOL INFORMATION ------------------------------------------------------------
+  // Full name, alias, address, website and currency. These are NOT decoration: the chart
+  // header and the symbol window show FullName instead of the raw ticker, and a chart for
+  // 'UNVR.JK' reading 'UNVR.JK' everywhere is harder to scan than 'Unilever Indonesia'.
+  //
+  // Address counts as one line on purpose. 301 of the IDX addresses contain a newline, and a
+  // newline inside a CSV field would split one company into two malformed rows.
+  //
+  // Currency is left EMPTY for US names, not defaulted to USD: us_symbols_meta says USD for
+  // 1333 of 1334 rows, but that is the exchange's listing currency, and an empty field is
+  // honest where a guess is not.
+  const sip = [];
+  const siMissing = { idx_profile: 0, us_meta: 0 };
+  for (const r of idx) {
+    const p = profiles.get(r.code) || {};
+    // 27 IDX codes trade on the exchange but have no row in company_profiles (APOL, BORN,
+    // CKRA, ...). They still carry a name in idx_daily, so the fallback uses that instead of
+    // dropping the symbol - an unnamed ticker in the symbol window reads as a bug.
+    const fallbackName = String(r.rowname || '').trim();
+    // Never skip a symbol. A missing profile row used to mean no symbol-info row at all, which
+    // left 27 IDX codes with no name AND no alias in the symbol window. Emitting the row with
+    // the ticker standing in for the name is honest - AmiBroker displays the ticker either way -
+    // and it keeps the count reportable instead of silently shrinking the file.
+    if (!p.code) siMissing.idx_profile++;
+    const nameOut = p.name || fallbackName || r.code;
+    sip.push({
+      sym: r.code + '.JK',
+      full: nameOut,
+      alias: r.code,
+      addr: String(p.address || '').replace(/[\r\n]+/g, '; ').replace(/\s+/g, ' ').trim(),
+      web: String(p.website || '').trim(),
+      cur: 'IDR',
+    });
+  }
+  for (const r of us) {
+    const m = usMeta.get(r.code) || {};
+    // Same rule as IDX: 90 US tickers trade in us_daily but have no us_symbols_meta row
+    // (BCO, CSL, DCI, FR, GGG, NFG ...). They trade, so they get a row.
+    if (!m.code) siMissing.us_meta++;
+    sip.push({
+      sym: r.code,
+      full: m.name || r.code,
+      alias: r.code,
+      addr: '',                       // not in us_symbols_meta - leaving it blank, not inventing
+      web: m.exchange ? 'https://www.nasdaq.com/market-activity/stocks/' + r.code.toLowerCase() : '',
+      cur: String(m.currency || '').trim(),
+    });
+  }
+  for (const r of gl) {
+    const t = customInfo.get(r.code) || {};
+    sip.push({
+      sym: r.code,
+      full: t.name || r.code,
+      alias: r.code,
+      addr: '',
+      web: '',
+      cur: '',
+    });
+  }
+  sip.push({ sym: 'JKSE', full: 'IHSG - Indeks Harga Saham Gabungan', alias: 'IHSG', addr: '', web: 'https://www.idx.co.id', cur: 'IDR' });
+
+  files.push(atomic(path.join(OUT, 'symbol_info.csv'),
+    sip.map(r => [r.sym, r.full, r.alias, r.addr, r.web, r.cur].map(clean).join(','))));
+
   const catSummary = {
+    symbol_info: {
+      rows: sip.length,
+      missing: siMissing,
+      // FullName fell back to the ticker for these - the database genuinely has no name, and
+      // writing a made-up one would be worse than showing the symbol.
+      name_is_ticker: sip.filter(r => r.full === r.sym || r.full === r.sym.replace(/\.JK$/, '')).length,
+    },
     symbols: tagged.length,
     markets: { US: us.length, IDX: idx.length, GLOBAL: gl.length },
     groups: { US: usGroups, IDX: idxGroups, GLOBAL: glGroups },

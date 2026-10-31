@@ -290,6 +290,14 @@ If fso.FileExists(IMPORT_DIR + "\global_close.csv") Then
   failed = failed + ImportOne(IMPORT_DIR + "\global_close.csv", fmtClose)
 End If
 
+' ---- SYMBOL INFORMATION: full name, alias, address, website, currency ---------------------
+' Its own format because it needs $NOQUOTES 1 (no date, no price) and $OVERWRITE 1 (every
+' symbol already exists, so $AUTOADD alone would change nothing but still report success).
+Dim fmtInfo : fmtInfo = FMT_DIR + "\banyulangit-symbolinfo.format"
+If fso.FileExists(IMPORT_DIR + "\symbol_info.csv") Then
+  failed = failed + ImportOne(IMPORT_DIR + "\symbol_info.csv", fmtInfo)
+End If
+
 ' ---- categories: sector / industry -------------------------------------
 ' Market and group are NOT here: the ASCII importer takes a numeric ID for those and discards
 ' a name without an error, while SECTORNAME/INDUSTRYNAME accept a name and create it. Market

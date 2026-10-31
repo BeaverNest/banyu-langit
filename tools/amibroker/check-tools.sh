@@ -159,6 +159,26 @@ chk "colliding global series is renamed, not dropped" $?
 grep -q "global-min-bars" ../../server/scripts/export-amibroker.js 2>/dev/null
 chk "global has its own min-bars floor" $?
 
+
+# 20. Symbol information must ship and must actually overwrite. $AUTOADD alone changes nothing
+# because all 2,464 symbols already exist; $NOQUOTES is required because the file carries no
+# price or date. Both wrong == silent rc=0 and an empty FullName column.
+grep -q "symbol_info.csv" tools/amibroker/pull.bat 2>/dev/null || grep -q "symbol_info.csv" pull.bat 2>/dev/null
+chk "pull ships symbol_info.csv" $?
+grep -q '\$NOQUOTES 1' tools/amibroker/banyulangit-symbolinfo.format 2>/dev/null || grep -q '\$NOQUOTES 1' banyulangit-symbolinfo.format 2>/dev/null
+chk "symbolinfo format uses NOQUOTES" $?
+grep -q '\$OVERWRITE 1' tools/amibroker/banyulangit-symbolinfo.format 2>/dev/null || grep -q '\$OVERWRITE 1' banyulangit-symbolinfo.format 2>/dev/null
+chk "symbolinfo format uses OVERWRITE" $?
+
+# 21. Fundamental fields must NOT be imported while idx_fundamental holds 0 in those columns.
+# 0 is a missing value, not a ratio; PER 0.00 in AmiBroker reads as "free".
+if grep -q "PRICE_TO_EARNINGS\|BOOK_VALUE\|MARKET_CAP" tools/amibroker/banyulangit-symbolinfo.format 2>/dev/null; then
+  echo "FAIL: symbolinfo format imports fundamental fields that are 0 in the database"
+  fails=$((fails + 1))
+else
+  echo "ok   symbolinfo format leaves empty fundamentals out"
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2

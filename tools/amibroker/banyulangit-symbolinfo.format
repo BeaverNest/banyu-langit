@@ -1,0 +1,26 @@
+; AmiBroker ASCII import format for SYMBOL INFORMATION (name, alias, address, web, currency).
+;
+; Why $NOQUOTES 1: without it the importer demands a valid date and a non-zero price on every
+; line, and a pure "metadata" file has neither. $NOQUOTES 1 switches off that validation, which
+; is exactly what this file is for.
+;
+; Why $OVERWRITE 1: $AUTOADD alone would only touch symbols that do not exist yet. Every one of
+; our 2,464 symbols already exists, so without OVERWRITE the whole file would parse, report
+; success, and change nothing.
+;
+; Address is sanitised to a single line at export time (301 IDX addresses contain a newline, and
+; a newline inside a CSV field splits one company into two malformed rows).
+;
+; Fundamental fields (EPS, BOOK_VALUE, MARKET_CAP, ...) are NOT imported even though the
+; importer supports them: idx_fundamental stores 0 in every one of those columns for all 961
+; symbols, and 0 is not a ratio - it is a missing value. Importing it would make AmiBroker
+; report PER 0.00, which reads as "free" rather than "unknown".
+
+$FORMAT Ticker,FullName,Alias,Address,WebID,Currency
+$SEPARATOR ,
+$SKIPLINES 0
+$NOQUOTES 1
+$OVERWRITE 1
+$AUTOADD 1
+$BREAKONERR 1
+$DEBUG 1

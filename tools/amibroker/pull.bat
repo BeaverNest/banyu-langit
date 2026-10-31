@@ -28,6 +28,9 @@ for %%F in (
   global_all.csv
   global_close.csv
   banyulangit-close.format
+  symbol_info.csv
+  banyulangit-symbolinfo.format
+  verify-symbolinfo.vbs
   verify-global.vbs
   banyulangit-sector.format
   banyulangit-industry.format
