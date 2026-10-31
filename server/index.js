@@ -332,7 +332,7 @@ app.use('/api/v1', v1);
 // Health
 app.get('/api/health', (req, res) => {
   const s = db.prepare('SELECT COUNT(*)as c FROM holdings').get();
-  res.json({ status: 'ok', version: '2.0.0', name: 'Banyu Langit Trading Diary', db: 'sqlite', holdings: s.c });
+  res.json({ status: 'ok', version: '2.0.0', name: 'Banyu Langit Stock Gateway', db: 'sqlite', holdings: s.c });
 });
 
 // ═══ Upload Logs — unified for all upload types ═══

@@ -2,7 +2,7 @@
 
 # 🌊 Banyu Langit
 
-**IDX Terminal — market analytics, research workspace and trading diary for the Indonesian stock market.**
+**Stock Data Gateway — one SQLite store feeding IDX prices, fundamentals, macro and commodity series to every consumer on the machine, with the analysis workbench riding on top.**
 
 Self-hosted · single SQLite file · no subscription · runs on a mini PC
 
@@ -21,17 +21,31 @@ Self-hosted · single SQLite file · no subscription · runs on a mini PC
 
 ## What it is
 
-Banyu Langit is a self-hosted terminal for IDX (Indonesia Stock Exchange) data. It ingests daily
-market data from the exchange and a set of macro/commodity sources into one SQLite database, then
-exposes it as a dense, keyboard-driven dashboard: market breadth, foreign flow, sector rotation,
-per-stock fundamentals, a screener, a backtester, and a trading journal with screenshots.
+Banyu Langit is a **stock data gateway**: one SQLite store that ingests IDX daily prices, exchange
+fundamentals, macro series and commodity prices from a patchwork of upstream sources, then serves
+that data to everything else on the machine — scheduled rails, agent tooling, and any process that
+can reach `127.0.0.1:3003`. One file is the source of truth; consumers read it, they do not re-fetch.
 
-It is built for one analyst working on one machine: no accounts, no multi-tenant layer, no
-third-party analytics. The whole state is a single `trading.db` file plus an `uploads/` folder.
+It also ships an analysis workbench on top of the same data — market breadth, foreign flow, sector
+rotation, per-stock fundamentals, a screener, a backtester and a trading journal. That workbench is
+the largest user-visible part of the repo today, but it is a **consumer** of the gateway, not the
+gateway itself.
+
+It is built for one analyst on one machine: no accounts, no multi-tenant layer, no third-party
+analytics. The whole state is a single `trading.db` file plus an `uploads/` folder.
+
+> **Read this before calling it an API product.** The authenticated contract is thin. Only
+> `/api/v1/*` enforces `x-api-key`, and that surface currently holds **2 routes**
+> (`/api/v1/quote`, `/api/v1/insider/stock`) plus the read-only agent rail under `/api/v1/idx/*`
+> (**5 routes**, unauthenticated by design so agents never depend on UI auth). The other **183
+> routes** live under `/api/*` with no auth and exist to serve the built-in UI. Treat the gateway
+> as a **data plane plus a private API**, not as a versioned public gateway with a stable contract.
+> Closing that gap is tracked in `docs/stock-gateway.md`, not done.
 
 | | |
 |---|---|
-| **Backend** | Node.js 20 · Express 4 · 12 route modules · **172 endpoints** |
+| **Backend** | Node.js 20 · Express 4 · 14 route modules · **190 routes** |
+| **Auth** | `x-api-key` on `/api/v1/*` only (**2** routes) + read-only rail `/api/v1/idx/*` (**5**) |
 | **Database** | SQLite (`better-sqlite3`) · **61 tables** · WAL |
 | **Frontend** | Vanilla HTML/CSS/JS · 24 modules · ECharts · no build step |
 | **Deployment** | Docker Compose (port `3003`) or `node server/index.js` (port `3000`) |
@@ -101,6 +115,21 @@ third-party analytics. The whole state is a single `trading.db` file plus an `up
 Everything below the browser is one process. There is no message queue and no cache tier: requests
 read SQLite directly, and ingestion runs as scheduled scripts writing into the same file.
 
+### Who consumes the gateway
+
+The browser is one consumer, and not the most important one. The machine's other data users read
+this store rather than going back to the upstream vendors:
+
+| Consumer | How it talks to Banyu Langit |
+|---|---|
+| Scheduled rails (`market-rails/*.py`, on host) | `POST /api/idx/custom/upsert` — commodity, macro, FX, SUN and KSEI series |
+| `IDX-API/scripts/daily-sync.sh` | `POST /api/idx/custom/fetch-all`, `POST /api/idx/sync/*`, plus in-container scripts |
+| Agent rail (read-only) | `GET /api/v1/idx/{freshness,series,indicator,scores}` |
+| The bundled UI | 108 distinct `/api/*` calls across 24 JS modules |
+
+That table is the honest reason this is called a gateway: five pullers and two reader classes share
+one file, and the bookkeeping in the next section exists so they cannot silently disagree.
+
 ## Quick start
 
 ### Docker (recommended)
@@ -147,12 +176,25 @@ All configuration is environment variables; secrets stay in `.env` (never commit
 
 ## API reference
 
-172 endpoints across 12 modules. All are JSON; every response is `{ ok, data }` or
-`{ ok: false, error }`.
+**190 declared routes** across 14 route modules + 2 inline routes in `index.js`. All JSON; every
+response is `{ ok, data }` or `{ ok: false, error }`.
 
-| Module | Endpoints | Representative routes |
+> These counts are measured, not estimated: they come from recording every `router.<method>()` call
+> while each module loads (`router.stack` is not usable for the three modules that export
+> `(upload) => router`). The previous README said "172 endpoints"; that number was never verified and
+> undercounted `idx.js`, which declares **94** routes on its own.
+
+**Auth is per-mount, not global.** Read the `Auth` column before exposing anything:
+
+| Mount | Routes | Auth |
 |---|---:|---|
-| `routes/idx.js` | 83 | `GET /api/idx/summary`, `/quote`, `/top`, `/suspended`, `/digest`, `POST /api/idx/custom/upsert` |
+| `/api/*` | 183 | **none** — serves the bundled UI only |
+| `/api/v1/*` (`v1` router) | 2 | `x-api-key` when `API_KEY` is set |
+| `/api/v1/idx/*` (`rail` router) | 5 | **none by design**, read-only |
+
+| Module | Routes | Representative routes |
+|---|---:|---|
+| `routes/idx.js` | 94 | `GET /api/idx/summary`, `/quote`, `/top`, `/suspended`, `/digest`, `POST /api/idx/custom/upsert` |
 | `routes/insider.js` | 32 | `GET /api/insider/overview`, `/by-type`, `/network`, `/investor`, `POST /api/insider/upload` |
 | `routes/screener.js` | 12 | `POST /api/screener/run`, `/formula`, `GET /api/screener/sectors`, `GET|POST /api/screener/configs` |
 | `routes/watchlist.js` | 10 | `GET|POST /api/watchlist`, `DELETE /api/watchlist/:id`, `GET|POST /api/alerts` |
@@ -161,9 +203,13 @@ All configuration is environment variables; secrets stay in `.env` (never commit
 | `routes/backtest.js` | 6 | `POST /api/backtest/run`, `/walk-forward`, `/walk-forward-score`, `GET /api/backtest/variables` |
 | `routes/rail.js` | 5 | `GET /api/v1/idx/series`, `/freshness`, `/indicator`, `/scores` |
 | `routes/diary.js` | 4 | `GET|POST /api/diary/entries`, `PUT|DELETE /api/diary/entries/:id` |
-| `routes/cross-asset.js` | 2 | `GET /api/cross-asset`, `GET /api/suspensions` |
-| `routes/us-daily.js` | 1 | `GET /api/us-daily` |
-| `routes/eod-fetcher.js` | — | background EOD fetch helpers (no routes) |
+| `routes/us-screen.js` | 3 | `GET /api/us/screen` |
+| `routes/cross-asset.js` | 2 | `GET /api/idx/cross-asset`, `GET /api/idx/suspensions` |
+| `routes/idx-metrics.js` | 1 | `GET /api/idx/metrics` |
+| `routes/ihsg-page.js` | 1 | `GET /api/idx/ihsg-page` |
+| `routes/us-daily.js` | 1 | `GET /api/idx/us-daily` |
+| `routes/eod-fetcher.js` | — | background EOD fetch helpers (no routes; mounted but declares none) |
+| `index.js` (inline `v1`) | 2 | `GET /api/v1/quote`, `/api/v1/insider/stock` |
 
 `GET /api/health` is available for liveness checks.
 
@@ -189,7 +235,8 @@ All configuration is environment variables; secrets stay in `.env` (never commit
 ## Data pipeline & integrity
 
 The interesting part of this project is not the UI, it is the bookkeeping that keeps a
-patchwork of sources from silently disagreeing.
+patchwork of sources from silently disagreeing. That bookkeeping is what makes the word
+"gateway" defensible; read `docs/stock-gateway.md` for the consumer contract.
 
 - **One source per series.** `custom_tickers` records which writer owns each non-IDX series
   (investing.com, Yahoo, macro feeds). A mixed-source guard rejects a series whose rows would
@@ -223,7 +270,7 @@ banyu-langit/
 ├── server/
 │   ├── index.js            Express app, static hosting, auth middleware
 │   ├── db.js               schema + migrations (61 tables)
-│   ├── routes/             12 route modules (172 endpoints)
+│   ├── routes/             14 route modules (188 routes) + 2 inline in index.js
 │   ├── scripts/            ingest, freshness, backfill, checks
 │   └── utils/              shared helpers
 ├── public/
@@ -237,8 +284,10 @@ banyu-langit/
 
 ## Security notes
 
-- Set `API_KEY` and send `x-api-key` on `/api/v1/*` when the app is reachable by anything other
-  than localhost.
+- **The auth surface is narrow, and the gap is real.** `API_KEY` protects only `/api/v1/*` — 2
+  endpoints. `POST /api/entries`, `POST /api/idx/custom/upsert` and the rest of `/api/*` answer
+  without credentials. If a process can reach port 3003, it can write to the database. Putting this
+  behind a VPN is not a hardening nicety here, it is the only control.
 - This is a **single-user** tool. It has no user accounts, sessions or roles; do not expose it to
   the internet. Put it behind a VPN (e.g. Tailscale) or a reverse proxy with TLS and
   authentication.
@@ -246,11 +295,16 @@ banyu-langit/
 
 ## Known limitations
 
+- **The authenticated API contract is 2 endpoints.** Treating `/api/*` as a stable public interface
+  would be a mistake: it changes whenever the bundled UI changes, and nothing enforces compatibility.
 - IDX history before ~2016 is incomplete for most tickers (the upstream source simply has no rows).
 - The frontend is vanilla JS with no build step, chosen for a one-machine deployment; it is not a
   component framework and is not intended for multi-developer UI work.
 - SQLite + WAL is deliberate: one writer (the ingest scripts) and many readers (the UI). Heavy
   concurrent writes from multiple processes are not supported.
+- **The analysis workbench is not separable yet.** UI and gateway ship in one container and one
+  process; there is no headless mode that serves only `/api/v1/*`. If the gateway must run without
+  the workbench, that is a refactor, not a config flag.
 
 ## Contributing
 

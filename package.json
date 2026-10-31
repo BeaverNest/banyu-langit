@@ -1,7 +1,7 @@
 {
   "name": "banyu-langit",
   "version": "2.0.0",
-  "description": "Banyu Langit Trading Diary — IDX market analytics & insider ownership tracker",
+  "description": "Banyu Langit Stock Gateway — IDX market data gateway & insider ownership tracker",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js"
