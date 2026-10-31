@@ -1,0 +1,46 @@
+; AmiBroker ASCII import format: IDX bars + frequency, turnover and net foreign flow.
+;
+; Column order MUST match export-amibroker.js exportIdx():
+;   Ticker, YYYY-MM-DD, Open, High, Low, Close, Volume, Frequency, Turnover, Aux1, Aux2
+;
+; WHY THIS IS A SEPARATE FORMAT FILE
+; The US and GLOBAL bars carry no frequency, turnover or foreign flow. Reusing this format
+; there would write a column of zeros into AUX1/AUX2, and AmiBroker cannot distinguish
+; "no foreign trading" from "nobody measured it" - a flat AUX1 line would read as a real
+; market statement. Each source keeps its own format instead.
+;
+; WHAT AUX1/AUX2 HOLD
+;   AUX1 = net foreign flow in SHARES (foreign_buy - foreign_sell), signed.
+;   AUX2 = 1 when the exchange published foreign flow for that bar, 0 when it did not.
+;
+; WHY AUX2 IS A FLAG AND NOT A RATIO
+; AmiBroker stores AUX as a plain float with no null. An empty field, a missing field and a
+; literal 0 all read back as 0, so AUX1 alone cannot distinguish "foreign traders netted zero"
+; from "IDX published nothing" - and for 47,803 of 167,472 real IDX bars in 2026 it published
+; nothing. Without the flag every 52-week foreign average is dragged toward zero by bars that
+; carry no information. In AFL:  ok = Aux2 > 0;  net = IIf(ok, Aux1, 0);
+; AUX1 is raw shares, exactly as the exchange reports it, so it lines up with Volume. It is
+; deliberately NOT multiplied by price: prices in this file are corporate-action adjusted,
+; so a split would silently rescale every historical flow figure. A share count does not move
+; when a split happens and the split factor does not affect it.
+;
+; Volume is split+dividend adjusted by the exporter (that is what the chart needs), so Volume
+; and AUX1 are on different bases for the 173 codes in ca_factors. For the other 800+ codes
+; nothing was adjusted and both are raw. Do not compute AUX1/Volume as "foreign share of
+; trading" without checking ca_factors first.
+;
+; FREQUENCY AND TURNOVER CANNOT BE IMPORTED
+; $FORMAT accepts Frequency and Turnover without complaint and then DISCARDS them: a test row
+; carrying Volume, Frequency, Turnover, AUX1, AUX2 came back with Frequency and Turnover gone,
+; AmiBroker's OpenInt was 0, and the importer had shifted AUX1 into the Frequency slot. Verified
+; against AmiBroker 6.30, not inferred from the docs. Frequency is therefore not in this file at
+; all; if it is needed it has to go through OpenInt (the one 10-column layout that read back
+; correctly), which this format deliberately does not do - a trading frequency in a field named
+; OpenInterest misleads every AFL script that reads OI for futures.
+
+$FORMAT Ticker,Date_YMD,Open,High,Low,Close,Volume,AUX1,AUX2
+$SEPARATOR ,
+$SKIPLINES 0
+$AUTOADD 1
+$BREAKONERR 1
+$DEBUG 1

@@ -86,9 +86,13 @@ function writeCsv(file, records, closeOnly) {
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
     // closeOnly writes 3 columns so the importer never sees a fabricated Open/High/Low.
-    lines[i] = closeOnly
-      ? `${r.ticker},${r.date},${r.c}`
-      : `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v}`;
+    // Three layouts, deliberately distinct:
+    //   closeOnly     3 cols - source had no Open/High/Low (34 GLOBAL series)
+    //   aux           9 cols - IDX: adds foreign flow. Only IDX has it.
+    //   default       7 cols - OHLCV
+    if (closeOnly) lines[i] = `${r.ticker},${r.date},${r.c}`;
+    else if (r.aux) lines[i] = `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v},${r.aux[0]},${r.aux[1]}`;
+    else lines[i] = `${r.ticker},${r.date},${r.o},${r.h},${r.l},${r.c},${r.v}`;
   }
   // Write to a temporary name and rename into place. The HTTP server exposes this directory
   // continuously, so a client pulling mid-write would otherwise receive a truncated CSV and
@@ -137,7 +141,8 @@ function exportUs() {
 function exportIdx() {
   const factors = loadFactors(db);
   const rows = db.prepare(`
-    SELECT code, trade_date, open_price, high, low, close, volume, prev_close
+    SELECT code, trade_date, open_price, high, low, close, volume, prev_close,
+           frequency, foreign_buy, foreign_sell
     FROM idx_daily
     WHERE close > 0
     ORDER BY code, trade_date
@@ -164,6 +169,12 @@ function exportIdx() {
       open: o, high: num(r.high, 0), low: num(r.low, 0), close: num(r.close, 0),
       volume: num(r.volume, 0),
       _prev: num(r.prev_close, 0),
+      // Net foreign flow in SHARES, exactly as the exchange reports it. Carried through the
+      // corporate-action adjustment untouched: adjustRows() rescales prices and divides volume,
+      // and applying that to a share count would silently rewrite history on every split.
+      _fb: num(r.foreign_buy, 0),
+      _fs: num(r.foreign_sell, 0),
+      _hasF: (num(r.foreign_buy, 0) > 0 || num(r.foreign_sell, 0) > 0),
     });
   }
 
@@ -179,7 +190,18 @@ function exportIdx() {
       r.o = r.ao; r.h = r.ah; r.l = r.al; r.c = r.ac; r.v = Math.round(r.avol);
       delete r.open; delete r.high; delete r.low; delete r.close; delete r.volume;
       delete r.ao; delete r.ah; delete r.al; delete r.ac; delete r.avol;
-      delete r.__adjFactor; delete r._prev;
+      // Compute AUX BEFORE dropping the source fields. An earlier draft deleted _hasF here and
+      // read it in the next loop, so every aux silently came out undefined and the file fell
+      // back to 7 columns with no error at all.
+      //
+      // AUX2 is a FLAG, not a ratio. AmiBroker stores AUX as a plain float with no null, so an
+      // empty field and a literal 0 both read back as 0 - meaning AUX1 alone cannot tell "foreign
+      // traders did nothing" from "the exchange published nothing". AUX2=1 marks a published
+      // observation, AUX2=0 marks a gap, so AFL can mask the 47,803 unpublished 2026 bars instead
+      // of averaging them in as real zeros.
+      r.aux = [r._fb - r._fs, r._hasF ? 1 : 0];
+      delete r.__adjFactor; delete r._prev; delete r._fb; delete r._fs;
+      delete r._hasF; delete r._prev_close;
     }
     // adjustRows() rounds to integers, which can push high/low off the open/close envelope by
     // a rupiah. Re-close the envelope so the OHLC contract holds after adjustment.
@@ -188,8 +210,15 @@ function exportIdx() {
       r.l = Math.min(r.l, r.o, r.c);
     }
     for (const r of list) {
-      if (r.date >= cutoff) DELTA.push({ ticker: r.ticker, date: r.date, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v, src: 'idx' });
+      if (r.date >= cutoff) DELTA.push({ ticker: r.ticker, date: r.date, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v, aux: r.aux, src: 'idx' });
     }
+  }
+
+  // The mixed delta file is what the US path writes; IDX rows need their own 9-column file so the
+  // laptop can import them with the AUX format without rejecting every 7-column US row.
+  const auxRecs = DELTA.filter(r => r.src === 'idx');
+  if (auxRecs.length) {
+    writeCsv(path.join(OUT, 'delta_idx_aux.csv'), auxRecs);
   }
 
   const stats = flush(byCode, 'idx', {
@@ -595,7 +624,10 @@ function main() {
   // is deterministic: an unchanged session produces byte-identical output, and a sync client
   // sees no change at all instead of re-sending the whole thing.
   // Compare on the unsuffixed code: KEPT keys come from the DB, delta carries '.JK'.
-  const deltaRows = DELTA.filter(r => KEPT.has(String(r.ticker).replace(/\.JK$/, '')));
+  // delta_recent.csv stays SEVEN columns and US-only. One file cannot hold both layouts: a gate
+  // measured 'column count drift 9 vs 7' the moment IDX rows joined it, because AmiBroker parses
+  // a file with a single $FORMAT. IDX gets delta_idx_aux.csv instead (written in exportIdx).
+  const deltaRows = DELTA.filter(r => r.src === 'us' && KEPT.has(String(r.ticker).replace(/\.JK$/, '')));
   if (deltaRows.length) {
     const w = writeCsv(path.join(OUT, 'delta_recent.csv'), deltaRows);
     // The index is a symbol too; without it the chart of JKSE would lag the constituents.

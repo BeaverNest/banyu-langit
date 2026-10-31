@@ -183,4 +183,32 @@ if [ "$fails" -ne 0 ]; then
   echo "$fails regression(s)"
   exit 2
 fi
+
+# --- IDX foreign flow (AUX1/AUX2) ---
+# NOTE: chk() takes an EXIT CODE, so every test is written as a command, never as a
+# "$( ... && echo 0 || echo 1)" substitution. The substitution form runs inside a subshell and
+# chk's numeric compare then reads the string, which is always nonzero -> always "ok". The first
+# version of this block used it and reported a clean pass on a deliberately broken format.
+chk "idx-aux format exists" $([ -f banyulangit-idx-aux.format ]; echo $?)
+chk "idx-aux gate exists" $([ -f verify-idx-aux.vbs ]; echo $?)
+chk "idx-aux format keeps 9-column order" $(grep -q '^\$FORMAT Ticker,Date_YMD,Open,High,Low,Close,Volume,AUX1,AUX2' banyulangit-idx-aux.format; echo $?)
+# AmiBroker 6.30 ACCEPTS Frequency and Turnover in $FORMAT and then discards them, shifting AUX1
+# into the Frequency slot (measured: OpenInt came back 0, AUX1 held the frequency). Leaving them
+# in the format moves every foreign-flow value one column left with no error at all.
+chk "idx-aux format avoids Frequency/Turnover" $(! grep -q '^\$FORMAT.*\(Frequency\|Turnover\)' banyulangit-idx-aux.format; echo $?)
+chk "pull ships delta_idx_aux.csv" $(grep -q 'delta_idx_aux.csv' pull.bat; echo $?)
+chk "pull ships idx-aux format" $(grep -q 'banyulangit-idx-aux.format' pull.bat; echo $?)
+chk "pull ships idx-aux gate" $(grep -q 'verify-idx-aux.vbs' pull.bat; echo $?)
+chk "refresh runs idx-aux gate" $(grep -q 'verify-idx-aux.vbs' refresh.bat; echo $?)
+chk "sync imports IDX parts with AUX format" $(grep -q 'ImportOne(p, fmtAux)' sync-amibroker.vbs; echo $?)
+chk "sync defines fmtAux" $(grep -q 'fmtAux = FMT_DIR' sync-amibroker.vbs; echo $?)
+
+# The exit status IS the gate. Earlier this script printed "all tool checks pass" unconditionally
+# and never called exit, so a run with FAIL lines still returned 0 and every caller believed it.
+# A gate that cannot fail is worse than no gate - the same defect as verify-global.vbs, which
+# printed FAIL and returned 0 for weeks.
+if [ "$fails" -ne 0 ]; then
+  echo "GATE FAILED: $fails check(s) red"
+  exit 2
+fi
 echo "all tool checks pass"

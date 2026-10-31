@@ -28,8 +28,11 @@ for %%F in (
   global_all.csv
   global_close.csv
   banyulangit-close.format
+  banyulangit-idx-aux.format
+  delta_idx_aux.csv
   symbol_info.csv
   banyulangit-symbolinfo.format
+  verify-idx-aux.vbs
   verify-symbolinfo.vbs
   verify-global.vbs
   banyulangit-sector.format

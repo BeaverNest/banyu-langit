@@ -72,6 +72,20 @@ if not "%RC4%"=="0" (
   if "%RC%"=="0" set RC=%RC4%
 )
 
+REM ---- gate: prove the IDX foreign flow actually landed -------------------
+REM Same reason as the global gate: Import() returning rc=0 only means the file parsed. A missing
+REM AUX column produces a clean log and an empty column, which looks exactly like "no foreign
+REM trading" on every chart. Read it back.
+echo ---- verify-idx-aux ---- >> "%LOG%"
+cscript //nologo "%DEST%verify-idx-aux.vbs" > "%DEST%va-out.txt" 2>&1
+set RC5=%ERRORLEVEL%
+type "%DEST%va-out.txt" >> "%LOG%"
+findstr /C:"OK:" /C:"FAIL:" /C:"MISSING" "%DEST%va-out.txt"
+if not "%RC5%"=="0" (
+  echo IDX AUX VERIFY FAILED >> "%LOG%"
+  if "%RC%"=="0" set RC=%RC5%
+)
+
 REM Keep the log bounded: this appends 24 times a day.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"
 

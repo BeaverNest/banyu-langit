@@ -206,7 +206,17 @@ If Err.Number <> 0 Then
 End If
 On Error GoTo 0
 WScript.Echo "Symbols before import: " + CStr(symBefore)
-failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
+' Split the delta by market. The single delta_recent.csv mixes US and IDX rows, and only IDX
+' rows carry the two AUX columns - importing the whole file with the AUX format would reject
+' every US row for column-count drift, and importing it with the plain format would throw the
+' foreign-flow columns away. delta_idx_aux.csv is written by the exporter for exactly this.
+Dim fmtAux : fmtAux = FMT_DIR + "\banyulangit-idx-aux.format"
+If fso.FileExists(IMPORT_DIR + "\delta_idx_aux.csv") Then
+  failed = failed + ImportOne(IMPORT_DIR + "\delta_idx_aux.csv", fmtAux)
+Else
+  WScript.Echo "WARN: delta_idx_aux.csv missing - IDX delta will carry no foreign flow"
+  failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
+End If
 failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
 
 ' ---- full snapshot only when the delta cannot cover the gap ----------------
@@ -264,7 +274,9 @@ If doFull Then
   Next
   For i = 1 To 4
     p = IMPORT_DIR + "\idx_part0" + CStr(i) + ".csv"
-    If fso.FileExists(p) Then failed = failed + ImportOne(p, fmt)
+    ' IDX parts carry foreign flow in AUX1/AUX2, so they need the AUX format. US parts stay on
+    ' the plain format - their files have 7 columns and the AUX format would reject every row.
+    If fso.FileExists(p) Then failed = failed + ImportOne(p, fmtAux)
   Next
   failed = failed + ImportOne(IMPORT_DIR + "\index_ihsg.csv", fmt)
 
