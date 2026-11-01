@@ -205,7 +205,15 @@ function exportIdx() {
     }
     // adjustRows() rounds to integers, which can push high/low off the open/close envelope by
     // a rupiah. Re-close the envelope so the OHLC contract holds after adjustment.
+    //
+    // It can also round a genuine sub-rupiah adjusted price to ZERO. PANI traded at Rp 7-11 in
+    // 2019 and its 2022 corporate action carries factor 0.071008, so an adjusted low of 0.497
+    // becomes 0 and the export gate rejects the file ("PANI.JK 2019-02-18 nonpositive"). The
+    // price is real; the integer grid cannot represent it. Clamp to 1 rupiah — the smallest
+    // representable IDX price — rather than dropping 128 real sessions or shipping a zero.
     for (const r of list) {
+      r.o = Math.max(1, r.o); r.h = Math.max(1, r.h);
+      r.l = Math.max(1, r.l); r.c = Math.max(1, r.c);
       r.h = Math.max(r.h, r.o, r.c);
       r.l = Math.min(r.l, r.o, r.c);
     }
