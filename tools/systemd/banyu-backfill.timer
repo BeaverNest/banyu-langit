@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly Banyu Langit history backfill
+
+[Timer]
+# Saturday 04:30 WIB. The IDX-API monthly sync runs 19:04 daily and the
+# AmiBroker refresh runs hourly on the laptop; 04:30 is the only quiet window
+# that is also after the US close (05:00 WIB) is not required here because this
+# job only touches IDX series.
+OnCalendar=Sat 04:30
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

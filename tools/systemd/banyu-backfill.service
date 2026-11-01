@@ -1,0 +1,14 @@
+[Unit]
+Description=Banyu Langit history backfill (Yahoo) for IHSG and IDX stocks
+Documentation=file:///home/beavernest/banyu-langit/server/scripts/backfill.sh
+# A backfill is idempotent (INSERT OR IGNORE / upsert) but not cheap. Weekly is
+# the right cadence: new listings and corrections, not daily bars.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/beavernest/banyu-langit
+ExecStart=/bin/bash -lc '/home/beavernest/banyu-langit/server/scripts/backfill.sh ihsg && /home/beavernest/banyu-langit/server/scripts/backfill.sh idx'
+# Both jobs take the shared data lock themselves; this start timeout only needs
+# to cover a full IDX pass (~5 min measured).
+TimeoutStartSec=3600
+Nice=10
