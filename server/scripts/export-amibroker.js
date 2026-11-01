@@ -316,6 +316,13 @@ function exportGlobal() {
 }
 
 // ------------------------------------------------------------------ IHSG index
+// Full history, deliberately UNBOUNDED now. It used to be implicitly capped by
+// index_ohlc itself (2,413 bars, 2016-10-28 -> 2026-10-30) because the JS backfill
+// could only ask Yahoo for 10y at daily resolution. The Python backfill
+// (server/scripts/backfill_ihsg_yahoo.py) walks 10-year windows in period form and
+// now holds 1990-04-06 onward, so this file is the one full snapshot of the index.
+// AmiBroker's ASCII import is an upsert: re-sending the whole series is harmless and
+// is what keeps a laptop that missed a week in step.
 function exportIhsg() {
   const rows = db.prepare(`
     SELECT trade_date, open, high, low, close, volume
