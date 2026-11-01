@@ -16,6 +16,44 @@ REM ============================================================================
 setlocal
 set DEST=%~dp0
 set LOG=%DEST%last-refresh.log
+set LOCK=%DEST%refresh.lock
+
+REM ---- single-instance lock ------------------------------------------------
+REM Two Import() calls against C:\BanyuLangit at the same time is not a clean
+REM failure: the loser writes a partial dataset while still returning rc=0, and a
+REM gate that only counts symbols will not notice. Measured 2026-11-01, when a
+REM manual run collided with the scheduled one and the log carried
+REM "The process cannot access the file because it is being used by another
+REM process." The data happened to survive; that is luck, not design.
+REM
+REM A second launch now waits up to LOCK_WAIT seconds for the first to finish and
+REM then gives up quietly with exit 4. Giving up is correct for the hourly task:
+REM the next hour pulls again, and a skipped refresh is harmless while a collided
+REM import is not.
+if not exist "%LOCK%" goto lock_acquire
+
+REM A lock left behind by a crash would stall every later refresh silently, so a
+REM lock older than 30 minutes is treated as dead and removed. Anything younger is
+REM a genuinely running import.
+set LOCK_STATE=BUSY
+for /f %%S in ('powershell -NoProfile -Command "if (((Get-Date) - (Get-Item '%LOCK%').LastWriteTime).TotalMinutes -gt 30) {'STALE'} else {'BUSY'}" 2^>nul') do set LOCK_STATE=%%S
+if "%LOCK_STATE%"=="STALE" (
+  echo ---- %DATE% %TIME% ---- STALE lock removed >> "%LOG%"
+  del "%LOCK%" 2>nul
+  goto lock_acquire
+)
+
+set /a LOCK_WAIT=0
+:wait_lock
+if not exist "%LOCK%" goto lock_acquire
+ping -n 3 -w 1000 127.0.0.1 >nul 2>&1
+set /a LOCK_WAIT+=2
+if %LOCK_WAIT% LSS 300 goto wait_lock
+echo ---- %DATE% %TIME% ---- SKIP: another refresh held the lock for %LOCK_WAIT%s >> "%LOG%"
+exit /b 4
+
+:lock_acquire
+echo %DATE% %TIME% > "%LOCK%"
 
 REM Tapis: without Tailscale there is nothing to pull, and the import below would run on
 REM stale files while reporting success.
@@ -88,5 +126,9 @@ if not "%RC5%"=="0" (
 
 REM Keep the log bounded: this appends 24 times a day.
 for %%A in ("%LOG%") do if %%~zA GTR 1048576 del "%LOG%"
+
+REM Release the lock last, after the gates. Releasing before them would let a
+REM waiting run start an import while this one is still reading back.
+del "%LOCK%" 2>nul
 
 exit /b %RC%
