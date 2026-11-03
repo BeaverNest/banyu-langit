@@ -694,7 +694,12 @@ function main() {
     '  real opens from 2025). Do not build an open-based entry rule on IDX history without',
     '  accounting for that. Report it, do not quietly trust it.',
     'IDX volume is divided by the corporate-action factor so it is on today\'s share count.',
-    'Phantom bars (no trade: volume=0, high=0) are dropped, not carried forward.',
+    'No-trade bars (volume=0, high=0: suspended or untraded) are PUBLISHED with OHLC flattened',
+    'to the last close, to match Yahoo. Dropping them made a suspended stock vanish from the',
+    'chart instead of holding its price.',
+    'Run this script once per market with --market us right after the US close (05:00 WIB) and',
+    '--market idx/global after the IDX close. One combined run cannot carry both: the two',
+    'exchanges close 11 hours apart.',
   ].join('\n');
   const manifestPath = path.join(OUT, 'manifest.json');
   fs.writeFileSync(manifestPath + '.tmp', JSON.stringify(manifest, null, 2));

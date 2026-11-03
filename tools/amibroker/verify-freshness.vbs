@@ -76,7 +76,15 @@ APP.LoadDatabase "C:\BanyuLangit"
 WScript.Echo "---- freshness vs published manifest ----"
 
 Dim names, wants, allowed
-names = Array("JKSE", "BBCA.JK", "AAPL", "COAL", "ID10Y")
+' COAL is a probe again. It was pulled out once because it lagged while every other series was
+' current - the right response was to fix the SOURCE, not to stop looking. The cause was a wrong
+' pin in market-rails/instruments.json (USDIDR). With the rail green, COAL reaches the same
+' session as everything else and belongs in the gate.
+' TIN / CPO / RUBBER stay out on purpose: they publish with a declared source lag
+' (custom_tickers.expected_lag_sessions), which is a property of Investing's publication
+' schedule, not of this pipeline. They are watched by check-series-freshness.js against that
+' declared lag, which is the correct comparison for a lagging source.
+names = Array("JKSE", "BBCA.JK", "AAPL", "ID10Y", "COAL")
 ' ZERO slack for every market, including US. The old "1 session for US" rule was a mask, not a
 ' tolerance: the manifest's usMax is already the newest CLOSED US session (a 19:25 WIB export
 ' runs before the US open, so it can only ever publish the previous US day). Allowing one more
