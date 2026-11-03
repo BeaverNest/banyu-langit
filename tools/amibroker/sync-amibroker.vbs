@@ -270,6 +270,57 @@ ElseIf fso.FileExists(STATE_FILE) Then
   End If
 End If
 
+' GAP RULE - the laptop was off. The delta file holds 30 sessions; if the database's NEWEST bar is
+' older than that, the delta cannot bridge the hole and a delta-only run would silently leave a
+' multi-week gap that no later run ever fills (each run only ever adds the last 30 sessions).
+' This is the "laptop mati seminggu" case: it must trigger a full import, not a delta.
+' Measured from the database itself, not from a state file that can lie.
+Dim newestBar, gapDays, kp, pst, pq, pd
+newestBar = Empty
+On Error Resume Next
+' APP.Stocks.Item(<string VARIABLE>) returns Nothing on this build; Item(CStr(v)) works.
+' Measured five spellings - only the raw variable form fails (VBScript/COM by-ref quirk).
+Dim probeNames : probeNames = Array("JKSE", "BBCA.JK", "AAPL", "MSFT", "ID10Y")
+For kp = 0 To UBound(probeNames)
+  Set pst = APP.Stocks.Item(CStr(probeNames(kp)))
+  If Err.Number = 0 Then
+    Set pq = pst.Quotations
+    If Err.Number = 0 Then
+      If pq.Count > 0 Then
+        pd = pq(pq.Count - 1).Date
+        If Err.Number = 0 Then
+          If Not IsDate(newestBar) Then
+            newestBar = pd
+          ElseIf CDate(pd) > CDate(newestBar) Then
+            newestBar = pd
+          End If
+        End If
+      End If
+    End If
+  End If
+  Err.Clear
+Next
+On Error GoTo 0
+If Not IsDate(newestBar) Then
+  WScript.Echo "WARN: could not read the newest bar date - gap rule skipped (freshness gate still runs)"
+End If
+If IsDate(newestBar) Then
+  gapDays = DateDiff("d", CDate(newestBar), Date)
+  ' 20 days, not 30: weekends and holidays mean 30 sessions is roughly 42 calendar days, and a
+  ' gap that large is cheaper to repair with a full import than to reason about.
+  ' Overridable so the rule can be NEGATIVE-TESTED (set AMI_GAP_DAYS=0 and a full import must
+  ' fire). A rule that has never been seen to fire is not a rule.
+  Dim gapLimit
+  gapLimit = 20
+  Dim gapEnv : gapEnv = CreateObject("WScript.Shell").Environment("PROCESS")("AMI_GAP_DAYS")
+  If Len(Trim(CStr(gapEnv))) > 0 Then gapLimit = CLng(gapEnv)
+  WScript.Echo "Newest bar in database: " & CStr(newestBar) & " (" & CStr(gapDays) & " days old, limit " & CStr(gapLimit) & ")"
+  If gapDays > gapLimit Then
+    doFull = True
+    WScript.Echo "DATABASE STALE (" & CStr(gapDays) & " days since last bar, delta covers 30 sessions) - full import required"
+  End If
+End If
+
 If doFull Then
   WScript.Echo "Full import (last full: " + CStr(ageDays) + " days ago)"
   Dim i, p
@@ -609,4 +660,37 @@ Function MaxBarsInDatabase()
   Next
   On Error GoTo 0
   MaxBarsInDatabase = best
+End Function
+
+' Newest bar date in the database, read from a fixed set of symbols that are always present and
+' always liquid (the index plus the heaviest names on each side). Deliberately NOT a max over the
+' collection: a single suspended symbol carrying an old date would understate the gap, and a scan
+' over 2,378 symbols over OLE is too slow for a nightly job. Returns the newest of the probes, so
+' one stale probe cannot trigger a false full import.
+Function ReadNewestBarDate_UNUSED()
+  Dim probes, k, newest, st, q, d
+  probes = Array("JKSE", "BBCA.JK", "AAPL", "MSFT", "ID10Y")
+  newest = Empty
+  On Error Resume Next
+  For k = 0 To UBound(probes)
+    Set st = APP.Stocks(probes(k))
+    If Err.Number = 0 Then
+      Set q = st.Quotations
+      If Err.Number = 0 Then
+        If q.Count > 0 Then
+          d = q(q.Count - 1).Date
+          If Err.Number = 0 Then
+            If Not IsDate(newest) Then
+              newest = d
+            ElseIf CDate(d) > CDate(newest) Then
+              newest = d
+            End If
+          End If
+        End If
+      End If
+    End If
+    Err.Clear
+  Next
+  On Error GoTo 0
+  ReadNewestBarDate = newest
 End Function
