@@ -75,17 +75,23 @@ if errorlevel 1 (
 REM Remove the old hourly task from earlier installs; leaving it would keep polling 24x a day.
 schtasks /Delete /TN "BanyuLangit-Pull" /F >nul 2>&1
 
-echo [5/7] Registering the import at logon ...
+echo [5/7] Registering the refresh at logon ...
 REM No elevation: a shortcut in the user's Startup folder.
+REM It must call refresh.bat (pull + import), NOT import.bat. Measured: the Startup item called
+REM import.bat, which only reads the CSVs already on disk - so after the laptop had been off for
+REM days, logging in imported the OLD files and the chart stayed stale, with a clean log.
+REM The delay matters too: at logon Tailscale and DNS are not up yet, so an immediate pull fails.
 set STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 if not exist "%STARTUP%" mkdir "%STARTUP%" >nul 2>&1
 > "%STARTUP%\BanyuLangit Import.cmd" echo @echo off
->> "%STARTUP%\BanyuLangit Import.cmd" echo call "%DEST%\import.bat"
+>> "%STARTUP%\BanyuLangit Import.cmd" echo REM pulls first, then imports - runs the same lock as the 20:00 task
+>> "%STARTUP%\BanyuLangit Import.cmd" echo timeout /t 90 /nobreak ^>nul
+>> "%STARTUP%\BanyuLangit Import.cmd" echo call "%DEST%\refresh.bat"
 if exist "%STARTUP%\BanyuLangit Import.cmd" (
   echo   OK -^> %STARTUP%
 ) else (
   echo   WARN: could not create the Startup shortcut. Run manually:
-  echo         call "%DEST%\import.bat"
+  echo         call "%DEST%\refresh.bat"
 )
 
 echo.
