@@ -122,8 +122,11 @@ const dbUsCodes = db.prepare('SELECT COUNT(DISTINCT code) n FROM us_daily').get(
 // Traded bars only (volume>0). The export keeps US halts but drops IDX phantom rows, so the
 // IDX comparison must use the same definition or it will always look one bar short.
 const dbIdxTraded = db.prepare('SELECT COUNT(*) n FROM idx_daily WHERE volume > 0 AND high > 0').get().n;
+// Every IDX bar with a usable close, traded or not. No-trade bars are exported now (flattened,
+// volume 0) because a suspended stock must hold its last price on the chart instead of vanishing.
+const dbIdxAll = db.prepare('SELECT COUNT(*) n FROM idx_daily WHERE close > 0').get().n;
 const dbShortTickers = db.prepare(
-  'SELECT COUNT(*) n FROM (SELECT code, COUNT(*) c FROM idx_daily WHERE volume>0 AND high>0 GROUP BY code HAVING c < ?)'
+  'SELECT COUNT(*) n FROM (SELECT code, COUNT(*) c FROM idx_daily WHERE close>0 GROUP BY code HAVING c < ?)'
 ).get(Number(process.argv.includes('--min-bars') ? process.argv[process.argv.indexOf('--min-bars') + 1] : 60)).n;
 const dbShortBars = db.prepare(`
   SELECT COALESCE(SUM(c),0) n FROM (
@@ -133,13 +136,17 @@ ok(Object.keys(us).length === manifest.us.tickers,
    `US ticker count ${Object.keys(us).length} != manifest ${manifest.us.tickers}`);
 warn(Object.keys(us).length >= dbUsCodes - 5,
      `US export has ${Object.keys(us).length} tickers, DB has ${dbUsCodes}`);
-ok(manifest.idx.dropped_phantom_bars > 0, 'phantom-bar filter did not run');
-// Row accounting must close exactly: exported + too-short = DB traded. Phantom bars are a
-// separate bucket (they are in the DB but neither exported nor "too short"). If this does not
-// close, rows vanished for a reason we cannot name — which is the failure mode this whole gate
-// exists to catch.
-ok(manifest.idx.rows + dbShortBars === dbIdxTraded,
-   `IDX row accounting: exported ${manifest.idx.rows} + short-history ${dbShortBars} = ${manifest.idx.rows + dbShortBars}, DB traded ${dbIdxTraded}`);
+ok(manifest.idx.flattened_no_trade_bars > 0, 'no-trade bar flattening did not run');
+// Row accounting closes on ALL bars with a close, because no-trade bars are exported now.
+// The only rows the exporter may withhold are the too-short tickers (MIN_BARS gate), so the
+// check subtracts those. A previous version compared against volume>0 AND high>0, which both
+// undercounted halted sessions and disagreed with the exporter's own definition of "short".
+const dbShortBars2 = db.prepare(`
+  SELECT COALESCE(SUM(c),0) n FROM (
+    SELECT code, COUNT(*) c FROM idx_daily WHERE close>0 GROUP BY code HAVING c < ?
+  )`).get(Number(process.argv.includes('--min-bars') ? process.argv[process.argv.indexOf('--min-bars') + 1] : 60)).n;
+ok(manifest.idx.rows === dbIdxAll - dbShortBars2,
+   `IDX row accounting: exported ${manifest.idx.rows}, DB total ${dbIdxAll} minus short-history ${dbShortBars2} = ${dbIdxAll - dbShortBars2}`);
 ok(manifest.idx.dropped_too_short === dbShortTickers,
    `short-history tickers: manifest ${manifest.idx.dropped_too_short}, DB ${dbShortTickers}`);
 

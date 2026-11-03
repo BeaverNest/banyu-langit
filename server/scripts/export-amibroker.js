@@ -154,20 +154,28 @@ function exportIdx() {
   for (const r of rows) {
     const d = isoDate(r.trade_date);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    // Phantom bars: the exchange listed the code but nothing traded. close is carried over,
-    // high/low/volume are 0. Keeping them would draw a flat zero-volume bar every day and let
-    // a backtest "buy" at a price that never traded.
-    if (!(num(r.high, 0) > 0) || !(num(r.volume, 0) > 0)) { phantom++; continue; }
+    // NO-TRADE BARS ARE PUBLISHED, NOT DROPPED. The exchange lists the code, nothing trades,
+    // and it still carries the last close forward with high/low/volume = 0. Dropping those bars
+    // (the old behaviour) made a suspended stock's chart simply STOP at its last traded day:
+    // ABBA froze at 2026-06-30 and ADCP at 2026-06-08 for four to five months, while the
+    // database held a bar for every session through 2026-11-03.
+    // Yahoo publishes exactly this shape - open/high/low/close = last close, volume 0 - and the
+    // owner's rule is to match Yahoo. So do that: keep the bar, flatten OHLC to close, volume 0.
+    const vRaw = num(r.volume, 0);
+    const cRaw = num(r.close, 0);
+    let hRaw = num(r.high, 0), lRaw = num(r.low, 0);
+    const noTrade = !(vRaw > 0) || !(hRaw > 0);
+    if (noTrade) { phantom++; hRaw = cRaw; lRaw = cRaw; }
     const o = num(r.open_price, 0);
     if (o > 0) openNative++;
-    else { openReconstructed++; }
+    else openReconstructed++;
     // Field names MUST match what price-adjust.js reads: pickPrice() resolves
     // ['open','open_price'] / ['close','close_price'] etc. Naming these o/c/h/l makes
     // adjustRows() return null for every price and ships a CSV of NaNs.
     (byCode.get(r.code) || byCode.set(r.code, []).get(r.code)).push({
       ticker: r.code + '.JK', date: d,
-      open: o, high: num(r.high, 0), low: num(r.low, 0), close: num(r.close, 0),
-      volume: num(r.volume, 0),
+      open: noTrade ? cRaw : o, high: hRaw, low: lRaw, close: cRaw,
+      volume: vRaw,
       _prev: num(r.prev_close, 0),
       // Net foreign flow in SHARES, exactly as the exchange reports it. Carried through the
       // corporate-action adjustment untouched: adjustRows() rescales prices and divides volume,
@@ -234,7 +242,7 @@ function exportIdx() {
     basis: 'corporate-action adjusted via ca_factors (integer rupiah)',
     suffix: '.JK',
   });
-  stats.dropped_phantom_bars = phantom;
+  stats.flattened_no_trade_bars = phantom;
   stats.open_native = openNative;
   stats.open_reconstructed_from_prev_close = openReconstructed;
   return stats;
