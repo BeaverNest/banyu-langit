@@ -215,6 +215,11 @@ If fso.FileExists(IMPORT_DIR + "\delta_idx_aux.csv") Then
   failed = failed + ImportOne(IMPORT_DIR + "\delta_idx_aux.csv", fmtAux)
 Else
   WScript.Echo "WARN: delta_idx_aux.csv missing - IDX delta will carry no foreign flow"
+End If
+' delta_recent.csv is US-ONLY (7 columns). It used to sit in the Else branch above, so the
+' moment delta_idx_aux.csv existed - i.e. always - every US delta row was silently dropped
+' and US charts froze while every gate reported OK. Import it unconditionally.
+If fso.FileExists(IMPORT_DIR + "\delta_recent.csv") Then
   failed = failed + ImportOne(IMPORT_DIR + "\delta_recent.csv", fmt)
 End If
 failed = failed + ImportOne(IMPORT_DIR + "\delta_index.csv", fmt)
