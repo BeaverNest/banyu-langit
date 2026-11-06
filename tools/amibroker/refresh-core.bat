@@ -60,10 +60,32 @@ REM stale files while reporting success.
 ping -n 1 -w 2000 beavernest.taile871ab.ts.net >nul 2>&1
 if errorlevel 1 exit /b 3
 
-REM pull.bat is the one self-updating file here: run-refresh.bat swaps in the
-REM version the server last published before this script starts.
+REM ---- HOW MUCH TO PULL ----------------------------------------------------
+REM pull.bat fetches everything the manifest declares as changed, and the exporter
+REM rewrites every CSV on each publish - so an ordinary evening used to re-download
+REM ~434 MB of part files to feed an import that read ~5 MB of delta. Measured
+REM 2026-11-06: 1 h 31 min of transfer, none of the part files read by the import.
+REM
+REM needs-full.vbs answers "does this run need the 10-year snapshot" from files alone
+REM (no OLE, so it works with AmiBroker closed) and answers FULL whenever it cannot
+REM prove otherwise. A wrong FULL is slow; a wrong DELTA would be silently stale -
+REM only the slow direction is allowed to be wrong.
+set NEEDFULL=1
+if not exist "%DEST%needs-full.vbs" goto :pull_choose
+cscript //nologo "%DEST%needs-full.vbs" >> "%LOG%" 2>&1
+set NEEDFULL=%ERRORLEVEL%
+
+:pull_choose
+if not "%NEEDFULL%"=="0" goto :pull_full
+echo ---- delta-only pull ---- >> "%LOG%"
+call "%DEST%pull.bat" quick
+goto :pull_done
+
+:pull_full
+echo ---- full pull (needs-full rc=%NEEDFULL%) ---- >> "%LOG%"
 call "%DEST%pull.bat"
 
+:pull_done
 if errorlevel 1 exit /b 2
 
 REM Only import when the pull actually brought something new. Delta mtime changes whenever

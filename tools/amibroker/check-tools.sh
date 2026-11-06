@@ -38,18 +38,28 @@ chk "setup-laptop.bat no longer registers an hourly task" $((!$?))
 grep -q 'OK -^> daily at 20:00' setup-laptop.bat 2>/dev/null
 chk "setup-laptop.bat reports 'daily at 20:00', not 'hourly'" $?
 
-# 5. refresh.bat imports; pull.bat only downloads.
-grep -q 'sync-amibroker.vbs' refresh.bat 2>/dev/null
-chk "refresh.bat actually imports" $?
+# 5. refresh-core.bat imports; refresh.bat is only the self-swapping launcher that calls it,
+#    and pull.bat only downloads. An earlier version of this check looked inside refresh.bat
+#    for the import, which stopped being true the moment the launcher/body split landed - it
+#    then reported 4 permanent failures that nobody could act on, and a gate that is red for
+#    a reason nobody fixes is a gate everybody ignores.
+grep -q 'sync-amibroker.vbs' refresh-core.bat 2>/dev/null
+chk "refresh-core.bat actually imports" $?
+grep -q 'call "%DEST%refresh-core.bat"' refresh.bat 2>/dev/null
+chk "refresh.bat calls refresh-core.bat" $?
 # The filename may appear in pull.bat's download list; what must not appear is an invocation.
-grep -q 'cscript' pull.bat 2>/dev/null
+grep -q 'cscript.*sync-amibroker' pull.bat 2>/dev/null
 chk "pull.bat does NOT import (single responsibility)" $((!$?))
 
 # 6. Every file the laptop needs must be in the pull list, or it never arrives.
-for f in refresh.bat open-amibroker.bat setup-laptop.bat verify-persist.vbs sync-amibroker.vbs import.bat; do
+#    refresh.bat is the exception: it is the one file that is never pulled mid-run (it is the
+#    swapper), so it is published but must simply exist in the repo set.
+for f in open-amibroker.bat setup-laptop.bat verify-persist.vbs sync-amibroker.vbs import.bat needs-full.vbs; do
   grep -q "  $f" pull.bat 2>/dev/null
   chk "pull.bat ships $f" $?
 done
+[ -f refresh.bat ]
+chk "refresh.bat exists in the published set" $?
 
 # 7. The setup must identify itself, so a stale copy on the laptop is visible at a glance.
 grep -q 'build %BUILD%' setup-laptop.bat 2>/dev/null
@@ -103,7 +113,7 @@ chk "assigner reloads from disk before counting" $?
 
 # 14. The assigner must run AFTER the import: it assigns symbols, and the quote import is what
 # creates them. Running it first would find an empty database and assign nothing.
-for f in import.bat refresh.bat; do
+for f in import.bat refresh-core.bat; do
   si=$(grep -n 'sync-amibroker.vbs' "$f" | head -1 | cut -d: -f1)
   ai=$(grep -n 'assign-categories.vbs' "$f" | head -1 | cut -d: -f1)
   if [ -n "$si" ] && [ -n "$ai" ] && [ "$ai" -gt "$si" ]; then
@@ -199,9 +209,35 @@ chk "idx-aux format avoids Frequency/Turnover" $(! grep -q '^\$FORMAT.*\(Frequen
 chk "pull ships delta_idx_aux.csv" $(grep -q 'delta_idx_aux.csv' pull.bat; echo $?)
 chk "pull ships idx-aux format" $(grep -q 'banyulangit-idx-aux.format' pull.bat; echo $?)
 chk "pull ships idx-aux gate" $(grep -q 'verify-idx-aux.vbs' pull.bat; echo $?)
-chk "refresh runs idx-aux gate" $(grep -q 'verify-idx-aux.vbs' refresh.bat; echo $?)
+chk "refresh-core runs idx-aux gate" $(grep -q 'verify-idx-aux.vbs' refresh-core.bat; echo $?)
 chk "sync imports IDX parts with AUX format" $(grep -q 'ImportOne(p, fmtAux)' sync-amibroker.vbs; echo $?)
 chk "sync defines fmtAux" $(grep -q 'fmtAux = FMT_DIR' sync-amibroker.vbs; echo $?)
+
+# --- Pull economy: delta-only vs full snapshot (2026-11-06) -------------------
+# The launcher used to re-download ~434 MB of part files on every click so that a delta import
+# could read ~5 MB of them. These checks keep the two-mode pull honest and, more importantly,
+# keep the advisor's fail-safe direction intact: unknown must mean FULL, never DELTA.
+chk "pull.bat accepts a quick mode" $(grep -q 'if /I "%~1"=="quick" set MODE=quick' pull.bat; echo $?)
+chk "pull.bat skips the snapshot in quick mode" $(grep -q 'if /I "%MODE%"=="quick" goto parts_skipped' pull.bat; echo $?)
+chk "quick mode verifies only what it fetched" $(grep -q 'verify-pull.vbs" "%DEST:~0,-1%" quick' pull.bat; echo $?)
+chk "verify-pull.vbs implements quick mode" $(grep -q 'IsPartFile' verify-pull.vbs; echo $?)
+chk "refresh-core consults the advisor before pulling" $(grep -q 'needs-full.vbs' refresh-core.bat; echo $?)
+chk "refresh-core defaults to a full pull when the advisor is missing" $(grep -q 'if not exist "%DEST%needs-full.vbs" goto :pull_choose' refresh-core.bat; echo $?)
+chk "advisor answers unknown with a full pull" $(grep -q 'WScript.Quit 2' needs-full.vbs; echo $?)
+# The advisor PREDICTS the rule sync applies. If the constants diverge it confidently answers for
+# a rule the importer does not use, which is worse than having no advisor at all.
+s=$(grep -oE 'FULL_REIMPORT_DAYS = [0-9]+' sync-amibroker.vbs | grep -oE '[0-9]+$' | head -1)
+n=$(grep -oE 'FULL_REIMPORT_DAYS = [0-9]+' needs-full.vbs | grep -oE '[0-9]+$' | head -1)
+[ -n "$s" ] && [ "$s" = "$n" ]
+chk "advisor mirrors sync's FULL_REIMPORT_DAYS (${s:-?} vs ${n:-?})" $?
+chk "freshness gate leaves a verdict for the advisor" $(grep -q 'last_import_ok.txt' verify-freshness.vbs; echo $?)
+chk "gate records a FAILED verdict so the next run takes the snapshot" $(grep -q 'WriteState DIR, "failed"' verify-freshness.vbs; echo $?)
+chk "launcher runs the cycle through refresh.bat (lock + gates)" $(grep -q 'call "%DEST%refresh.bat"' open-amibroker.bat; echo $?)
+if grep -q $'\r' needs-full.vbs 2>/dev/null; then
+  chk "needs-full.vbs uses CRLF" 0
+else
+  chk "needs-full.vbs uses CRLF (run unix2dos)" 1
+fi
 
 # The exit status IS the gate. Earlier this script printed "all tool checks pass" unconditionally
 # and never called exit, so a run with FAIL lines still returned 0 and every caller believed it.

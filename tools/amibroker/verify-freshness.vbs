@@ -114,7 +114,8 @@ For j = 0 To APP.Stocks.Count - 1
   Next
 Next
 
-Dim i, ticker, want, st, n, q, got, lag, d
+Dim i, ticker, want, st, n, q, got, lag, d, dbNewest
+dbNewest = Empty
 For i = 0 To UBound(names)
   ticker = names(i)
   want = wants(i)
@@ -140,6 +141,16 @@ For i = 0 To UBound(names)
       Set q = st.Quotations(n - 1)
       got = q.Date
       On Error GoTo 0
+      ' Track the newest bar actually present. The pull decision for the NEXT run reads this
+      ' value (needs-full.vbs): "how stale is the database" can only be answered by looking at
+      ' the database, and this gate is already looking.
+      If IsDate(got) Then
+        If Not IsDate(dbNewest) Then
+          dbNewest = got
+        ElseIf CDate(got) > CDate(dbNewest) Then
+          dbNewest = got
+        End If
+      End If
 
       ' Count only weekdays: a weekend between the last bar and today is not lag.
       lag = 0
@@ -162,16 +173,38 @@ Next
 
 If evaluated = 0 Then
   WScript.Echo "FAIL: no probe could be evaluated"
+  WriteState DIR, "failed"
   WScript.Quit 1
 End If
 If bad > 0 Then
   WScript.Echo "FAIL: " & bad & " probe(s) are behind the published export - the import did not land"
+  ' Record the failure. needs-full.vbs reads this file, and a red gate means the delta could not
+  ' repair the database: the next run must fetch the full snapshot instead of repeating the same
+  ' attempt and failing the same way every evening.
+  WriteState DIR, "failed"
   WScript.Quit 1
 End If
 WScript.Echo "OK: AmiBroker holds the newest published session in every market"
+WriteState DIR, "ok " & FormatDate(dbNewest)
 WScript.Quit 0
 
 ' ---- helpers -------------------------------------------------------------
+' Leave a one-line verdict for the next run's pull decision (needs-full.vbs).
+' Deliberately silent on failure: a gate that cannot write its memo must still report its own
+' verdict, and the advisor treats a missing memo as FULL (the slow but safe direction).
+Sub WriteState(DIR_, verdict)
+  Dim p, f2
+  On Error Resume Next
+  p = DIR_ & "last_import_ok.txt"
+  Set f2 = CreateObject("Scripting.FileSystemObject").CreateTextFile(p, True)
+  If Err.Number = 0 Then
+    f2.WriteLine Left(Replace(verdict, vbCr, ""), 40)
+    f2.Close
+  End If
+  Err.Clear
+  On Error GoTo 0
+End Sub
+
 
 Function FormatDate(d)
   FormatDate = Year(d) & "-" & Right("0" & Month(d), 2) & "-" & Right("0" & Day(d), 2)

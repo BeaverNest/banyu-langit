@@ -3,9 +3,15 @@ REM ============================================================================
 REM  "Buka AmiBroker" - the shortcut you click instead of AmiBroker.exe.
 REM
 REM  What it does, in order:
-REM    1. Pulls the export (skips unchanged files, so usually a few KB).
-REM    2. Imports into C:\BanyuLangit and saves.
-REM    3. Opens AmiBroker for you.
+REM    1. Runs refresh.bat: pull (delta-only when the snapshot is not needed, see
+REM       needs-full.vbs), import, categories, then the freshness/global/AUX gates.
+REM    2. Opens AmiBroker for you.
+REM
+REM  WHY THROUGH refresh.bat AND NOT pull.bat + sync-amibroker.vbs DIRECTLY: the direct
+REM  path skipped the single-instance lock and every gate, so a click during the scheduled
+REM  window could collide with the running import (the loser still reports rc=0 over
+REM  partially written data) and a stale chart opened with no signal at all. The cost is the
+REM  gates: a few seconds on a normal run.
 REM
 REM  The wait in step 2 is the price of correctness: importing into a running instance makes
 REM  the data appear, but only after you have already started looking at the chart. Doing it
@@ -41,16 +47,15 @@ if errorlevel 1 (
   goto :launch
 )
 
-call "%DEST%pull.bat"
+REM refresh.bat swaps in a pending pull.bat / refresh-core.bat first, then runs the whole
+REM cycle under its lock. Exit 3 = no Tailscale, 2 = the pull failed, 4 = another refresh
+REM holds the lock. All three end in the same place: open the program with the local data.
+echo Checking for new data ...
+call "%DEST%refresh.bat"
 if errorlevel 1 (
-  echo   WARNING: download failed - opening AmiBroker with local data.
+  echo   WARNING: refresh did not finish cleanly - opening AmiBroker with local data.
+  echo            The gate verdicts are in last-refresh.log.
   goto :launch
-)
-
-echo Importing ...
-cscript //nologo "%DEST%sync-amibroker.vbs" >> "%DEST%last-launch.log" 2>&1
-if errorlevel 1 (
-  echo   WARNING: import reported a problem - see last-launch.log
 )
 
 :launch

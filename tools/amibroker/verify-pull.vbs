@@ -17,12 +17,23 @@
 ' that had nothing to do with the check itself. A gate that cannot run is worse
 ' than no gate, because the log still looks like it tried.
 '
-' Usage: cscript //nologo verify-pull.vbs [dir]
+' Usage: cscript //nologo verify-pull.vbs [dir] [quick]
 ' Exit:  0 = every declared file matches, 1 = mismatch or unreadable manifest.
+'
+' QUICK MODE: pull.bat quick deliberately does not fetch the part files, and the local copies are
+' older than the manifest by design. Judging them here would fail the pull and trigger a full
+' re-fetch of ~434 MB, so quick mode skips them and says how many it skipped - instead of
+' silently certifying a payload it never looked at.
 Option Explicit
 
-Dim DIR, fso, mpath, ts, txt, chain, m, name, bytes_, bad, total, f, size
+Dim DIR, fso, mpath, ts, txt, chain, m, name, bytes_, bad, total, f, size, skipped
 Set fso = CreateObject("Scripting.FileSystemObject")
+
+Dim MODE
+MODE = "full"
+If WScript.Arguments.Count > 1 Then
+  If LCase(WScript.Arguments(1)) = "quick" Then MODE = "quick"
+End If
 
 DIR = fso.GetParentFolderName(WScript.ScriptFullName)
 If WScript.Arguments.Count > 0 Then DIR = WScript.Arguments(0)
@@ -43,6 +54,7 @@ ts.Close
 ' shape is fixed by the exporter and this gate must not fail because a parser did.
 bad = 0
 total = 0
+skipped = 0
 chain = txt
 Do
   m = InStr(chain, """file""")
@@ -59,15 +71,19 @@ Do
     Exit Do
   End If
 
-  total = total + 1
-  If Not fso.FileExists(DIR & name) Then
-    WScript.Echo "  " & name & " MISSING (manifest declares " & bytes_ & " bytes)"
-    bad = bad + 1
+  If MODE = "quick" And IsPartFile(name) Then
+    skipped = skipped + 1
   Else
-    size = fso.GetFile(DIR & name).Size
-    If size <> bytes_ Then
-      WScript.Echo "  " & name & " STALE " & size & " bytes on disk, manifest says " & bytes_
+    total = total + 1
+    If Not fso.FileExists(DIR & name) Then
+      WScript.Echo "  " & name & " MISSING (manifest declares " & bytes_ & " bytes)"
       bad = bad + 1
+    Else
+      size = fso.GetFile(DIR & name).Size
+      If size <> bytes_ Then
+        WScript.Echo "  " & name & " STALE " & size & " bytes on disk, manifest says " & bytes_
+        bad = bad + 1
+      End If
     End If
   End If
 
@@ -91,9 +107,19 @@ If bad > 0 Then
   WScript.Quit 1
 End If
 WScript.Echo "OK: all " & total & " manifest files on disk match their declared size"
+If skipped > 0 Then
+  WScript.Echo "  quick mode: " & skipped & " part file(s) not checked - only a full import reads them"
+End If
 WScript.Quit 0
 
 ' ---- helpers -------------------------------------------------------------
+' The snapshot payload, stated once so quick mode has a single rule.
+Function IsPartFile(n)
+  IsPartFile = False
+  If InStr(1, LCase(n), "us_part") = 1 Then IsPartFile = True
+  If InStr(1, LCase(n), "idx_part") = 1 Then IsPartFile = True
+End Function
+
 ' Return the string value that follows key, or "" when absent.
 Function JsonString(blob, key)
   Dim p, q, startAt

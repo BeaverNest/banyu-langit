@@ -37,6 +37,15 @@ set DEST=%~dp0
 set LOG=%DEST%pull.log
 set CURL=curl.exe -fsS --retry 3 --retry-delay 2 --connect-timeout 10
 
+REM WHICH PAYLOAD. "quick" pulls only the small files a delta import consumes; the part files
+REM are the 10-year snapshot and are read ONLY by a full import. refresh-core.bat asks
+REM needs-full.vbs before choosing a mode, and that advisor answers FULL whenever it cannot
+REM prove otherwise, so this switch can only make a run slower - never staler.
+REM Measured 2026-11-06: a plain (full) pull spent 1 h 31 min delivering ~434 MB so that the
+REM import could read ~5 MB of it.
+set MODE=full
+if /I "%~1"=="quick" set MODE=quick
+
 REM Reachability gate first. A dead Tailscale link must fail here, not half-way
 REM through a partition, leaving a truncated CSV for the importer to eat.
 ping -n 1 -w 2000 %NAME% >nul 2>&1
@@ -94,16 +103,24 @@ for %%F in (
   diag2-amibroker.vbs
   assign-categories.vbs
   category_assign.csv
+  needs-full.vbs
   category_names.csv
   categories_sector.csv
   categories_industry.csv
   open-amibroker.bat
   setup-laptop.bat
+) do (
+  call :fetch %%F
+)
+if /I "%MODE%"=="quick" goto parts_skipped
+REM ---- the snapshot payload: only a full import reads these ------------------
+for %%F in (
   us_part01.csv us_part02.csv us_part03.csv us_part04.csv us_part05.csv
   idx_part01.csv idx_part02.csv idx_part03.csv idx_part04.csv
 ) do (
   call :fetch %%F
 )
+:parts_skipped
 exit /b 0
 
 REM ---------------------------------------------------------------------------
@@ -184,5 +201,13 @@ exit /b 0
 
 REM ---------------------------------------------------------------------------
 :verify
+REM In quick mode the part files are deliberately absent-or-old, so the gate must judge only the
+REM files this run was supposed to deliver. Comparing them against the manifest would fail on
+REM bytes nobody asked for and force a full re-fetch of the whole payload.
+if /I "%MODE%"=="quick" goto verify_quick
 cscript //nologo "%DEST%verify-pull.vbs" "%DEST:~0,-1%" >> "%LOG%" 2>&1
+exit /b %ERRORLEVEL%
+
+:verify_quick
+cscript //nologo "%DEST%verify-pull.vbs" "%DEST:~0,-1%" quick >> "%LOG%" 2>&1
 exit /b %ERRORLEVEL%
