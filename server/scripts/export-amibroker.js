@@ -68,6 +68,9 @@ const KEPT = new Set();
 // keys a symbol by name, so a commodity named AAPL would silently overwrite the equity.
 const ALL_TAKEN = new Set();
 const GLOBAL_KEPT = new Set();
+// Tickers that survived into idx_sector.csv. The category pass must not assign a market/group
+// to a series that was dropped for being too short, same rule as KEPT for the equity files.
+const IDX_SEC_KEPT = new Set();
 
 function isoDate(s) {
   // idx_daily uses both '2026-10-29' and '2026/10/09' in adjacent tables; normalise.
@@ -352,6 +355,90 @@ function exportIhsg() {
   return Object.assign(res, { ticker: 'JKSE', rows_in: rows.length, rows_out: recs.length });
 }
 
+// ------------------------------------------------- IDX sector / strategy indices
+// The exchange publishes 46 index series beyond the composite. They live in `index_chart`
+// (index_code, chart_date, value) and NOT in `index_ohlc`, which holds COMPOSITE alone - so
+// JKSE carries 36 years of history while these carry ~14 months. That asymmetry is a property
+// of the source, not a bug here, and the manifest reports date_min so nothing downstream has to
+// guess at it.
+//
+// CLOSE ONLY, deliberately. index_chart has no open/high/low and idx_indices has
+// previous/high/low/close but NO open. Writing a candle whose Open is "previous close" would put
+// a number in the file that the exchange never published, and every ATR / gap / open-based rule
+// built on it would be quietly wrong. banyulangit-close.format exists for exactly this case, and
+// AmiBroker fills O/H/L from Close when the columns are absent.
+//
+// THE .JK SUFFIX IS NOT COSMETIC. Bare codes collide with live US tickers: ABX (Barrick),
+// DBX (Dropbox), MBX, I-GRADE. AmiBroker keys a symbol by name, so a bare "ABX" index would
+// overwrite the US equity - the same failure the .JK suffix already prevents for 22 dual-listed
+// stocks. JKSE stays bare because it predates this file and renaming it would orphan an existing
+// chart; that is the one documented inconsistency in the INDEX group.
+const IDX_INDEX_NAMES = {
+  // Sector indices use the official IDX-IC English sector names. Anything not in this map keeps
+  // the raw code as its name: a made-up expansion reads like a source, and a wrong expansion is
+  // worse than a code the user can look up.
+  IDXENERGY: 'IDX Sector Energy',
+  IDXBASIC: 'IDX Sector Basic Materials',
+  IDXINDUST: 'IDX Sector Industrials',
+  IDXNONCYC: 'IDX Sector Consumer Non-Cyclicals',
+  IDXCYCLIC: 'IDX Sector Consumer Cyclicals',
+  IDXHEALTH: 'IDX Sector Healthcare',
+  IDXFINANCE: 'IDX Sector Financials',
+  IDXPROPERT: 'IDX Sector Properties & Real Estate',
+  IDXTECHNO: 'IDX Sector Technology',
+  IDXINFRA: 'IDX Sector Infrastructure',
+  IDXTRANS: 'IDX Sector Transportation & Logistic',
+  LQ45: 'LQ45 Index',
+  IDX30: 'IDX30',
+  IDX80: 'IDX80',
+  JII: 'Jakarta Islamic Index',
+  JII70: 'Jakarta Islamic Index 70',
+  ISSI: 'Indonesia Sharia Stock Index',
+  KOMPAS100: 'Kompas100 Index',
+};
+
+function exportIdxSectors() {
+  const MIN_INDEX_BARS = Number(arg('index-min-bars', 60));
+  const rows = db.prepare(`
+    SELECT index_code, chart_date, value FROM index_chart
+    WHERE value > 0 AND index_code <> 'COMPOSITE'
+    ORDER BY index_code, chart_date
+  `).all();
+
+  const byCode = new Map();
+  for (const r of rows) {
+    const code = String(r.index_code || '').trim();
+    const date = isoDate(r.chart_date);
+    const c = num(r.value, 0);
+    if (!code || c <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push({ ticker: code + '.JK', date, c });
+  }
+
+  const dropped = [];
+  const recs = [];
+  for (const [code, list] of [...byCode.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (list.length < MIN_INDEX_BARS) { dropped.push({ index: code, bars: list.length }); continue; }
+    IDX_SEC_KEPT.add(code + '.JK');
+    recs.push(...list);
+  }
+  const w = writeCsv(path.join(OUT, 'idx_sector.csv'), recs, true);
+  let minD = '9999', maxD = '0000';
+  for (const r of recs) { if (r.date < minD) minD = r.date; if (r.date > maxD) maxD = r.date; }
+  return Object.assign(w, {
+    tickers: IDX_SEC_KEPT.size,
+    date_min: recs.length ? minD : '',
+    date_max: recs.length ? maxD : '',
+    min_bars: MIN_INDEX_BARS,
+    dropped_too_short: dropped.length,
+    dropped_sample: dropped.slice(0, 10),
+    columns: 'Ticker,Date_YMD,Close',
+    format: 'banyulangit-close.format',
+    history_note: 'index_chart carries ~14 months for these series, while JKSE (index_ohlc) carries 36 years. A short history is in the source, not lost here - do not compare date_min of this block with ihsg.date_min.',
+    dropped_names: 'not in the name map: the raw code is used as the full name on purpose',
+  });
+}
+
 // ------------------------------------------------------------------ shared writer
 function flush(byCode, market, meta) {
   const files = [];
@@ -506,6 +593,10 @@ function writeCategories() {
     // IHSG. Market 0 is 'Undefined' and a symbol sitting there is invisible to any market filter,
     // which is how it survived three rounds of verification without anyone noticing.
     { sym: 'JKSE', market: 'IDX', grp: 'INDEX', sector: 'Unclassified', industry: 'Unclassified', noSector: true },
+    // Sector/strategy indices: same market and group as the composite, no sector tree (an index
+    // is not a company; giving it a sector would put "Basic Materials" inside the sector list as
+    // if it were an issuer).
+    ...[...IDX_SEC_KEPT].sort().map(s => ({ sym: s, market: 'IDX', grp: 'INDEX', sector: 'Unclassified', industry: 'Unclassified', noSector: true })),
   ];
 
   files.push(atomic(path.join(OUT, 'category_assign.csv'),
@@ -587,6 +678,17 @@ function writeCategories() {
     });
   }
   sip.push({ sym: 'JKSE', full: 'IHSG - Indeks Harga Saham Gabungan', alias: 'IHSG', addr: '', web: 'https://www.idx.co.id', cur: 'IDR' });
+  for (const s of [...IDX_SEC_KEPT].sort()) {
+    const code = s.replace(/\.JK$/, '');
+    sip.push({
+      sym: s,
+      full: IDX_INDEX_NAMES[code] || code,   // no invented expansion; the code is the honest fallback
+      alias: code,
+      addr: '',
+      web: 'https://www.idx.co.id',
+      cur: 'IDR',
+    });
+  }
 
   files.push(atomic(path.join(OUT, 'symbol_info.csv'),
     sip.map(r => [r.sym, r.full, r.alias, r.addr, r.web, r.cur].map(clean).join(','))));
@@ -600,6 +702,7 @@ function writeCategories() {
       name_is_ticker: sip.filter(r => r.full === r.sym || r.full === r.sym.replace(/\.JK$/, '')).length,
     },
     symbols: tagged.length,
+    index_symbols: IDX_SEC_KEPT.size,
     markets: { US: us.length, IDX: idx.length, GLOBAL: gl.length },
     groups: { US: usGroups, IDX: idxGroups, GLOBAL: glGroups },
     sectors: [...new Set(tagged.map(r => r.sector))].sort(),
@@ -639,6 +742,9 @@ function main() {
   if (MARKET === 'idx' || MARKET === 'all') {
     manifest.idx = exportIdx();
     manifest.ihsg = exportIhsg();
+    // Written BEFORE the global block on purpose: verify-freshness.vbs bounds each manifest
+    // block by the next top-level key, and "global" is bounded by end-of-file.
+    manifest.idx_sectors = exportIdxSectors();
   }
   // GLOBAL last: it needs ALL_TAKEN populated by the equity snapshots to avoid a name collision.
   if (MARKET === 'global' || MARKET === 'all') manifest.global = exportGlobal();

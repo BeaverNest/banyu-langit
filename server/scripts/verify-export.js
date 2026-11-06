@@ -48,7 +48,11 @@ const manifest = JSON.parse(fs.readFileSync(path.join(DIR, 'manifest.json'), 'ut
 const files = fs.readdirSync(DIR).filter(f => f.endsWith('.csv'));
 
 const usFiles = files.filter(f => /^us_/.test(f));
-const idxFiles = files.filter(f => /^idx_/.test(f));
+// Equity chunks only. /^idx_/ used to be the whole test, and the moment idx_sector.csv (3 columns,
+// close-only) joined the directory this sweep reported 12,232 "invalid OHLC" rows against a
+// perfectly good file. A pattern loose enough to catch a new file shape silently redefines what
+// the check means.
+const idxFiles = files.filter(f => /^idx_part\d+\.csv$/.test(f));
 ok(usFiles.length > 0, 'no US export files');
 ok(idxFiles.length > 0, 'no IDX export files');
 ok(files.includes('index_ihsg.csv'), 'index_ihsg.csv missing');
@@ -115,6 +119,72 @@ ok(bad === 0, `${bad} rows with invalid OHLC: ${badSample.join(' | ')}`);
 // Failing on them would make the gate impossible to satisfy and therefore ignored.
 warn(zeroVol === 0, `${zeroVol} zero-volume bars present (legitimate halts, kept)`);
 warn(flat < 500, `${flat} bars with open=high=low (suspicious flatness)`);
+
+// ------------------------------------------------ 3b. close-only files (3 columns)
+// idx_sector.csv (46 IDX sector/strategy indices) and global_close.csv (yields, macro releases,
+// COAL/TIN/RUBBER) carry Ticker,Date,Close and nothing else, because their sources never
+// published an Open/High/Low. They are checked here as their OWN shape, not squeezed through the
+// OHLC sweep - which cannot tell "close-only by design" from "corrupt bar".
+const readCloseOnly = (file) => {
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  const out = new Map();
+  let badDate = 0, badClose = 0, badCols = 0;
+  for (const ln of lines) {
+    const parts = ln.split(',');
+    if (parts.length !== 3) { badCols++; continue; }
+    const [t, d, c] = parts;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { badDate++; continue; }
+    const cv = Number(c);
+    if (!(cv > 0)) { badClose++; continue; }
+    if (!out.has(t)) out.set(t, []);
+    out.get(t).push({ d, c: cv });
+  }
+  return { out, badDate, badClose, badCols, lines: lines.length };
+};
+
+for (const f of ['idx_sector.csv', 'global_close.csv']) {
+  if (!files.includes(f)) { ok(false, `${f} missing`); continue; }
+  const r = readCloseOnly(path.join(DIR, f));
+  ok(r.badCols === 0, `${f}: ${r.badCols} line(s) without exactly 3 columns`);
+  ok(r.badDate === 0, `${f}: ${r.badDate} line(s) with an unparseable date`);
+  ok(r.badClose === 0, `${f}: ${r.badClose} line(s) with a nonpositive close`);
+  // Sorted on ticker then date, and no duplicate (ticker,date): a duplicate means the export
+  // glued two sources together and AmiBroker would import both, silently overwriting one.
+  let dup = 0, unsorted = 0;
+  for (const [, list] of r.out) {
+    for (let i = 1; i < list.length; i++) {
+      if (list[i].d === list[i - 1].d) dup++;
+      else if (list[i].d < list[i - 1].d) unsorted++;
+    }
+  }
+  ok(dup === 0, `${f}: ${dup} duplicate (ticker,date) pair(s)`);
+  ok(unsorted === 0, `${f}: ${unsorted} out-of-order date(s)`);
+}
+
+let idxSectorStat = null;
+// idx_sector.csv specifics: the suffix keeps it out of the equity namespace, the depth floor is
+// the same 60 sessions the exporter applies, and the manifest must agree with the file.
+if (files.includes('idx_sector.csv')) {
+  const r = readCloseOnly(path.join(DIR, 'idx_sector.csv'));
+  const tickers = [...r.out.keys()];
+  const badSuffix = tickers.filter(t => !t.endsWith('.JK'));
+  ok(badSuffix.length === 0, `idx_sector.csv: ticker(s) without .JK suffix: ${badSuffix.slice(0, 5)}`);
+  ok(tickers.length >= 40, `idx_sector.csv: only ${tickers.length} series, expected >= 40 of the 45 non-composite indices`);
+  const short = tickers.filter(t => r.out.get(t).length < 60);
+  ok(short.length === 0, `idx_sector.csv: ${short.length} series below 60 bars: ${short.slice(0, 5)}`);
+  const man = manifest.idx_sectors || {};
+  ok(man.tickers === tickers.length,
+     `idx_sector.csv declares ${man.tickers} series in the manifest but holds ${tickers.length}`);
+  const fileMax = tickers.map(t => r.out.get(t).slice(-1)[0].d).sort().slice(-1)[0];
+  ok(!man.date_max || man.date_max === fileMax,
+     `idx_sector.csv date_max ${fileMax} disagrees with the manifest (${man.date_max})`);
+  // A lagging index feed must NOT stop the equity export: these series are optional extras, and
+  // blocking 2,500 symbols because an index chart is a day behind would trade a small gap for a
+  // total outage. Warn, and let verify-freshness.vbs judge the bars that actually landed.
+  const idxMax = (manifest.idx || {}).date_max;
+  warn(!idxMax || fileMax >= idxMax, `idx_sector.csv ends ${fileMax} while the IDX equity snapshot ends ${idxMax}`);
+  idxSectorStat = { series: tickers.length, rows: r.lines, date_max: fileMax };
+}
 
 // ---------------------------------------------------------------- 4. against the DB
 const db = new Database(DB_PATH, { readonly: true });
@@ -205,6 +275,7 @@ const summary = {
   us: { tickers: Object.keys(us).length, rows: Object.values(us).reduce((a, b) => a + b.length, 0) },
   idx: { tickers: Object.keys(idx).length, rows: Object.values(idx).reduce((a, b) => a + b.length, 0) },
   ihsg: { rows: jkse.length, last_date: lastJkse && lastJkse.d, last_close: lastJkse && lastJkse.c },
+  idx_sector: idxSectorStat,
   bbca_split_check: before && after ? { d_before: before.d, c_before: before.c, d_after: after.d, c_after: after.c } : null,
   delta: deltaStat,
   fails: fails.length,

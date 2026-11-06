@@ -46,15 +46,18 @@ Set ts = fso.OpenTextFile(mpath, 1)
 txt = ts.ReadAll
 ts.Close
 
-Dim idxMax, usMax, glMax
+Dim idxMax, usMax, glMax, secMax
 ' Bound each block by the NEXT top-level key. A terminator like "rows": does not
 ' work: the manifest writes "rows": 796273 with a space, so a literal match cuts
 ' the block in the wrong place (first version reported "no date_max").
 idxMax = BlockDateMax(txt, """idx""", """ihsg""")
 usMax = BlockDateMax(txt, """us""", """delta""")
 glMax = BlockDateMax(txt, """global""", """__end__""")
+' Sector-index block. The exporter writes it BEFORE "global", so "global" bounds it and the
+' global block keeps end-of-file as its own terminator.
+secMax = BlockDateMax(txt, """idx_sectors""", """global""")
 
-If idxMax = "" And usMax = "" And glMax = "" Then
+If idxMax = "" And usMax = "" And glMax = "" And secMax = "" Then
   WScript.Echo "FAIL: manifest carries no date_max - cannot judge freshness"
   WScript.Quit 1
 End If
@@ -84,15 +87,18 @@ Dim names, wants, allowed
 ' (custom_tickers.expected_lag_sessions), which is a property of Investing's publication
 ' schedule, not of this pipeline. They are watched by check-series-freshness.js against that
 ' declared lag, which is the correct comparison for a lagging source.
-names = Array("JKSE", "BBCA.JK", "AAPL", "ID10Y", "COAL")
+' IDXENERGY.JK is the sector-index probe. The failure mode these 44 series invite is "imported
+' once, never again": the file lands, imports cleanly on day one, and then stops being pulled.
+' One probe from that file turns that silence into a red gate.
+names = Array("JKSE", "BBCA.JK", "AAPL", "ID10Y", "COAL", "IDXENERGY.JK")
 ' ZERO slack for every market, including US. The old "1 session for US" rule was a mask, not a
 ' tolerance: the manifest's usMax is already the newest CLOSED US session (a 19:25 WIB export
 ' runs before the US open, so it can only ever publish the previous US day). Allowing one more
 ' session on top of that meant a permanently stale US feed passed the gate every night - which
 ' is exactly what happened: delta_recent.csv was never imported after delta_idx_aux.csv
 ' appeared, AAPL sat one session behind, and this gate printed "ok".
-allowed = Array("0", "0", "0", "0", "0")
-wants = Array(idxMax, idxMax, usMax, glMax, glMax)
+allowed = Array("0", "0", "0", "0", "0", "0")
+wants = Array(idxMax, idxMax, usMax, glMax, glMax, secMax)
 
 bad = 0
 evaluated = 0
@@ -103,7 +109,7 @@ evaluated = 0
 ' variable form fails - a VBScript/COM by-reference quirk, not an AmiBroker bug.
 ' A single linear pass sidesteps it entirely, and it is the same pattern
 ' verify-idx-aux.vbs already uses for exactly this reason.
-Dim pos(4), j, t
+Dim pos(5), j, t
 For i = 0 To UBound(names)
   pos(i) = -1
 Next

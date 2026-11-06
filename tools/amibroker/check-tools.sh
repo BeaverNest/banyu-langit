@@ -239,6 +239,22 @@ else
   chk "needs-full.vbs uses CRLF (run unix2dos)" 1
 fi
 
+# --- IDX sector / strategy indices (2026-11-06) --------------------------------
+# One close-only file carries 44 index series. The two ways it can rot silently: never added to the
+# explicit pull list (so it lands once and freezes), or imported with the OHLC format (so every bar
+# gets Open/High/Low = 0 and every indicator built on them is wrong while the chart looks fine).
+chk "pull.bat fetches idx_sector.csv" $(grep -q '^  idx_sector.csv' pull.bat; echo $?)
+chk "sync imports idx_sector.csv" $(grep -q 'idx_sector.csv", fmtClose' sync-amibroker.vbs; echo $?)
+chk "sync warns when idx_sector.csv is absent" $(grep -q 'WARN: idx_sector.csv missing' sync-amibroker.vbs; echo $?)
+chk "freshness gate probes a sector index" $(grep -q '"IDXENERGY.JK"' verify-freshness.vbs; echo $?)
+chk "freshness gate reads the idx_sectors block" $(grep -q 'idx_sectors' verify-freshness.vbs; echo $?)
+chk "close format stays Ticker,Date_YMD,Close" $(grep -qE '^\$FORMAT Ticker,Date_YMD,Close$' banyulangit-close.format; echo $?)
+if grep -q $'\r' verify-freshness.vbs 2>/dev/null; then
+  chk "verify-freshness.vbs uses CRLF" 0
+else
+  chk "verify-freshness.vbs uses CRLF (run unix2dos)" 1
+fi
+
 # The exit status IS the gate. Earlier this script printed "all tool checks pass" unconditionally
 # and never called exit, so a run with FAIL lines still returned 0 and every caller believed it.
 # A gate that cannot fail is worse than no gate - the same defect as verify-global.vbs, which

@@ -358,6 +358,16 @@ If fso.FileExists(IMPORT_DIR + "\global_close.csv") Then
   failed = failed + ImportOne(IMPORT_DIR + "\global_close.csv", fmtClose)
 End If
 
+' IDX sector / strategy indices (IDXENERGY, IDXBASIC, JII, ISSI, LQ45 ...). Close-only for the
+' same reason as global_close: index_chart publishes a value per date and never an Open/High/Low,
+' and idx_indices carries previous/high/low but NO open - so an OHLC file here could only be
+' produced by inventing Open. Uses the close format so AmiBroker fills O/H/L from Close.
+If fso.FileExists(IMPORT_DIR + "\idx_sector.csv") Then
+  failed = failed + ImportOne(IMPORT_DIR + "\idx_sector.csv", fmtClose)
+Else
+  WScript.Echo "WARN: idx_sector.csv missing - sector indices will not update this run"
+End If
+
 ' ---- SYMBOL INFORMATION: full name, alias, address, website, currency ---------------------
 ' Its own format because it needs $NOQUOTES 1 (no date, no price) and $OVERWRITE 1 (every
 ' symbol already exists, so $AUTOADD alone would change nothing but still report success).
